@@ -51,7 +51,7 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#0d1b2a,
 .uname{font-size:.7rem;color:#fff;max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .btn-logout{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:6px;color:rgba(255,255,255,.7);padding:4px 9px;font-size:.7rem;cursor:pointer}
 /* TABS */
-.tabs{display:flex;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.1);padding:0 16px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.tabs{display:flex;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.1);padding:0 16px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;-ms-overflow-style:none}.tabs::-webkit-scrollbar{display:none}
 .tab{padding:11px 15px;font-size:.76rem;font-weight:500;color:rgba(255,255,255,.5);cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;background:none;border-top:none;border-left:none;border-right:none}
 .tab.active{color:#e8c97e;border-bottom-color:#e8c97e;font-weight:600}
 /* MAIN */
@@ -229,7 +229,7 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#0d1b2a,
 .search-box input::placeholder{color:rgba(255,255,255,.4)}
 
 /* TABS */
-.tabs{display:flex;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.1);padding:0 18px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.tabs{display:flex;background:rgba(255,255,255,.04);border-bottom:1px solid rgba(255,255,255,.1);padding:0 18px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;-ms-overflow-style:none}
 .tab{padding:11px 16px;font-size:.77rem;font-weight:500;color:rgba(255,255,255,.5);cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;background:none;border-top:none;border-left:none;border-right:none}
 .tab.active{color:var(--gold);border-bottom-color:var(--gold);font-weight:600}
 
@@ -366,12 +366,20 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#0d1b2a,
 .notif-dot{width:7px;height:7px;border-radius:50%;background:#1f6fad;flex-shrink:0;margin-top:5px}
 
 /* == MODULE SWITCHER == */
-.module-bar{background:linear-gradient(90deg,#0a1520,#0d1b2a);border-bottom:1px solid rgba(200,169,110,.3);display:flex;align-items:center;gap:0;padding:0 18px;overflow-x:auto}
+.module-bar{background:linear-gradient(90deg,#0a1520,#0d1b2a);border-bottom:1px solid rgba(200,169,110,.3);display:flex;align-items:center;gap:0;padding:0 18px;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none}.module-bar::-webkit-scrollbar{display:none}
 .module-btn{padding:10px 20px;font-size:.78rem;font-weight:600;color:rgba(255,255,255,.45);cursor:pointer;border:none;background:none;border-bottom:3px solid transparent;white-space:nowrap;transition:all .2s;letter-spacing:.03em}
 .module-btn.active{color:#e8c97e;border-bottom-color:#e8c97e}
 .module-btn:hover{color:rgba(255,255,255,.8)}
 .module-icon{margin-right:6px;font-size:.9rem}
-.module{display:none}.module.active{display:block}
+.module{display:none}
+.module.active{display:block}
+@keyframes moduleSlideIn{0%{opacity:0;transform:translateY(16px) scale(.98)}100%{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes pageFadeSlide{0%{opacity:0;transform:translateX(10px)}100%{opacity:1;transform:translateX(0)}}
+@keyframes tabPop{0%{opacity:0;transform:translateY(6px)}100%{opacity:1;transform:translateY(0)}}
+@keyframes cardAppear{0%{opacity:0;transform:translateY(10px)}100%{opacity:1;transform:translateY(0)}}
+.module-animate{animation:moduleSlideIn .3s cubic-bezier(.22,.68,0,1.2) forwards}
+.page-animate{animation:pageFadeSlide .22s cubic-bezier(.4,0,.2,1) forwards}
+.card-animate{animation:cardAppear .25s cubic-bezier(.4,0,.2,1) forwards}
 </style>
 </head>
 <body>
@@ -444,6 +452,9 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#0d1b2a,
   </button>
   <button class="module-btn" id="mod-btn-eb" onclick="switchModule('eb')">
     <span class="module-icon">📋</span>BESOINS
+  </button>
+  <button class="module-btn" id="mod-btn-annonces" onclick="switchModule('annonces')">
+    <span class="module-icon">📢</span>ANNONCES<span id="ann-notif-dot" style="display:none;width:8px;height:8px;background:#e74c3c;border-radius:50%;margin-left:4px;vertical-align:middle"></span>
   </button>
 </div>
 
@@ -597,10 +608,10 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#0d1b2a,
     </div>
     <div class="card-body">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:11px;padding:10px;background:#eef4fb;border-radius:8px;border:1px solid #c5d8ed">
-        <div class="fg"><label style="color:#2e75b6">Base 1 (FC)</label><input type="number" id="base-b1" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#2e75b6" oninput="this.dataset.manual=1;renderDistrib()"></div>
-        <div class="fg"><label style="color:#8e44ad">Base 2 (FC)</label><input type="number" id="base-b2" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#8e44ad" oninput="this.dataset.manual=1;renderDistrib()"></div>
-        <div class="fg"><label style="color:#e67e22">Base 4 (FC)</label><input type="number" id="base-b4" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#e67e22" oninput="this.dataset.manual=1;renderDistrib()"></div>
-        <div class="fg"><label style="color:#27ae60">Base 5 (FC)</label><input type="number" id="base-b5" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#27ae60" oninput="this.dataset.manual=1;renderDistrib()"></div>
+        <div class="fg"><label style="color:#2e75b6">Base 1 — FC + USD converti</label><input type="number" id="base-b1" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#2e75b6" oninput="this.dataset.manual=1;renderDistrib()"></div>
+        <div class="fg"><label style="color:#8e44ad">Base 2 — FC + USD converti</label><input type="number" id="base-b2" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#8e44ad" oninput="this.dataset.manual=1;renderDistrib()"></div>
+        <div class="fg"><label style="color:#e67e22">Base 4 — FC + USD converti</label><input type="number" id="base-b4" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#e67e22" oninput="this.dataset.manual=1;renderDistrib()"></div>
+        <div class="fg"><label style="color:#27ae60">Base 5 — FC + USD converti</label><input type="number" id="base-b5" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#27ae60" oninput="this.dataset.manual=1;renderDistrib()"></div>
         <div class="fg" style="grid-column:1/-1"><label style="color:#8e44ad">🎁 Collecte Enveloppe (autonome)</label><div style="display:flex;align-items:center;gap:8px"><input type="number" id="base-benv" placeholder="0" readonly style="background:#f8f0ff;font-family:DM Mono,monospace;font-weight:600;color:#8e44ad;flex:1"><span style="font-size:.72rem;color:#8e44ad;font-weight:600">FC — Distribution au cas par cas (admin)</span></div></div>
         <div class="fg"><label style="color:#c0392b">Base 6 (FC)</label><input type="number" id="base-b6" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#c0392b" oninput="this.dataset.manual=1;renderDistrib()"></div>
       </div>
@@ -1287,6 +1298,79 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#0d1b2a,
 </div><!-- /eb-main -->
 </div><!-- /module-eb -->
 
+<!-- ████████████ MODULE ANNONCES ████████████ -->
+<div class="module" id="module-annonces">
+<nav class="tabs">
+  <button class="tab active" id="anntab-btn-annonces" onclick="showTabAnn('annonces')">📢 Annonces</button>
+  <button class="tab" id="anntab-btn-nouvelle" onclick="showTabAnn('nouvelle')" id="ann-admin-tab">✏️ Publier</button>
+</nav>
+<div class="main" id="ann-main">
+
+<!-- LISTE ANNONCES -->
+<div class="page active" id="annpage-annonces">
+  <div id="ann-liste-cont">
+    <div style="text-align:center;padding:32px;color:#6b88a4;font-size:.85rem">Aucune annonce publiée</div>
+  </div>
+</div>
+
+<!-- NOUVELLE ANNONCE (admin) -->
+<div class="page" id="annpage-nouvelle">
+  <div class="card">
+    <div class="card-hdr"><h2>Publier une annonce</h2><span class="badge">Admin</span></div>
+    <div class="card-body">
+      <div class="form-grid">
+        <div class="fg" style="grid-column:1/-1">
+          <label>Titre de l'annonce *</label>
+          <input type="text" id="ann-titre" placeholder="Ex: Réunion du bureau, Modification du programme...">
+        </div>
+        <div class="fg">
+          <label>Catégorie</label>
+          <select id="ann-categorie">
+            <option value="general">📢 Général</option>
+            <option value="urgent">🔴 Urgent</option>
+            <option value="programme">📅 Programme</option>
+            <option value="finance">💰 Finance</option>
+            <option value="priere">🙏 Prière</option>
+            <option value="autre">📌 Autre</option>
+          </select>
+        </div>
+        <div class="fg">
+          <label>Priorité</label>
+          <select id="ann-priorite">
+            <option value="normale">Normale</option>
+            <option value="importante">Importante</option>
+            <option value="urgente">Urgente</option>
+          </select>
+        </div>
+        <div class="fg" style="grid-column:1/-1">
+          <label>Message *</label>
+          <textarea id="ann-message" rows="5" placeholder="Rédigez votre annonce ici..." style="width:100%;border:1.5px solid #c5d8ed;border-radius:8px;padding:9px 12px;font-size:.82rem;resize:vertical;font-family:DM Sans,sans-serif"></textarea>
+        </div>
+        <div class="fg">
+          <label>Date d'expiration (optionnel)</label>
+          <input type="date" id="ann-expiration">
+        </div>
+        <div class="fg">
+          <label>Destinataires</label>
+          <select id="ann-destinataires">
+            <option value="tous">Tous les utilisateurs</option>
+            <option value="finances">Équipe Finances</option>
+            <option value="admin">Administrateurs</option>
+          </select>
+        </div>
+      </div>
+      <div id="ann-err" style="color:#c0392b;font-size:.77rem;margin-top:8px;display:none"></div>
+      <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+        <button class="btn btn-g" onclick="publierAnnonce()">📢 Publier l'annonce</button>
+        <button class="btn btn-o" onclick="resetAnnonceForm()">🔄 Réinitialiser</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /ann-main -->
+</div><!-- /module-annonces -->
+
 </div><!-- /app-wrapper -->
 
 <!-- FINANCES MODALS -->
@@ -1438,16 +1522,37 @@ function switchModule(name) {
     return;
   }
 
-  var modules = ["finances","membres","social","seminaire"];
+  var modules = ["finances","membres","social","seminaire","eb","annonces"];
   for (var i=0;i<modules.length;i++) {
     var m = document.getElementById("module-"+modules[i]);
     var b = document.getElementById("mod-btn-"+modules[i]);
-    if (m) m.className = "module";
+    if (m) { m.className = "module"; m.style.display = "none"; }
     if (b) b.className = "module-btn";
   }
   var active = document.getElementById("module-"+name);
   var activeBtn = document.getElementById("mod-btn-"+name);
-  if (active) active.className = "module active";
+  if (active) {
+    active.style.display = "block";
+    active.className = "module active";
+    // Trigger animation
+    active.classList.remove("module-animate");
+    void active.offsetWidth;
+    active.classList.add("module-animate");
+    // Stagger cards
+    var cards = active.querySelectorAll(".card");
+    for(var ci=0;ci<cards.length;ci++){
+      (function(card,delay){
+        card.style.opacity="0";
+        card.style.transform="translateY(10px)";
+        card.style.transition="none";
+        setTimeout(function(){
+          card.style.transition="opacity .25s ease,transform .25s cubic-bezier(.22,.68,0,1.1)";
+          card.style.opacity="1";
+          card.style.transform="translateY(0)";
+        }, delay);
+      })(cards[ci], ci*60);
+    }
+  }
   if (activeBtn) activeBtn.className = "module-btn active";
   gCurrentModule = name;
 
@@ -1473,6 +1578,10 @@ function switchModule(name) {
   if (name === "eb") {
     initEB();
     showTabEB("nouveau");
+  }
+  if (name === "annonces") {
+    initAnnonces();
+    showTabAnn("annonces");
   }
   if (name === "seminaire") {
     showTabSem("recettes");
@@ -2315,22 +2424,28 @@ function matchAny(lbl,list){var n=normStr(lbl);for(var i=0;i<list.length;i++)if(
 
 function getBases(){
   var b1=0,b2=0,b4=0,b5=0,b6=0,benv=0;
+  var t = getTaux(); // taux USD -> CDF
   var cids=["cf-rows","cl-rows"];
   for(var ci=0;ci<cids.length;ci++){
     var c=document.getElementById(cids[ci]);if(!c)continue;
     var rows=c.querySelectorAll(".er");
     for(var ri=0;ri<rows.length;ri++){
       var inputs=rows[ri].querySelectorAll("input"),amts=rows[ri].querySelectorAll("input.amt");
-      var lbl=inputs[0]?inputs[0].value:"",cdf=amts[0]?(parseFloat(amts[0].value)||0):0;
-      if(matchAny(lbl,BASE_ENV_L))benv+=cdf;
-      else if(matchAny(lbl,BASE1_L))b1+=cdf;
-      else if(matchAny(lbl,BASE2_L))b2+=cdf;
-      else if(matchAny(lbl,BASE4_L))b4+=cdf;
-      else if(matchAny(lbl,BASE5_L))b5+=cdf;
-      else if(matchAny(lbl,BASE6_L))b6+=cdf;
+      var lbl=inputs[0]?inputs[0].value:"";
+      var cdf=amts[0]?(parseFloat(amts[0].value)||0):0;
+      var usd=amts[1]?(parseFloat(amts[1].value)||0):0;
+      // Unifier en CDF : (CDF + USD*taux) puis arrondi sur le TOTAL
+      var rawTotal = cdf + (usd * t);
+      var total = rawTotal > 0 ? arrondi(rawTotal) : 0;
+      if(matchAny(lbl,BASE_ENV_L))benv+=total;
+      else if(matchAny(lbl,BASE1_L))b1+=total;
+      else if(matchAny(lbl,BASE2_L))b2+=total;
+      else if(matchAny(lbl,BASE4_L))b4+=total;
+      else if(matchAny(lbl,BASE5_L))b5+=total;
+      else if(matchAny(lbl,BASE6_L))b6+=total;
     }
   }
-  return{b1:b1,b2:b2,b4:b4,b5:b5,b6:b6};
+  return{b1:b1,b2:b2,b4:b4,b5:b5,b6:b6,benv:benv};
 }
 function getBaseVal(item,b){if(item.base===1)return b.b1;if(item.base===2)return b.b2;if(item.base===4)return b.b4;if(item.base===5)return b.b5;if(item.base===6)return b.b6;return 0;}
 
@@ -2680,7 +2795,8 @@ var ALL_MODULES = [
   {key:"membres",    label:"Membres",    icon:"👥", desc:"Gestion des membres et cotisations"},
   {key:"social",     label:"Social",     icon:"❤️",  desc:"Caisse sociale et assistances"},
   {key:"seminaire",  label:"Seminaire",  icon:"📚", desc:"Recettes et depenses des seminaires"},
-  {key:"eb",         label:"Besoins",    icon:"📋", desc:"Expressions de besoins et validation"}
+  {key:"eb",         label:"Besoins",    icon:"📋", desc:"Expressions de besoins et validation"},
+  {key:"annonces",   label:"Annonces",   icon:"📢", desc:"Annonces et circulaires de l'administration"}
 ];
 
 var FINANCE_TABS = [
@@ -2695,14 +2811,14 @@ var FINANCE_TABS = [
 
 // Permissions par defaut selon role legacy
 function getDefaultPerms(role) {
-  if(role==="admin")    return {modules:["finances","membres","social","seminaire"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export"]};
-  if(role==="finances") return {modules:["finances","social","seminaire"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export"]};
-  return {modules:["finances"], financeTabs:["recettes","depenses"]};
+  if(role==="admin")    return {modules:["finances","membres","social","seminaire","eb","annonces"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export"]};
+  if(role==="finances") return {modules:["finances","social","seminaire","eb","annonces"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export"]};
+  return {modules:["finances","eb","annonces"], financeTabs:["recettes","depenses"]};
 }
 
 // Recuperer les permissions effectives d un compte
 function getPerms(ac) {
-  if(ac.role==="admin") return {modules:["finances","membres","social","seminaire"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export"]};
+  if(ac.role==="admin") return {modules:["finances","membres","social","seminaire","eb","annonces"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export"]};
   if(ac.perms) return ac.perms;
   return getDefaultPerms(ac.role);
 }
@@ -3224,6 +3340,21 @@ function sendPushNotif(title, body) {
     setTimeout(function(){ n.close(); }, 6000);
   } catch(e) {}
 }
+
+// == RIPPLE EFFECT ON BUTTONS ==
+document.addEventListener("click", function(e) {
+  var btn = e.target.closest(".btn");
+  if(!btn) return;
+  var ripple = document.createElement("span");
+  ripple.className = "ripple";
+  var rect = btn.getBoundingClientRect();
+  var size = Math.max(rect.width, rect.height);
+  ripple.style.width = ripple.style.height = size + "px";
+  ripple.style.left = (e.clientX - rect.left - size/2) + "px";
+  ripple.style.top = (e.clientY - rect.top - size/2) + "px";
+  btn.appendChild(ripple);
+  setTimeout(function(){ if(ripple.parentNode) ripple.parentNode.removeChild(ripple); }, 600);
+});
 
 function hashPassword(pwd) {
   // Simple but consistent hash for local mode
@@ -4562,7 +4693,7 @@ function launchApp() {
   if (adminTab) adminTab.style.display = (gCurrentUser.role === "admin") ? "" : "none";
 
   // Boutons modules selon permissions
-  var allMods = ["finances","membres","social","seminaire","eb"];
+  var allMods = ["finances","membres","social","seminaire","eb","annonces"];
   for(var mi=0;mi<allMods.length;mi++){
     var mbtn = document.getElementById("mod-btn-"+allMods[mi]);
     if(mbtn) mbtn.style.display = hasModule(allMods[mi]) ? "" : "none";
@@ -4665,6 +4796,27 @@ function saveSocDB(db) { try { localStorage.setItem("ecc_social_db", JSON.string
 var SOCDB = loadSocDB();
 
 // Tabs
+function animatePage(el) {
+  if(!el) return;
+  el.classList.remove("page-animate");
+  void el.offsetWidth;
+  el.classList.add("page-animate");
+  // Stagger cards inside
+  var cards = el.querySelectorAll(".card");
+  for(var ci=0; ci<cards.length; ci++){
+    (function(card, delay){
+      card.style.opacity = "0";
+      card.style.transform = "translateY(8px)";
+      card.style.transition = "none";
+      setTimeout(function(){
+        card.style.transition = "opacity .22s ease, transform .22s cubic-bezier(.22,.68,0,1.1)";
+        card.style.opacity = "1";
+        card.style.transform = "translateY(0)";
+      }, 40 + delay);
+    })(cards[ci], ci * 50);
+  }
+}
+
 function showTabS(name) {
   var tabs = ["recettes","depenses","historique","dashboard","export"];
   for (var i=0;i<tabs.length;i++) {
@@ -4675,7 +4827,7 @@ function showTabS(name) {
   }
   var pg2 = document.getElementById("spage-"+name);
   var tb2 = document.getElementById("stab-btn-"+name);
-  if (pg2) pg2.style.display = "block";
+  if (pg2) { pg2.style.display = "block"; animatePage(pg2); }
   if (tb2) tb2.className = "tab active";
   if (name === "depenses") { renderDepSocial(); recalcS(); }
   if (name === "dashboard") renderDashboardSoc();
@@ -5893,6 +6045,196 @@ function initEB() {
   // Hide validation tab for non-admin
   var adminTab = document.getElementById("ebtab-btn-admin");
   if(adminTab) adminTab.style.display = (gCurrentUser && gCurrentUser.role==="admin") ? "" : "none";
+}
+
+// ================================================
+// == ANNONCES / CIRCULAIRES ==
+// ================================================
+
+var ANNDB = {annonces:[]};
+var gAnnLastRead = 0;
+
+function loadANNDB() {
+  try { var s=localStorage.getItem("ecc_annonces"); if(s) ANNDB=JSON.parse(s); } catch(e){}
+  if(!ANNDB.annonces) ANNDB.annonces=[];
+  try { gAnnLastRead = parseInt(localStorage.getItem("ecc_ann_lastread")||"0"); } catch(e){}
+}
+
+function saveANNDB() {
+  try { localStorage.setItem("ecc_annonces", JSON.stringify(ANNDB)); } catch(e){}
+}
+
+function annCatIcon(cat) {
+  var icons = {general:"📢",urgent:"🔴",programme:"📅",finance:"💰",priere:"🙏",autre:"📌"};
+  return icons[cat]||"📢";
+}
+
+function annPrioriteStyle(p) {
+  if(p==="urgente") return "background:#fdf0ee;border-color:#e8b4ad;border-left:4px solid #c0392b";
+  if(p==="importante") return "background:#fff8e1;border-color:#fbbf24;border-left:4px solid #f0a500";
+  return "background:#f7fafd;border-color:#c5d8ed;border-left:4px solid #1f6fad";
+}
+
+function showTabAnn(name) {
+  var tabs = ["annonces","nouvelle"];
+  for(var i=0;i<tabs.length;i++){
+    var pg=document.getElementById("annpage-"+tabs[i]);
+    var tb=document.getElementById("anntab-btn-"+tabs[i]);
+    if(pg) pg.style.display="none";
+    if(tb) tb.className="tab";
+  }
+  var pg2=document.getElementById("annpage-"+name);
+  var tb2=document.getElementById("anntab-btn-"+name);
+  if(pg2) pg2.style.display="block";
+  if(tb2) tb2.className="tab active";
+  if(name==="annonces") renderAnnonces();
+}
+
+function renderAnnonces() {
+  loadANNDB();
+  var cont = document.getElementById("ann-liste-cont");
+  if(!cont) return;
+  var today = getTodayStr();
+  var actives = ANNDB.annonces.filter(function(a){
+    return !a.expiration || a.expiration >= today;
+  });
+  if(!actives.length){
+    cont.innerHTML = "<div style='text-align:center;padding:32px;color:#6b88a4;font-size:.85rem'>Aucune annonce publiée</div>";
+    return;
+  }
+  var html = "";
+  for(var i=0;i<actives.length;i++){
+    var a = actives[i];
+    var isNew = a.timestamp > gAnnLastRead;
+    var style = annPrioriteStyle(a.priorite);
+    html += "<div style='border:1px solid #c5d8ed;border-radius:9px;padding:13px 15px;margin-bottom:12px;"+style+"'>";
+    // Header
+    html += "<div style='display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:8px'>";
+    html += "<div style='display:flex;align-items:center;gap:7px'>";
+    html += "<span style='font-size:1.1rem'>"+annCatIcon(a.categorie)+"</span>";
+    html += "<div>";
+    html += "<div style='font-weight:700;font-size:.87rem;color:#1a3a5c'>"+escH(a.titre)+"</div>";
+    html += "<div style='font-size:.69rem;color:#6b88a4;margin-top:1px'>Par "+escH(a.auteur)+" • "+a.date+"</div>";
+    html += "</div></div>";
+    if(isNew) html += "<span style='background:#e74c3c;color:#fff;font-size:.6rem;font-weight:700;padding:2px 7px;border-radius:10px;flex-shrink:0'>NOUVEAU</span>";
+    html += "</div>";
+    // Message
+    html += "<div style='font-size:.82rem;color:#1a2a3a;line-height:1.5;white-space:pre-wrap'>"+escH(a.message)+"</div>";
+    // Footer
+    html += "<div style='display:flex;align-items:center;justify-content:space-between;margin-top:10px;flex-wrap:wrap;gap:6px'>";
+    html += "<div style='font-size:.69rem;color:#6b88a4'>";
+    if(a.expiration) html += "⏱ Expire le "+a.expiration+" • ";
+    html += "Destinataires : "+escH(a.destinataires==="tous"?"Tous":a.destinataires==="finances"?"Équipe Finances":"Administrateurs");
+    html += "</div>";
+    // Admin actions
+    if(gCurrentUser && gCurrentUser.role==="admin"){
+      html += "<div style='display:flex;gap:5px'>";
+      html += "<button class='btn btn-sm btn-d' onclick=\"supprimerAnnonce('"+a.id+"')\">🗑️</button>";
+      html += "</div>";
+    }
+    html += "</div></div>";
+  }
+  cont.innerHTML = html;
+  // Marquer comme lu
+  var maxTs = 0;
+  for(var j=0;j<actives.length;j++) if(actives[j].timestamp>maxTs) maxTs=actives[j].timestamp;
+  if(maxTs > gAnnLastRead) {
+    gAnnLastRead = maxTs;
+    try { localStorage.setItem("ecc_ann_lastread", maxTs); } catch(e){}
+    updateAnnDot();
+  }
+}
+
+function publierAnnonce() {
+  if(!gCurrentUser || gCurrentUser.role !== "admin"){ showToast("Réservé à l'administrateur.","err"); return; }
+  var titre = (document.getElementById("ann-titre")||{}).value.trim();
+  var message = (document.getElementById("ann-message")||{}).value.trim();
+  var categorie = (document.getElementById("ann-categorie")||{}).value || "general";
+  var priorite = (document.getElementById("ann-priorite")||{}).value || "normale";
+  var expiration = (document.getElementById("ann-expiration")||{}).value || "";
+  var destinataires = (document.getElementById("ann-destinataires")||{}).value || "tous";
+  var errEl = document.getElementById("ann-err");
+  if(!titre || !message){
+    if(errEl){ errEl.textContent="Le titre et le message sont obligatoires."; errEl.style.display="block"; }
+    return;
+  }
+  if(errEl) errEl.style.display="none";
+  loadANNDB();
+  var ann = {
+    id: "ann"+Date.now(),
+    timestamp: Date.now(),
+    titre: titre,
+    message: message,
+    categorie: categorie,
+    priorite: priorite,
+    expiration: expiration,
+    destinataires: destinataires,
+    auteur: gCurrentUser.nom,
+    date: getTodayStr()
+  };
+  ANNDB.annonces.unshift(ann);
+  saveANNDB();
+  // Firebase sync
+  if(IS_CONFIGURED && gDb){
+    gDb.collection("annonces").doc(ann.id).set(ann).catch(function(e){ console.warn("Ann Firebase:", e); });
+  }
+  pushNotif("📢","Nouvelle annonce",ann.titre+" — "+ann.message.substring(0,50),"annonces");
+  sendPushNotif("📢 "+ann.titre, ann.message.substring(0,80));
+  showToast("Annonce publiée avec succès !","ok");
+  resetAnnonceForm();
+  showTabAnn("annonces");
+}
+
+function supprimerAnnonce(id) {
+  if(!confirm("Supprimer cette annonce ?")) return;
+  loadANNDB();
+  ANNDB.annonces = ANNDB.annonces.filter(function(a){ return a.id !== id; });
+  saveANNDB();
+  if(IS_CONFIGURED && gDb){
+    gDb.collection("annonces").doc(id).delete().catch(function(e){ console.warn("Ann delete:", e); });
+  }
+  renderAnnonces();
+  showToast("Annonce supprimée.","");
+}
+
+function resetAnnonceForm() {
+  ["ann-titre","ann-message","ann-expiration"].forEach(function(id){
+    var el=document.getElementById(id); if(el) el.value="";
+  });
+  var cat=document.getElementById("ann-categorie"); if(cat) cat.value="general";
+  var pri=document.getElementById("ann-priorite"); if(pri) pri.value="normale";
+  var dest=document.getElementById("ann-destinataires"); if(dest) dest.value="tous";
+  var err=document.getElementById("ann-err"); if(err) err.style.display="none";
+}
+
+function updateAnnDot() {
+  loadANNDB();
+  var today = getTodayStr();
+  var actives = ANNDB.annonces.filter(function(a){ return !a.expiration||a.expiration>=today; });
+  var unread = actives.filter(function(a){ return a.timestamp > gAnnLastRead; }).length;
+  var dot = document.getElementById("ann-notif-dot");
+  if(dot) dot.style.display = unread>0 ? "inline-block" : "none";
+}
+
+function initAnnonces() {
+  loadANNDB();
+  updateAnnDot();
+  // Hide publish tab for non-admin
+  var pubTab = document.getElementById("anntab-btn-nouvelle");
+  if(pubTab) pubTab.style.display = (gCurrentUser && gCurrentUser.role==="admin") ? "" : "none";
+  // Sync from Firebase if configured
+  if(IS_CONFIGURED && gDb){
+    gDb.collection("annonces").orderBy("timestamp","desc").limit(50)
+      .get().then(function(snap){
+        ANNDB.annonces = [];
+        snap.forEach(function(doc){ ANNDB.annonces.push(doc.data()); });
+        saveANNDB();
+        renderAnnonces();
+        updateAnnDot();
+      }).catch(function(e){ console.warn("Ann load:", e); renderAnnonces(); });
+  } else {
+    renderAnnonces();
+  }
 }
 
 // Init Social and Seminaire in launchApp
