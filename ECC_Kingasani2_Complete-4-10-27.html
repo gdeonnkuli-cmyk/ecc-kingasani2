@@ -1739,7 +1739,8 @@ var USER_ROLES = {
   "channinglumesa@gmail.com":  { nom: "Directeur Financier", role: "finances", label: "Finances" },
   "lbasingili@cbfck2.org":     { nom: "Lauriane BASINGILI",  role: "saisie",   label: "Saisie",
     perms: { modules: ["seminaire","eb","annonces","projets"], financeTabs: [] }
-  }
+  },
+  "alfred.bolenga@cbfck2.org": { nom: "Alfred Bolenga", role: "finances", label: "Finances" }
 };
 
 // == FIREBASE INIT ==
@@ -1928,7 +1929,12 @@ function doLogin() {
                 gCurrentUser.perms.socialSaisie = ac.socialSaisie;
               }
               if(ac.nom) gCurrentUser.nom = ac.nom;
-              if(ac.role) gCurrentUser.role = ac.role;
+              // Ne jamais ecraser le role si USER_ROLES definit deja admin
+              var infoRole = USER_ROLES[email];
+              if(ac.role && !(infoRole && infoRole.role === "admin")) gCurrentUser.role = ac.role;
+              // Forcer mise a jour onglet admin apres chargement Firestore
+              var adminTabF = document.getElementById("tab-btn-admin");
+              if(adminTabF) adminTabF.style.display = (gCurrentUser.role === "admin") ? "" : "none";
             }
             launchAppFin();
           })
@@ -2105,6 +2111,13 @@ function saveToHistory() {
       showToast("Sauvegarde dans l historique !", "ok");
       renderHistory();
       pushNotif("💰","Finances sauvegardees","Culte du "+(data.meta&&data.meta.date?data.meta.date:""),"finances");
+      // Vider le formulaire apres validation
+      clearRows();
+      var fields=["meta-date","eff-cf","eff-cl","eff-eco","meta-resp","rep-cdf","rep-usd"];
+      for(var fi=0;fi<fields.length;fi++){var el=document.getElementById(fields[fi]);if(el)el.value="";}
+      recalc();
+      if(IS_CONFIGURED){ var docId="culte_"+((data.meta&&data.meta.date)||"draft").replace(/-/g,""); gDb.collection("cultes").doc(docId).delete().catch(function(){}); }
+      gIsDirty=false; setSyncStatus("ok","Formul. vide");
     })
     .catch(function(e) { showToast("Erreur: " + e.message, "err"); });
 }
@@ -2457,7 +2470,15 @@ function renderHistory() {
       html+="<div class='hi-date'>"+(m.date||"-")+"</div>";
       html+="<div class='hi-meta'>CF:"+(m.effCF||0)+" CL:"+(m.effCL||0)+" | "+sd+"</div>";
       html+="<div class='hi-amounts'><span class='hi-rec'>Rec. "+fmt(s.rCDF||0)+" CDF</span><span class='"+cls+"'>Solde "+fmt(nEq)+" CDF</span></div>";
-      html+="<div class='hi-actions'><button class='btn btn-o btn-sm' onclick='loadHist("+i+")'>Charger</button><button class='btn btn-d btn-sm' onclick='delHist("+i+")'>Suppr.</button></div>";
+      // Seul le saisisseur ou admin peut modifier/supprimer
+      var canEdit = (gCurrentUser && (gCurrentUser.role==="admin" || gCurrentUser.email===(h.savedEmail||h.lastEditEmail)));
+      html+="<div class='hi-actions'>";
+      html+="<button class='btn btn-o btn-sm' onclick='viewHist("+i+")'>Voir</button>";
+      if(canEdit){
+        html+="<button class='btn btn-p btn-sm' onclick='loadHist("+i+")'>Modifier</button>";
+        html+="<button class='btn btn-d btn-sm' onclick='delHist("+i+")'>Suppr.</button>";
+      }
+      html+="</div>";
       html+="</div>";
     }
     body.innerHTML=html;
@@ -2473,6 +2494,19 @@ function renderHistory() {
   } else {
     renderList(getHistLocal());
   }
+}
+
+function viewHist(i) {
+  var h=gHistCache[i]; if(!h)return;
+  var m=h.meta||{}, s=h.sums||{};
+  var info="Date: "+(m.date||"-")+"
+Responsable: "+(m.resp||"-")+"
+Effectif CF: "+(m.effCF||0)+" | CL: "+(m.effCL||0)+"
+Recettes: "+(s.rCDF||0)+" CDF / "+(s.rUSD||0)+" USD
+Depenses: "+(s.dCDF||0)+" CDF / "+(s.dUSD||0)+" USD
+Solde net: "+(s.nCDF||0)+" CDF
+Saisi par: "+(h.savedBy||h.lastEditBy||"-");
+  showModal("Culte du "+(m.date||"-"), info, function(){ closeModal(); });
 }
 
 function loadHist(i) {
