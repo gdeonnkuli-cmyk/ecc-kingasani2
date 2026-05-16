@@ -1796,10 +1796,14 @@ function switchModule(name) {
   // Show/hide members main container - handled by .module.active CSS
 
   if (name === "membres") {
-    renderDashboardM();
-    renderMembers();
-    populateYearSelects();
-    populateMemberSelects();
+    // Charger depuis Firebase d'abord, puis afficher
+    loadDBFromFirebase(function(db) {
+      DB = db;
+      renderDashboardM();
+      renderMembers();
+      populateYearSelects();
+      populateMemberSelects();
+    });
   }
   if (name === "finances") {
     var fm = document.getElementById("fin-main");
@@ -1807,12 +1811,15 @@ function switchModule(name) {
     showTab("recettes");
   }
   if (name === "social") {
-    showTabS("recettes");
-    // Charger tout l'historique finances avant d'afficher
-    loadSocFromAllHistory(function() {
-      recalcS();
-      renderDepSocial();
-      renderDashboardSoc();
+    // Charger depuis Firebase d'abord, puis afficher
+    loadSocDBFromFirebase(function(db) {
+      SOCDB = db;
+      showTabS("recettes");
+      loadSocFromAllHistory(function() {
+        recalcS();
+        renderDepSocial();
+        renderDashboardSoc();
+      });
     });
   }
   if (name === "eb") {
@@ -4468,7 +4475,7 @@ var COTIS_MENSUELLE = 1000;
 var MOIS_LABELS = ["","Janv","Fevr","Mars","Avr","Mai","Juin","Juil","Aout","Sept","Oct","Nov","Dec"];
 var COLORS = ["#1f6fad","#27ae60","#e67e22","#8e44ad","#c0392b","#16a085","#2c3e50","#d35400","#1abc9c","#e74c3c"];
 
-// == STORAGE ==
+// == STORAGE MEMBRES ==
 function loadDB() {
   try {
     var d = localStorage.getItem("ecc_membres_db");
@@ -4476,7 +4483,35 @@ function loadDB() {
   } catch(e) { return {membres:[], cotisations:[], nextId:1}; }
 }
 function saveDB(db) {
+  // 1. Toujours sauvegarder en local (fallback)
   try { localStorage.setItem("ecc_membres_db", JSON.stringify(db)); } catch(e) {}
+  // 2. Synchroniser vers Firebase si connecté
+  if (IS_CONFIGURED && gDb) {
+    gDb.collection("membres_db").doc("main").set({
+      membres: db.membres,
+      cotisations: db.cotisations,
+      nextId: db.nextId,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: gCurrentUser ? gCurrentUser.email : ""
+    }).catch(function(e){ console.warn("Membres Firebase sync error:", e.message); });
+  }
+}
+
+// Charger les membres depuis Firebase (priorité) puis localStorage
+function loadDBFromFirebase(callback) {
+  if (!IS_CONFIGURED || !gDb) { if(callback) callback(loadDB()); return; }
+  gDb.collection("membres_db").doc("main").get()
+    .then(function(doc) {
+      if (doc.exists) {
+        var data = doc.data();
+        var db = {membres: data.membres||[], cotisations: data.cotisations||[], nextId: data.nextId||1};
+        // Mettre à jour le cache local
+        try { localStorage.setItem("ecc_membres_db", JSON.stringify(db)); } catch(e) {}
+        if(callback) callback(db);
+      } else {
+        if(callback) callback(loadDB());
+      }
+    }).catch(function() { if(callback) callback(loadDB()); });
 }
 
 var DB = loadDB();
@@ -5711,7 +5746,41 @@ function newIdS() { gSocUid++; return "sr"+gSocUid; }
 function loadSocDB() {
   try { return JSON.parse(localStorage.getItem("ecc_social_db") || "null") || {recettes:[], assistances:[], sessions:[], nextId:1}; } catch(e) { return {recettes:[],assistances:[],sessions:[],nextId:1}; }
 }
-function saveSocDB(db) { try { localStorage.setItem("ecc_social_db", JSON.stringify(db)); } catch(e) {} }
+function saveSocDB(db) {
+  // 1. Local (fallback)
+  try { localStorage.setItem("ecc_social_db", JSON.stringify(db)); } catch(e) {}
+  // 2. Firebase
+  if (IS_CONFIGURED && gDb) {
+    gDb.collection("social_db").doc("main").set({
+      assistances: db.assistances || [],
+      sessions: db.sessions || [],
+      nextId: db.nextId || 1,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: gCurrentUser ? gCurrentUser.email : ""
+    }).catch(function(e){ console.warn("Social Firebase sync error:", e.message); });
+  }
+}
+
+// Charger le Social depuis Firebase
+function loadSocDBFromFirebase(callback) {
+  if (!IS_CONFIGURED || !gDb) { if(callback) callback(loadSocDB()); return; }
+  gDb.collection("social_db").doc("main").get()
+    .then(function(doc) {
+      if (doc.exists) {
+        var data = doc.data();
+        var db = {
+          assistances: data.assistances || [],
+          sessions: data.sessions || [],
+          nextId: data.nextId || 1,
+          recettes: []
+        };
+        try { localStorage.setItem("ecc_social_db", JSON.stringify(db)); } catch(e) {}
+        if(callback) callback(db);
+      } else {
+        if(callback) callback(loadSocDB());
+      }
+    }).catch(function() { if(callback) callback(loadSocDB()); });
+}
 var SOCDB = loadSocDB();
 
 // Tabs
