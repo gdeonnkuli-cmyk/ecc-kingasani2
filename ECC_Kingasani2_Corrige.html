@@ -1831,8 +1831,10 @@ function switchModule(name) {
     showTabAnn("annonces");
   }
   if (name === "projets") {
-    initProjets();
-    showTabProj("liste");
+    loadPROJDBFromFirebase(function() {
+      initProjets();
+      showTabProj("liste");
+    });
   }
   if (name === "seminaire") {
     showTabSem("recettes");
@@ -7395,7 +7397,41 @@ function loadPROJDB() {
   if(!PROJDB.projets) PROJDB.projets=[];
 }
 function savePROJDB() {
+  // 1. Local (fallback)
   try { localStorage.setItem("ecc_projets", JSON.stringify(PROJDB)); } catch(e){}
+  // 2. Firebase — on écrit chaque projet individuellement
+  if (IS_CONFIGURED && gDb) {
+    var projets = PROJDB.projets || [];
+    for (var pi=0; pi<projets.length; pi++) {
+      (function(proj) {
+        gDb.collection("projets").doc(proj.id).set(proj, {merge:true})
+          .catch(function(e){ console.warn("Projets sync error:", e.message); });
+      })(projets[pi]);
+    }
+  }
+}
+
+// Charger tous les projets depuis Firebase
+function loadPROJDBFromFirebase(callback) {
+  if (!IS_CONFIGURED || !gDb) { loadPROJDB(); if(callback) callback(); return; }
+  gDb.collection("projets").get()
+    .then(function(snap) {
+      var projets = [];
+      snap.forEach(function(d){ projets.push(d.data()); });
+      // Trier par date de création décroissante
+      projets.sort(function(a,b){
+        return ((b.dateCreation||"")+b.id).localeCompare((a.dateCreation||"")+a.id);
+      });
+      PROJDB.projets = projets;
+      // Mettre à jour le cache local
+      try { localStorage.setItem("ecc_projets", JSON.stringify(PROJDB)); } catch(e){}
+      if(callback) callback();
+    })
+    .catch(function(e) {
+      console.warn("Projets Firebase load error:", e.message);
+      loadPROJDB();
+      if(callback) callback();
+    });
 }
 
 function showTabProj(name) {
@@ -7453,7 +7489,6 @@ function getProjDepenseEq(proj) {
 }
 
 function renderProjListe() {
-  loadPROJDB();
   var cont = document.getElementById("proj-liste-cont");
   if(!cont) return;
   var list = PROJDB.projets;
