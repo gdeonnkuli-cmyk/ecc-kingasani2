@@ -412,8 +412,12 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#0d1b2a,
   <div class="hlogo" id="hlogo-wrap" onclick="adminClickLogo()" title="Cliquer pour changer le logo (admin)"><img id="app-logo-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:8px"><span id="app-logo-txt">+</span></div>
   <div class="htitle"><h1 id="app-title-txt">ECC / 13eme CBFC - Kingasani 2</h1><p id="app-subtitle-txt">Finances et Membres</p></div>
   <div class="hright">
-    <div class="sync-dot" id="sdot"></div>
-    <span class="sync-label" id="slbl">OK</span>
+    <!-- Indicateur de sync Firebase enrichi -->
+    <div id="sync-banner" style="display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;background:#1a3a5c;border:1.5px solid #2e75b6;cursor:default;font-size:.72rem;font-weight:700;transition:background .3s" title="Statut de synchronisation Firebase">
+      <div class="sync-dot" id="sdot"></div>
+      <span id="slbl" style="color:#e8f0fa;white-space:nowrap">OK</span>
+      <span id="sync-mode-badge" style="margin-left:3px;padding:1px 6px;border-radius:10px;font-size:.62rem;font-weight:800;letter-spacing:.03em;background:#27ae60;color:#fff">FIREBASE</span>
+    </div>
     <div class="notif-bell" id="notif-bell" onclick="toggleNotifPanel()" title="Notifications">
       🔔<span class="notif-badge" id="notif-badge" style="display:none">0</span>
     </div>
@@ -640,7 +644,24 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#0d1b2a,
 <div class="page" id="page-historique">
   <div class="card">
     <div class="card-hdr"><h2>Historique</h2><span class="badge" id="hist-count">0</span><div style="margin-left:auto"><button class="btn btn-d btn-sm" onclick="clearHist()">Effacer tout</button></div></div>
-    <div class="card-body"><div id="hist-body"></div></div>
+    <div class="card-body">
+      <!-- Filtre par intervalle de dates -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;padding:10px 12px;background:#eef4fb;border-radius:8px;border:1px solid #c5d8ed">
+        <div class="fg" style="flex:1;min-width:130px">
+          <label>Du</label>
+          <input type="date" id="hist-date-from" onchange="filterAndRenderHistory()">
+        </div>
+        <div class="fg" style="flex:1;min-width:130px">
+          <label>Au</label>
+          <input type="date" id="hist-date-to" onchange="filterAndRenderHistory()">
+        </div>
+        <button class="btn btn-g btn-sm" onclick="resetHistFilter()" style="flex-shrink:0">Tout afficher</button>
+        <button class="btn btn-p btn-sm" onclick="printHistory()" style="flex-shrink:0" title="Imprimer l'historique filtré">🖨️ Imprimer</button>
+      </div>
+      <!-- Résumé de la période filtrée -->
+      <div id="hist-period-summary" style="display:none;margin-bottom:10px;padding:9px 13px;background:#f0faf4;border:1px solid #a8d5b8;border-radius:8px;font-size:.76rem;color:#1e7d52;font-weight:600"></div>
+      <div id="hist-body"></div>
+    </div>
   </div>
 </div>
 
@@ -650,6 +671,7 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#0d1b2a,
     <div class="card-hdr"><h2>Tableau de Bord</h2><span class="badge">Temps reel</span></div>
     <div class="card-body">
       <div class="dash-grid" id="dash-kpis"></div>
+      <div id="dash-cumul-bar" style="display:none;margin:10px 0;padding:10px 12px;background:#fff;border-radius:8px;border:1px solid #c5d8ed"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-bottom:11px">
         <div class="chart-wrap"><h3>Recettes vs Depenses</h3><div class="chart-bars" id="chart-bars"></div></div>
         <div class="chart-wrap"><h3>Repartition Depenses</h3><canvas id="donut-canvas" width="200" height="200" style="max-width:100%"></canvas></div>
@@ -1198,7 +1220,7 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#0d1b2a,
 <nav class="tabs">
   <button class="tab active" id="ebtab-btn-nouveau" onclick="showTabEB('nouveau')">Nouveau</button>
   <button class="tab" id="ebtab-btn-liste" onclick="showTabEB('liste')">Mes demandes</button>
-  <button class="tab" id="ebtab-btn-admin" onclick="showTabEB('admin')" id="ebtab-admin-btn">Validation</button>
+  <button class="tab" id="ebtab-btn-admin" onclick="showTabEB('admin')">Validation</button>
 </nav>
 <div class="main" id="eb-main">
 
@@ -1505,6 +1527,87 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#0d1b2a,
   </div>
 </div>
 
+<!-- MODAL TRANSACTION PROJET (Recette / Dépense) -->
+<div id="proj-tx-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1100;overflow-y:auto;padding:20px 10px">
+  <div style="background:#fff;border-radius:14px;max-width:460px;margin:0 auto;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.25)">
+    <div style="background:linear-gradient(90deg,#1a3a5c,#2e75b6);padding:14px 18px;display:flex;justify-content:space-between;align-items:center">
+      <h2 id="proj-tx-title" style="color:#fff;font-size:.95rem;margin:0">Ajouter une transaction</h2>
+      <button onclick="closeProjTxModal()" style="background:rgba(255,255,255,.15);border:none;color:#fff;padding:4px 10px;border-radius:6px;cursor:pointer">✕</button>
+    </div>
+    <div style="padding:16px 18px">
+      <input type="hidden" id="proj-tx-proj-id">
+      <input type="hidden" id="proj-tx-type">
+      <div class="mgrid">
+        <div class="fg">
+          <label>Montant FC</label>
+          <input type="number" id="proj-tx-cdf" placeholder="0" min="0">
+        </div>
+        <div class="fg">
+          <label>Montant USD</label>
+          <input type="number" id="proj-tx-usd" placeholder="0" min="0" step="0.01">
+        </div>
+      </div>
+      <div class="fg" style="margin-top:8px">
+        <label>Libellé *</label>
+        <input type="text" id="proj-tx-libelle" placeholder="Ex: Achat ciment, Don paroisse, Salaire maçon...">
+      </div>
+      <div class="mgrid" style="margin-top:8px">
+        <div class="fg">
+          <label>Catégorie</label>
+          <select id="proj-tx-categorie">
+            <option value="materiaux">🧱 Matériaux</option>
+            <option value="main_oeuvre">👷 Main d'œuvre</option>
+            <option value="transport">🚚 Transport</option>
+            <option value="equipement">🔌 Équipement</option>
+            <option value="don">🎁 Don / Recette</option>
+            <option value="collecte">💰 Collecte</option>
+            <option value="subvention">📋 Subvention</option>
+            <option value="autre">📌 Autre</option>
+          </select>
+        </div>
+        <div class="fg">
+          <label>Date</label>
+          <input type="date" id="proj-tx-date">
+        </div>
+      </div>
+      <div class="fg" style="margin-top:8px">
+        <label>Fournisseur / Source</label>
+        <input type="text" id="proj-tx-fournisseur" placeholder="Nom du fournisseur ou donateur">
+      </div>
+      <!-- Champs spécifiques aux dépenses -->
+      <div id="proj-tx-dep-fields" style="display:none">
+        <div class="fg" style="margin-top:8px">
+          <label>Travaux effectués *</label>
+          <textarea id="proj-tx-travaux" rows="3" placeholder="Décrivez les travaux réalisés, les quantités, l'avancement..." style="width:100%;border:1.5px solid #c5d8ed;border-radius:8px;padding:9px 12px;font-size:.82rem;resize:vertical;font-family:DM Sans,sans-serif"></textarea>
+        </div>
+        <div class="mgrid" style="margin-top:8px">
+          <div class="fg">
+            <label>Responsable travaux</label>
+            <input type="text" id="proj-tx-resp-travaux" placeholder="Maçon, prestataire...">
+          </div>
+          <div class="fg">
+            <label>% avancement</label>
+            <input type="number" id="proj-tx-avancement" placeholder="0" min="0" max="100">
+          </div>
+        </div>
+        <div class="fg" style="margin-top:8px">
+          <label>N° facture / Reçu</label>
+          <input type="text" id="proj-tx-facture" placeholder="Optionnel">
+        </div>
+      </div>
+      <div class="fg" style="margin-top:8px">
+        <label>Note complémentaire</label>
+        <textarea id="proj-tx-note" rows="2" placeholder="Remarques, conditions, observations..." style="width:100%;border:1.5px solid #c5d8ed;border-radius:8px;padding:9px 12px;font-size:.82rem;resize:vertical;font-family:DM Sans,sans-serif"></textarea>
+      </div>
+      <div id="proj-tx-err" style="color:#c0392b;font-size:.77rem;margin-top:6px;display:none"></div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn btn-o" onclick="closeProjTxModal()">Annuler</button>
+        <button class="btn btn-p" id="proj-tx-submit-btn" onclick="saveProjTransaction()">Enregistrer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 </div><!-- /app-wrapper -->
 
 <!-- FINANCES MODALS -->
@@ -1693,10 +1796,14 @@ function switchModule(name) {
   // Show/hide members main container - handled by .module.active CSS
 
   if (name === "membres") {
-    renderDashboardM();
-    renderMembers();
-    populateYearSelects();
-    populateMemberSelects();
+    // Charger depuis Firebase d'abord, puis afficher
+    loadDBFromFirebase(function(db) {
+      DB = db;
+      renderDashboardM();
+      renderMembers();
+      populateYearSelects();
+      populateMemberSelects();
+    });
   }
   if (name === "finances") {
     var fm = document.getElementById("fin-main");
@@ -1704,10 +1811,16 @@ function switchModule(name) {
     showTab("recettes");
   }
   if (name === "social") {
-    showTabS("recettes");
-    recalcS();
-    renderDepSocial();
-    renderDashboardSoc();
+    // Charger depuis Firebase d'abord, puis afficher
+    loadSocDBFromFirebase(function(db) {
+      SOCDB = db;
+      showTabS("recettes");
+      loadSocFromAllHistory(function() {
+        recalcS();
+        renderDepSocial();
+        renderDashboardSoc();
+      });
+    });
   }
   if (name === "eb") {
     initEB();
@@ -2063,10 +2176,62 @@ function startInactivityTracking() {
 
 // == SYNC STATUS ==
 function setSyncStatus(status, label) {
-  var dot = document.getElementById("sdot");
-  var lbl = document.getElementById("slbl");
+  var dot    = document.getElementById("sdot");
+  var lbl    = document.getElementById("slbl");
+  var banner = document.getElementById("sync-banner");
+  var badge  = document.getElementById("sync-mode-badge");
+
   if (dot) dot.className = "sync-dot" + (status === "dirty" ? " dirty" : "");
   if (lbl) lbl.textContent = label;
+
+  // Mettre à jour la couleur du bandeau et du badge selon le statut
+  if (banner) {
+    if (status === "ok") {
+      banner.style.background = "#1a3a5c";
+      banner.style.borderColor = "#2e75b6";
+    } else if (status === "dirty") {
+      banner.style.background = "#7f1d1d";
+      banner.style.borderColor = "#c0392b";
+    } else if (status === "local") {
+      banner.style.background = "#78350f";
+      banner.style.borderColor = "#e67e22";
+    } else if (status === "saving") {
+      banner.style.background = "#1e3a5f";
+      banner.style.borderColor = "#3b82f6";
+    }
+  }
+
+  // Badge mode : Firebase / Local / Hors ligne
+  if (badge) {
+    if (!IS_CONFIGURED) {
+      badge.textContent = "LOCAL";
+      badge.style.background = "#e67e22";
+      badge.title = "Données stockées uniquement sur cet appareil — non partagées";
+    } else if (status === "dirty" || status === "local") {
+      badge.textContent = "NON SYNC";
+      badge.style.background = "#c0392b";
+      badge.title = "Données non encore synchronisées avec Firebase";
+    } else if (status === "saving") {
+      badge.textContent = "SYNC...";
+      badge.style.background = "#3b82f6";
+      badge.title = "Synchronisation en cours...";
+    } else {
+      badge.textContent = "FIREBASE ✓";
+      badge.style.background = "#27ae60";
+      badge.title = "Données synchronisées — visibles sur tous les appareils";
+    }
+  }
+}
+
+// Appeler au démarrage pour initialiser le badge selon IS_CONFIGURED
+function initSyncBadge() {
+  if (!IS_CONFIGURED) {
+    setSyncStatus("local", "Mode Local");
+    // Avertissement visible si mode local
+    showToast("⚠️ Mode LOCAL — données non partagées entre appareils. Vérifiez la connexion Firebase.", "err");
+  } else {
+    setSyncStatus("ok", "Firebase");
+  }
 }
 
 // == FIRESTORE SYNC ==
@@ -2094,10 +2259,10 @@ function subscribeToDoc(docId) {
 }
 
 function saveToFirestore() {
-  if (!IS_CONFIGURED) { saveToStorage(); return; }
+  if (!IS_CONFIGURED) { saveToStorage(); setSyncStatus("local","Sauvegarde locale"); return; }
   var docId = getDocId();
   gSyncing = true;
-  setSyncStatus("dirty", "Sauvegarde...");
+  setSyncStatus("saving", "Sauvegarde...");
   var data = captureState();
   data.lastEditBy    = gCurrentUser ? gCurrentUser.nom : "";
   data.lastEditEmail = gCurrentUser ? gCurrentUser.email : "";
@@ -2106,17 +2271,23 @@ function saveToFirestore() {
       gSyncing = false; gIsDirty = false;
       var now = new Date();
       var hh = now.getHours(), mm = now.getMinutes();
-      setSyncStatus("ok", "Sauvegarde " + (hh<10?"0"+hh:hh) + ":" + (mm<10?"0"+mm:mm));
+      setSyncStatus("ok", "Sync " + (hh<10?"0"+hh:hh) + ":" + (mm<10?"0"+mm:mm));
+      showToast("✅ Sauvegardé dans Firebase — visible sur tous les appareils", "ok");
     })
     .catch(function(e) {
       gSyncing = false;
-      setSyncStatus("dirty", "Echec sauvegarde");
-      showToast("Erreur: " + e.message, "err");
+      setSyncStatus("dirty", "Echec — données en local");
+      showToast("❌ Echec Firebase — données sauvegardées localement seulement. " + e.message, "err");
     });
 }
 
 function saveToHistory() {
-  if (!IS_CONFIGURED) { saveToHistLocal(); return; }
+  if (!IS_CONFIGURED) {
+    saveToHistLocal();
+    showToast("⚠️ Sauvegardé en LOCAL seulement — non visible sur les autres appareils.", "err");
+    return;
+  }
+  setSyncStatus("saving", "Sauvegarde hist...");
   var data = captureState();
   data.savedAt    = firebase.firestore.FieldValue.serverTimestamp();
   data.savedBy    = gCurrentUser ? gCurrentUser.nom : "";
@@ -2124,11 +2295,19 @@ function saveToHistory() {
   var histId = "hist_" + (data.meta.date || "").replace(/-/g, "");
   gDb.collection("historique").doc(histId).set(data, {merge: true})
     .then(function() {
-      showToast("Sauvegarde dans l historique !", "ok");
+      var now = new Date();
+      var hh = now.getHours(), mm = now.getMinutes();
+      setSyncStatus("ok", "Sync " + (hh<10?"0"+hh:hh) + ":" + (mm<10?"0"+mm:mm));
+      showToast("✅ Sauvegardé dans Firebase — visible sur tous les appareils", "ok");
       renderHistory();
+      gSocFinCache = {cdf:0, usd:0, count:0, loaded:false}; // Invalider cache Social
       pushNotif("💰","Finances sauvegardees","Culte du "+(data.meta&&data.meta.date?data.meta.date:""),"finances");
     })
-    .catch(function(e) { showToast("Erreur: " + e.message, "err"); });
+    .catch(function(e) {
+      saveToHistLocal();
+      setSyncStatus("dirty", "Echec — données en local");
+      showToast("❌ Echec Firebase — données en local seulement. " + e.message, "err");
+    });
 }
 
 // == PRESENCE ==
@@ -2178,6 +2357,7 @@ function saveToHistLocal() {
     localStorage.setItem("ecc_hist", JSON.stringify(hist));
     showToast("Sauvegarde dans l historique !", "ok");
     renderHistory();
+    gSocFinCache = {cdf:0, usd:0, count:0, loaded:false}; // Invalider cache Social
     var d2=data.meta&&data.meta.date?data.meta.date:"";
     var resp2=data.meta&&data.meta.resp?data.meta.resp:"";
     pushNotif("💰","Finances sauvegardees","Culte du "+d2+(resp2?" | "+resp2:""),"finances");
@@ -2514,22 +2694,7 @@ function renderHistory() {
   function renderList(hist) {
     gHistCache=hist;
     if(badge)badge.textContent=hist.length;
-    if(!hist.length){body.innerHTML="<p style='text-align:center;padding:20px;color:#6b88a4'>Aucune entree sauvegardee.</p>";return;}
-    var t=getTaux(),html="",i;
-    for(i=0;i<hist.length;i++){
-      var h=hist[i],m=h.meta||{},s=h.sums||{};
-      var tt=parseFloat(m.taux)||t;
-      var nEq=(s.nCDF||0)+(s.nUSD||0)*tt;
-      var cls=nEq>=0?"hi-pos":"hi-neg";
-      var sd=h.savedAt?(typeof h.savedAt==="string"?h.savedAt.substring(0,16).replace("T"," "):""):"-";
-      html+="<div class='hist-item'>";
-      html+="<div class='hi-date'>"+(m.date||"-")+"</div>";
-      html+="<div class='hi-meta'>CF:"+(m.effCF||0)+" CL:"+(m.effCL||0)+" | "+sd+"</div>";
-      html+="<div class='hi-amounts'><span class='hi-rec'>Rec. "+fmt(s.rCDF||0)+" CDF</span><span class='"+cls+"'>Solde "+fmt(nEq)+" CDF</span></div>";
-      html+="<div class='hi-actions'><button class='btn btn-o btn-sm' onclick='loadHist("+i+")'>Charger</button><button class='btn btn-d btn-sm' onclick='delHist("+i+")'>Suppr.</button></div>";
-      html+="</div>";
-    }
-    body.innerHTML=html;
+    filterAndRenderHistory(); // Applique le filtre de dates si actif
   }
 
   if(IS_CONFIGURED) {
@@ -2542,6 +2707,214 @@ function renderHistory() {
   } else {
     renderList(getHistLocal());
   }
+}
+
+function filterAndRenderHistory() {
+  var body  = document.getElementById("hist-body");
+  var badge = document.getElementById("hist-count");
+  var sumEl = document.getElementById("hist-period-summary");
+  if (!body || !gHistCache) return;
+
+  var from = document.getElementById("hist-date-from") ? document.getElementById("hist-date-from").value : "";
+  var to   = document.getElementById("hist-date-to")   ? document.getElementById("hist-date-to").value   : "";
+
+  var hist = gHistCache.slice().sort(function(a,b){
+    return ((a.meta&&a.meta.date)||"").localeCompare((b.meta&&b.meta.date)||"");
+  });
+
+  // Filtrer par dates
+  var filtered = hist.filter(function(h) {
+    var d = (h.meta && h.meta.date) || "";
+    if (from && d < from) return false;
+    if (to   && d > to)   return false;
+    return true;
+  });
+
+  if (badge) badge.textContent = filtered.length + (from||to ? "/"+hist.length : "");
+
+  if (!filtered.length) {
+    body.innerHTML = "<p style='text-align:center;padding:20px;color:#6b88a4'>Aucune entrée pour cette période.</p>";
+    if (sumEl) sumEl.style.display = "none";
+    return;
+  }
+
+  // Calculer le résumé de la période
+  var t = getTaux();
+  var totR=0, totD=0, totN=0, nbC=0;
+  for (var si=0;si<filtered.length;si++) {
+    var s=filtered[si].sums||{}, tt=parseFloat((filtered[si].meta&&filtered[si].meta.taux)||t);
+    totR += (s.rCDF||0)+(s.rUSD||0)*tt;
+    totD += (s.dCDF||0)+(s.dUSD||0)*tt;
+    totN += (s.nCDF||0)+(s.nUSD||0)*tt;
+    nbC++;
+  }
+  if (sumEl && (from||to)) {
+    var period = (from?from:"début")+" → "+(to?to:"aujourd'hui");
+    sumEl.style.display = "block";
+    sumEl.innerHTML = "📅 <strong>"+period+"</strong> — "+nbC+" culte(s) | "+
+      "Recettes : <strong>"+fmt(totR)+"</strong> CDF | "+
+      "Dépenses : <strong>"+fmt(totD)+"</strong> CDF | "+
+      "Solde : <strong style='color:"+(totN>=0?"#15803d":"#b91c1c")+"'>"+fmt(totN)+"</strong> CDF";
+  } else if (sumEl) {
+    sumEl.style.display = "none";
+  }
+
+  // Rendre la liste filtrée
+  var html = "";
+  for (var i=0;i<filtered.length;i++) {
+    var h=filtered[i], m=h.meta||{}, sv=h.sums||{};
+    var tt2=parseFloat(m.taux)||t;
+    var nEq=(sv.nCDF||0)+(sv.nUSD||0)*tt2;
+    var cls=nEq>=0?"hi-pos":"hi-neg";
+    var sd=h.savedAt?(typeof h.savedAt==="string"?h.savedAt.substring(0,16).replace("T"," "):""):"-";
+    // Trouver l'index réel dans gHistCache pour loadHist/delHist
+    var realIdx = gHistCache.indexOf(filtered[i]);
+    html+="<div class='hist-item'>";
+    html+="<div class='hi-date'>"+(m.date||"-")+"</div>";
+    html+="<div class='hi-meta'>CF:"+(m.effCF||0)+" CL:"+(m.effCL||0)+" | "+sd+"</div>";
+    html+="<div class='hi-amounts'><span class='hi-rec'>Rec. "+fmt(sv.rCDF||0)+" CDF</span><span class='"+cls+"'>Solde "+fmt(nEq)+" CDF</span></div>";
+    html+="<div class='hi-actions'><button class='btn btn-o btn-sm' onclick='loadHist("+realIdx+")'>Charger</button><button class='btn btn-d btn-sm' onclick='delHist("+realIdx+")'>Suppr.</button></div>";
+    html+="</div>";
+  }
+  body.innerHTML = html;
+}
+
+function resetHistFilter() {
+  var df = document.getElementById("hist-date-from");
+  var dt = document.getElementById("hist-date-to");
+  if (df) df.value = "";
+  if (dt) dt.value = "";
+  filterAndRenderHistory();
+}
+
+function printHistory() {
+  var from = document.getElementById("hist-date-from") ? document.getElementById("hist-date-from").value : "";
+  var to   = document.getElementById("hist-date-to")   ? document.getElementById("hist-date-to").value   : "";
+  var hist = (gHistCache||[]).slice().sort(function(a,b){
+    return ((a.meta&&a.meta.date)||"").localeCompare((b.meta&&b.meta.date)||"");
+  });
+  var filtered = hist.filter(function(h) {
+    var d = (h.meta&&h.meta.date)||"";
+    if (from && d < from) return false;
+    if (to   && d > to)   return false;
+    return true;
+  });
+
+  if (!filtered.length) { showToast("Aucune entrée à imprimer pour cette période.", "err"); return; }
+
+  var t = getTaux();
+  var totRCDF=0, totRUSD=0, totDCDF=0, totDUSD=0;
+  var soldeCumul = 0; // solde cumulé CDF équivalent, ligne par ligne
+  var rows = "";
+
+  for (var i=0;i<filtered.length;i++) {
+    var h=filtered[i], m=h.meta||{}, s=h.sums||{};
+    var tt    = parseFloat(m.taux)||t;
+    var rCDF  = s.rCDF||0, rUSD = s.rUSD||0;
+    var dCDF  = s.dCDF||0, dUSD = s.dUSD||0;
+    var repC  = parseFloat(m.repCDF)||0;
+    var repU  = parseFloat(m.repUSD)||0;
+    var rEq   = rCDF + rUSD*tt;
+    var dEq   = dCDF + dUSD*tt;
+    var nEq   = rEq - dEq;           // solde net ce culte
+    var finEq = nEq + repC + repU*tt; // solde final avec reporté
+
+    // Solde cumulé = somme des soldes nets de tous les cultes depuis le début
+    soldeCumul += nEq;
+
+    totRCDF += rCDF; totRUSD += rUSD;
+    totDCDF += dCDF; totDUSD += dUSD;
+
+    var nCls   = nEq>=0    ? "color:#15803d;font-weight:700" : "color:#b91c1c;font-weight:700";
+    var cumCls = soldeCumul>=0 ? "color:#15803d;font-weight:800;background:#f0faf4" : "color:#b91c1c;font-weight:800;background:#fff0f0";
+
+    rows += "<tr>";
+    rows += "<td><strong>"+(m.date||"-")+"</strong></td>";
+    rows += "<td style='text-align:center'>"+(m.effCF||0)+"</td>";
+    rows += "<td style='text-align:center'>"+(m.effCL||0)+"</td>";
+    rows += "<td style='text-align:right;font-family:monospace'>"+fmt(rCDF)+"</td>";
+    rows += "<td style='text-align:right;font-family:monospace'>"+fmt(rUSD)+"</td>";
+    rows += "<td style='text-align:right;font-family:monospace'>"+fmt(dCDF)+"</td>";
+    rows += "<td style='text-align:right;font-family:monospace'>"+fmt(dUSD)+"</td>";
+    rows += "<td style='text-align:right;font-family:monospace'>"+fmt(repC)+(repU>0?" / "+fmt(repU)+"$":"")+"</td>";
+    rows += "<td style='text-align:right;font-family:monospace;"+nCls+"'>"+fmt(nEq)+"</td>";
+    rows += "<td style='text-align:right;font-family:monospace;"+cumCls+"'>"+fmt(soldeCumul)+"</td>";
+    rows += "</tr>";
+  }
+
+  var period   = (from?from:"début")+" → "+(to?to:"aujourd'hui");
+  var totREq   = totRCDF + totRUSD*t;
+  var totDEq   = totDCDF + totDUSD*t;
+  var totNCls  = soldeCumul>=0 ? "color:#15803d" : "color:#b91c1c";
+
+  // Résumé KPIs pour le bloc récap
+  var couv = totREq>0 ? Math.round(totDEq/totREq*100) : 0;
+  var couvCls = couv<=100 ? "color:#15803d" : "color:#b91c1c";
+
+  var win = window.open("","_blank","width=1000,height=750");
+  win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
+  win.document.write("<title>Historique ECC Kingasani 2 — "+period+"</title>");
+  win.document.write("<style>");
+  win.document.write("body{font-family:Arial,sans-serif;font-size:11.5px;color:#0d1b2a;margin:24px 28px}");
+  win.document.write("h1{font-size:17px;color:#1a3a5c;margin:0 0 2px}");
+  win.document.write("h2{font-size:12px;color:#2e75b6;margin:16px 0 6px;text-transform:uppercase;letter-spacing:.05em}");
+  win.document.write(".sub{font-size:10.5px;color:#6b88a4;margin-bottom:14px}");
+  win.document.write(".kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px}");
+  win.document.write(".kpi{background:#eef4fb;border-radius:7px;padding:8px 10px;border:1px solid #c5d8ed}");
+  win.document.write(".kpi-lbl{font-size:9px;color:#6b88a4;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px}");
+  win.document.write(".kpi-val{font-size:14px;font-weight:800;color:#1a3a5c;font-family:monospace}");
+  win.document.write(".kpi-sub{font-size:9px;color:#9ca3af;margin-top:2px}");
+  win.document.write("table{width:100%;border-collapse:collapse;font-size:10.5px}");
+  win.document.write("th{background:#1a3a5c;color:#fff;padding:6px 7px;text-align:left;font-size:9.5px;text-transform:uppercase;letter-spacing:.04em}");
+  win.document.write("th.cumul{background:#2e75b6}");
+  win.document.write("td{padding:4px 7px;border-bottom:1px solid #e5eaf0;vertical-align:middle}");
+  win.document.write("tr:nth-child(even) td{background:#f8fafc}");
+  win.document.write(".total-row td{font-weight:800;background:#1a3a5c;color:#fff;border-top:2px solid #2e75b6;font-size:11px}");
+  win.document.write(".total-row td.cumul-final{background:#2e75b6;font-size:13px}");
+  win.document.write(".footer{margin-top:18px;font-size:9px;color:#9ca3af;border-top:1px solid #e5eaf0;padding-top:8px}");
+  win.document.write("@media print{.no-print{display:none}@page{margin:15mm;size:A4 landscape}}");
+  win.document.write("</style></head><body>");
+
+  // En-tête
+  win.document.write("<h1>ECC / 13ème CBFC — Kingasani 2</h1>");
+  win.document.write("<div class='sub'>Rapport Historique Finances | Période : <strong>"+period+"</strong> | "+filtered.length+" culte(s) | Imprimé le : "+new Date().toLocaleDateString("fr-FR",{day:"2-digit",month:"long",year:"numeric"})+"</div>");
+  win.document.write("<button class='no-print' onclick='window.print()' style='margin-bottom:14px;padding:6px 18px;background:#1a3a5c;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>🖨️ Imprimer / Enregistrer PDF</button>");
+
+  // KPIs récap
+  win.document.write("<h2>Récapitulatif de la période</h2>");
+  win.document.write("<div class='kpi-grid'>");
+  win.document.write("<div class='kpi'><div class='kpi-lbl'>Total Recettes</div><div class='kpi-val'>"+fmt(totREq)+"</div><div class='kpi-sub'>CDF équivalent</div></div>");
+  win.document.write("<div class='kpi'><div class='kpi-lbl'>Total Dépenses</div><div class='kpi-val'>"+fmt(totDEq)+"</div><div class='kpi-sub'>CDF équivalent</div></div>");
+  win.document.write("<div class='kpi'><div class='kpi-lbl'>Solde Cumulé Final</div><div class='kpi-val' style='"+totNCls+"'>"+fmt(soldeCumul)+"</div><div class='kpi-sub'>CDF équivalent</div></div>");
+  win.document.write("<div class='kpi'><div class='kpi-lbl'>Taux de couverture</div><div class='kpi-val' style='"+couvCls+"'>"+couv+"%</div><div class='kpi-sub'>Dépenses / Recettes</div></div>");
+  win.document.write("</div>");
+
+  // Tableau détaillé
+  win.document.write("<h2>Détail par culte</h2>");
+  win.document.write("<table><thead><tr>");
+  win.document.write("<th>Date</th><th>CF</th><th>CL</th>");
+  win.document.write("<th>Rec. CDF</th><th>Rec. USD</th>");
+  win.document.write("<th>Dép. CDF</th><th>Dép. USD</th>");
+  win.document.write("<th>Reporté</th>");
+  win.document.write("<th>Solde net</th>");
+  win.document.write("<th class='cumul'>Solde cumulé ↗</th>");
+  win.document.write("</tr></thead><tbody>");
+  win.document.write(rows);
+  // Ligne total
+  win.document.write("<tr class='total-row'>");
+  win.document.write("<td colspan='3'>TOTAL — "+filtered.length+" cultes</td>");
+  win.document.write("<td style='text-align:right;font-family:monospace'>"+fmt(totRCDF)+"</td>");
+  win.document.write("<td style='text-align:right;font-family:monospace'>"+fmt(totRUSD)+"</td>");
+  win.document.write("<td style='text-align:right;font-family:monospace'>"+fmt(totDCDF)+"</td>");
+  win.document.write("<td style='text-align:right;font-family:monospace'>"+fmt(totDUSD)+"</td>");
+  win.document.write("<td></td>");
+  win.document.write("<td style='text-align:right;font-family:monospace'>"+fmt(totREq-totDEq)+"</td>");
+  win.document.write("<td class='cumul-final' style='text-align:right;font-family:monospace;font-size:13px;"+totNCls.replace("color","color")+";background:#2e75b6;color:#fff'>"+fmt(soldeCumul)+" CDF</td>");
+  win.document.write("</tr></tbody></table>");
+
+  win.document.write("<div class='footer'>ECC Kingasani 2 — Rapport généré automatiquement | Taux de référence : 1 USD = "+t+" CDF</div>");
+  win.document.write("</body></html>");
+  win.document.close();
 }
 
 function loadHist(i) {
@@ -2612,85 +2985,142 @@ function showTab(name) {
 
 // == DASHBOARD ==
 function buildDashboard() {
-  var cf=sumC("cf-rows"),cl=sumC("cl-rows");
-  var cm=sumC("dep-cm"),fr=sumC("dep-fr"),co=sumC("dep-co"),ot=sumC("dep-ot");
-  var t=getTaux();
-  var rCDF=cf.cdf+cl.cdf,rUSD=cf.usd+cl.usd;
-  var dCDF=cm.cdf+fr.cdf+co.cdf+ot.cdf,dUSD=cm.usd+fr.usd+co.usd+ot.usd;
-  var rEq=rCDF+rUSD*t,dEq=dCDF+dUSD*t,nEq=rEq-dEq;
-  var effCF=parseInt(document.getElementById("eff-cf").value)||0;
-  var effCL=parseInt(document.getElementById("eff-cl").value)||0;
-  var effEco=parseInt(document.getElementById("eff-eco").value)||0;
-  var totalEff=effCF+effCL+effEco;
-  var kpis=[
-    {l:"Total Recettes",v:fmt(rCDF)+" CDF",s:fmt(rUSD)+" USD",cls:"blue"},
-    {l:"Total Depenses",v:fmt(dCDF)+" CDF",s:fmt(dUSD)+" USD",cls:"red"},
-    {l:"Solde Net",v:fmt(nEq)+" CDF",s:nEq>=0?"Positif":"Negatif",cls:nEq>=0?"green":"red"},
-    {l:"Participation",v:totalEff+" pers.",s:"CF:"+effCF+" CL:"+effCL,cls:"gold"},
-    {l:"Rec/Personne",v:totalEff>0?fmt(rEq/totalEff)+" CDF":"--",s:"Par participant",cls:"blue"},
-    {l:"Couverture",v:dEq>0?Math.round(rEq/dEq*100)+"%":"--",s:"Rec/Dep",cls:rEq>=dEq?"green":"red"}
-  ];
-  var html="",i;
-  for(i=0;i<kpis.length;i++){var k=kpis[i];html+="<div class='dc2 "+k.cls+"'><div class='dc-lbl'>"+k.l+"</div><div class='dc-val'>"+k.v+"</div><div class='dc-sub'>"+k.s+"</div></div>";}
-  var kpiEl=document.getElementById("dash-kpis");if(kpiEl)kpiEl.innerHTML=html;
-
-  function drawBars(hist) {
-    var entries=hist.slice(0,7).reverse();
-    var curDate=document.getElementById("meta-date").value;
-    var found=false;
-    for(var fi=0;fi<entries.length;fi++){if(entries[fi].meta&&entries[fi].meta.date===curDate){found=true;break;}}
-    if(!found&&curDate)entries.push({meta:{date:curDate,taux:t},sums:{rCDF:rCDF,rUSD:rUSD,dCDF:dCDF,dUSD:dUSD,nCDF:rCDF-dCDF,nUSD:rUSD-dUSD}});
-    entries=entries.slice(-8);
-    var mx=1,H=100,barHtml="",bi;
-    for(bi=0;bi<entries.length;bi++){var e=entries[bi],s2=e.sums||{},tt2=parseFloat(e.meta&&e.meta.taux)||t;var rv=(s2.rCDF||0)+(s2.rUSD||0)*tt2,dv=(s2.dCDF||0)+(s2.dUSD||0)*tt2,nv=(s2.nCDF||0)+(s2.nUSD||0)*tt2;if(rv>mx)mx=rv;if(dv>mx)mx=dv;if(Math.abs(nv)>mx)mx=Math.abs(nv);}
-    for(bi=0;bi<entries.length;bi++){
-      var e2=entries[bi],s3=e2.sums||{},tt3=parseFloat(e2.meta&&e2.meta.taux)||t;
-      var rv2=(s3.rCDF||0)+(s3.rUSD||0)*tt3,dv2=(s3.dCDF||0)+(s3.dUSD||0)*tt3,nv2=(s3.nCDF||0)+(s3.nUSD||0)*tt3;
-      var nc=nv2>=0?"bar-pos":"bar-neg";
-      var dt=e2.meta&&e2.meta.date?e2.meta.date.slice(5):"?";
-      barHtml+="<div class='bar-wrap'><div style='display:flex;gap:2px;align-items:flex-end;height:"+H+"px'>";
-      barHtml+="<div class='bar-inner bar-rec' style='height:"+Math.max(2,rv2/mx*H)+"px;width:10px'></div>";
-      barHtml+="<div class='bar-inner bar-dep' style='height:"+Math.max(2,dv2/mx*H)+"px;width:10px'></div>";
-      barHtml+="<div class='bar-inner "+nc+"' style='height:"+Math.max(2,Math.abs(nv2)/mx*H)+"px;width:8px'></div>";
-      barHtml+="</div><div class='bar-lbl'>"+dt+"</div></div>";
+  // Charger tout l'historique pour le cumul
+  function compute(hist) {
+    var t = getTaux();
+    // --- Cumul historique ---
+    var cumRCDF=0,cumRUSD=0,cumDCDF=0,cumDUSD=0,cumSolde=0,nbCultes=0;
+    var sorted = hist.slice().sort(function(a,b){
+      return ((a.meta&&a.meta.date)||"").localeCompare((b.meta&&b.meta.date)||"");
+    });
+    var soldeCourant = 0; // solde cumulé CDF équivalent
+    for (var hi=0;hi<sorted.length;hi++) {
+      var s=sorted[hi].sums||{};
+      var tt=parseFloat((sorted[hi].meta&&sorted[hi].meta.taux)||t);
+      var repC=parseFloat((sorted[hi].meta&&sorted[hi].meta.repCDF)||0);
+      var repU=parseFloat((sorted[hi].meta&&sorted[hi].meta.repUSD)||0);
+      cumRCDF += (s.rCDF||0); cumRUSD += (s.rUSD||0);
+      cumDCDF += (s.dCDF||0); cumDUSD += (s.dUSD||0);
+      nbCultes++;
     }
-    var chartEl=document.getElementById("chart-bars");
-    if(chartEl)chartEl.innerHTML=barHtml||"<p style='color:#6b88a4;font-size:.76rem;padding:12px'>Sauvegardez des cultes.</p>";
-  }
+    var cumREq = cumRCDF + cumRUSD*t;
+    var cumDEq = cumDCDF + cumDUSD*t;
+    var cumNEq = cumREq - cumDEq;
 
-  if(IS_CONFIGURED){
-    gDb.collection("historique").orderBy("savedAt","desc").limit(8).get()
-      .then(function(snap){var h=[];snap.forEach(function(d){h.push(d.data());});drawBars(h);})
-      .catch(function(){drawBars(getHistLocal());});
-  } else { drawBars(getHistLocal()); }
+    // --- Culte en cours (formulaire actif) ---
+    var cf=sumC("cf-rows"),cl=sumC("cl-rows");
+    var cm=sumC("dep-cm"),fr=sumC("dep-fr"),co=sumC("dep-co"),ot=sumC("dep-ot");
+    var rCDF=cf.cdf+cl.cdf, rUSD=cf.usd+cl.usd;
+    var dCDF=cm.cdf+fr.cdf+co.cdf+ot.cdf, dUSD=cm.usd+fr.usd+co.usd+ot.usd;
+    var rEq=rCDF+rUSD*t, dEq=dCDF+dUSD*t, nEq=rEq-dEq;
+    var effCF=parseInt(document.getElementById("eff-cf").value)||0;
+    var effCL=parseInt(document.getElementById("eff-cl").value)||0;
+    var effEco=parseInt(document.getElementById("eff-eco").value)||0;
+    var totalEff=effCF+effCL+effEco;
 
-  // Donut canvas
-  var cats=[{l:"Collations",v:cm.cdf+cm.usd*t,color:"#2e75b6"},{l:"Frais",v:fr.cdf+fr.usd*t,color:"#e67e22"},{l:"Contrib.",v:co.cdf+co.usd*t,color:"#27ae60"},{l:"Imprevus",v:ot.cdf+ot.usd*t,color:"#e74c3c"}];
-  var canvas=document.getElementById("donut-canvas");
-  if(canvas&&canvas.getContext){
-    var ctx=canvas.getContext("2d"),W=200,cx=W/2,cy=W/2,R=70,r2=35;
-    ctx.clearRect(0,0,W,W);
-    var totD=0,ci;
-    for(ci=0;ci<cats.length;ci++)if(cats[ci].v>0)totD+=cats[ci].v;
-    if(totD>0){
-      var ang=-Math.PI/2;
-      for(ci=0;ci<cats.length;ci++){
-        if(cats[ci].v<=0)continue;
-        var sw=cats[ci].v/totD*2*Math.PI;
-        ctx.beginPath();ctx.moveTo(cx,cy);ctx.arc(cx,cy,R,ang,ang+sw);ctx.closePath();ctx.fillStyle=cats[ci].color;ctx.fill();ang+=sw;
+    // Vérifier si le culte en cours est déjà dans l'historique
+    var curDate = document.getElementById("meta-date").value;
+    var inHist = false;
+    for(var hj=0;hj<hist.length;hj++){if(hist[hj].meta&&hist[hj].meta.date===curDate){inHist=true;break;}}
+
+    // Cumul total = historique + culte en cours (si pas encore sauvegardé)
+    var totREq = inHist ? cumREq : cumREq + rEq;
+    var totDEq = inHist ? cumDEq : cumDEq + dEq;
+    var totNEq = totREq - totDEq;
+    var totNb  = inHist ? nbCultes : nbCultes + (rEq>0?1:0);
+
+    // Solde reporté du formulaire en cours
+    var repCDF=getVal("rep-cdf"), repUSD=getVal("rep-usd");
+    var soldeFinCDF = (rCDF-dCDF)+repCDF;
+    var soldeFinUSD = (rUSD-dUSD)+repUSD;
+
+    var kpis=[
+      // Culte en cours
+      {l:"Recettes (ce culte)",   v:fmt(rCDF)+" CDF",    s:fmt(rUSD)+" USD",                      cls:"blue"},
+      {l:"Depenses (ce culte)",   v:fmt(dCDF)+" CDF",    s:fmt(dUSD)+" USD",                      cls:"red"},
+      {l:"Solde Net (ce culte)",  v:fmt(nEq)+" CDF",     s:nEq>=0?"✅ Positif":"❌ Negatif",       cls:nEq>=0?"green":"red"},
+      // Cumul toutes périodes
+      {l:"Total Recettes cumulé", v:fmt(totREq)+" CDF",  s:totNb+" culte(s) cumulé(s)",           cls:"blue"},
+      {l:"Total Dépenses cumulé", v:fmt(totDEq)+" CDF",  s:"Toutes périodes",                     cls:"red"},
+      {l:"Solde Cumulé",          v:fmt(totNEq)+" CDF",  s:totNEq>=0?"✅ Positif":"❌ Negatif",   cls:totNEq>=0?"green":"red"},
+      // Infos culte
+      {l:"Participation",         v:totalEff+" pers.",   s:"CF:"+effCF+" CL:"+effCL,              cls:"gold"},
+      {l:"Rec/Personne",          v:totalEff>0?fmt(rEq/totalEff)+" CDF":"--", s:"Par participant",cls:"blue"},
+      {l:"Couverture",            v:dEq>0?Math.round(rEq/dEq*100)+"%":"--",   s:"Rec/Dep ce culte",cls:rEq>=dEq?"green":"red"}
+    ];
+    var html="",i;
+    for(i=0;i<kpis.length;i++){var k=kpis[i];html+="<div class='dc2 "+k.cls+"'><div class='dc-lbl'>"+k.l+"</div><div class='dc-val'>"+k.v+"</div><div class='dc-sub'>"+k.s+"</div></div>";}
+    var kpiEl=document.getElementById("dash-kpis");if(kpiEl)kpiEl.innerHTML=html;
+
+    // Barre de progression cumul
+    var progEl=document.getElementById("dash-cumul-bar");
+    if(progEl && totREq>0){
+      var pct=Math.min(100,Math.round(totDEq/totREq*100));
+      var pc=pct>90?"#c0392b":pct>70?"#e67e22":"#1e7d52";
+      progEl.innerHTML="<div style='font-size:.72rem;font-weight:700;color:#1a3a5c;margin-bottom:4px'>Utilisation cumulative : "+pct+"% ("+fmt(totDEq)+" / "+fmt(totREq)+" CDF)</div>"+
+        "<div style='background:#eef4fb;border-radius:8px;height:12px;overflow:hidden'><div style='height:100%;width:"+pct+"%;background:linear-gradient(90deg,"+pc+","+pc+"cc);border-radius:8px'></div></div>";
+      progEl.style.display="block";
+    } else if(progEl) { progEl.style.display="none"; }
+
+    // Graphique barres historique
+    function drawBars(histB) {
+      var entries=histB.slice(0,7).reverse();
+      var found=false;
+      for(var fi=0;fi<entries.length;fi++){if(entries[fi].meta&&entries[fi].meta.date===curDate){found=true;break;}}
+      if(!found&&curDate&&rEq>0)entries.push({meta:{date:curDate,taux:t},sums:{rCDF:rCDF,rUSD:rUSD,dCDF:dCDF,dUSD:dUSD,nCDF:rCDF-dCDF,nUSD:rUSD-dUSD}});
+      entries=entries.slice(-8);
+      var mx=1,H=100,barHtml="",bi;
+      for(bi=0;bi<entries.length;bi++){var e=entries[bi],s2=e.sums||{},tt2=parseFloat(e.meta&&e.meta.taux)||t;var rv=(s2.rCDF||0)+(s2.rUSD||0)*tt2,dv=(s2.dCDF||0)+(s2.dUSD||0)*tt2,nv=(s2.nCDF||0)+(s2.nUSD||0)*tt2;if(rv>mx)mx=rv;if(dv>mx)mx=dv;if(Math.abs(nv)>mx)mx=Math.abs(nv);}
+      for(bi=0;bi<entries.length;bi++){
+        var e2=entries[bi],s3=e2.sums||{},tt3=parseFloat(e2.meta&&e2.meta.taux)||t;
+        var rv2=(s3.rCDF||0)+(s3.rUSD||0)*tt3,dv2=(s3.dCDF||0)+(s3.dUSD||0)*tt3,nv2=(s3.nCDF||0)+(s3.nUSD||0)*tt3;
+        var nc=nv2>=0?"bar-pos":"bar-neg";
+        var dt=e2.meta&&e2.meta.date?e2.meta.date.slice(5):"?";
+        barHtml+="<div class='bar-wrap'><div style='display:flex;gap:2px;align-items:flex-end;height:"+H+"px'>";
+        barHtml+="<div class='bar-inner bar-rec' style='height:"+Math.max(2,rv2/mx*H)+"px;width:10px'></div>";
+        barHtml+="<div class='bar-inner bar-dep' style='height:"+Math.max(2,dv2/mx*H)+"px;width:10px'></div>";
+        barHtml+="<div class='bar-inner "+nc+"' style='height:"+Math.max(2,Math.abs(nv2)/mx*H)+"px;width:8px'></div>";
+        barHtml+="</div><div class='bar-lbl'>"+dt+"</div></div>";
       }
-      ctx.beginPath();ctx.arc(cx,cy,r2,0,2*Math.PI);ctx.fillStyle="#fff";ctx.fill();
-      ctx.fillStyle="#1a2a3a";ctx.font="bold 13px sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
-      ctx.fillText(dEq>0?Math.round(dEq/rEq*100)+"%":"--",cx,cy);
+      var chartEl=document.getElementById("chart-bars");
+      if(chartEl)chartEl.innerHTML=barHtml||"<p style='color:#6b88a4;font-size:.76rem;padding:12px'>Sauvegardez des cultes.</p>";
     }
+    drawBars(sorted);
+
+    // Donut dépenses ce culte
+    var cats=[{l:"Collations",v:cm.cdf+cm.usd*t,color:"#2e75b6"},{l:"Frais",v:fr.cdf+fr.usd*t,color:"#e67e22"},{l:"Contrib.",v:co.cdf+co.usd*t,color:"#27ae60"},{l:"Imprevus",v:ot.cdf+ot.usd*t,color:"#e74c3c"}];
+    var canvas=document.getElementById("donut-canvas");
+    if(canvas&&canvas.getContext){
+      var ctx=canvas.getContext("2d"),W=200,cx=W/2,cy=W/2,R=70,r2=35;
+      ctx.clearRect(0,0,W,W);
+      var totD=0,ci;
+      for(ci=0;ci<cats.length;ci++)if(cats[ci].v>0)totD+=cats[ci].v;
+      if(totD>0){
+        var ang=-Math.PI/2;
+        for(ci=0;ci<cats.length;ci++){
+          if(cats[ci].v<=0)continue;
+          var sw=cats[ci].v/totD*2*Math.PI;
+          ctx.beginPath();ctx.moveTo(cx,cy);ctx.arc(cx,cy,R,ang,ang+sw);ctx.closePath();ctx.fillStyle=cats[ci].color;ctx.fill();ang+=sw;
+        }
+        ctx.beginPath();ctx.arc(cx,cy,r2,0,2*Math.PI);ctx.fillStyle="#fff";ctx.fill();
+        ctx.fillStyle="#1a2a3a";ctx.font="bold 13px sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
+        ctx.fillText(dEq>0?Math.round(dEq/rEq*100)+"%":"--",cx,cy);
+      }
+    }
+
+    // CF vs CL
+    var cfEq=cf.cdf+cf.usd*t,clEq=cl.cdf+cl.usd*t,mx2=Math.max(cfEq,clEq,1);
+    var cfp=Math.round(cfEq/mx2*100),clp=Math.round(clEq/mx2*100);
+    var cfclHtml="<div style='flex:1;margin-right:14px'><div style='font-size:.7rem;color:#6b88a4;font-weight:700;margin-bottom:3px'>CF</div><div style='background:#eef4fb;border-radius:5px;height:17px;position:relative;overflow:hidden'><div style='position:absolute;left:0;top:0;height:100%;width:"+cfp+"%;background:linear-gradient(90deg,#1f6fad,#5ba0d0);border-radius:5px'></div></div><div style='font-family:DM Mono,monospace;font-size:.71rem;color:#1a3a5c;font-weight:700;margin-top:2px'>"+fmt(cfEq)+" CDF</div></div>";
+    cfclHtml+="<div style='flex:1'><div style='font-size:.7rem;color:#6b88a4;font-weight:700;margin-bottom:3px'>CL</div><div style='background:#eef4fb;border-radius:5px;height:17px;position:relative;overflow:hidden'><div style='position:absolute;left:0;top:0;height:100%;width:"+clp+"%;background:linear-gradient(90deg,#27ae60,#82e0aa);border-radius:5px'></div></div><div style='font-family:DM Mono,monospace;font-size:.71rem;color:#1e7d52;font-weight:700;margin-top:2px'>"+fmt(clEq)+" CDF</div></div>";
+    var cfclEl=document.getElementById("cfcl-bars");if(cfclEl){cfclEl.style.display="flex";cfclEl.innerHTML=cfclHtml;}
   }
 
-  // CF vs CL bars
-  var cfEq=cf.cdf+cf.usd*t,clEq=cl.cdf+cl.usd*t,mx2=Math.max(cfEq,clEq,1);
-  var cfp=Math.round(cfEq/mx2*100),clp=Math.round(clEq/mx2*100);
-  var cfclHtml="<div style='flex:1;margin-right:14px'><div style='font-size:.7rem;color:#6b88a4;font-weight:700;margin-bottom:3px'>CF</div><div style='background:#eef4fb;border-radius:5px;height:17px;position:relative;overflow:hidden'><div style='position:absolute;left:0;top:0;height:100%;width:"+cfp+"%;background:linear-gradient(90deg,#1f6fad,#5ba0d0);border-radius:5px'></div></div><div style='font-family:DM Mono,monospace;font-size:.71rem;color:#1a3a5c;font-weight:700;margin-top:2px'>"+fmt(cfEq)+" CDF</div></div>";
-  cfclHtml+="<div style='flex:1'><div style='font-size:.7rem;color:#6b88a4;font-weight:700;margin-bottom:3px'>CL</div><div style='background:#eef4fb;border-radius:5px;height:17px;position:relative;overflow:hidden'><div style='position:absolute;left:0;top:0;height:100%;width:"+clp+"%;background:linear-gradient(90deg,#27ae60,#82e0aa);border-radius:5px'></div></div><div style='font-family:DM Mono,monospace;font-size:.71rem;color:#1e7d52;font-weight:700;margin-top:2px'>"+fmt(clEq)+" CDF</div></div>";
-  var cfclEl=document.getElementById("cfcl-bars");if(cfclEl){cfclEl.style.display="flex";cfclEl.innerHTML=cfclHtml;}
+  if(IS_CONFIGURED && gDb){
+    gDb.collection("historique").get()
+      .then(function(snap){var h=[];snap.forEach(function(d){h.push(d.data());});compute(h);})
+      .catch(function(){compute(getHistLocal());});
+  } else { compute(getHistLocal()); }
 }
 
 // == DISTRIBUTION ==
@@ -2990,9 +3420,52 @@ function resetAll(){
     document.getElementById("meta-date").value=getTodayStr();
     var ez=document.getElementById("exp-zone");if(ez)ez.style.display="none";
     var vt=document.getElementById("val-top");if(vt)vt.style.display="none";
-    gValidation={};recalc();gIsDirty=false;
+    gValidation={};
+    // Auto-remplir le solde reporté avec le solde final du dernier culte
+    autoFillSoldeReporte(function(){ recalc(); });
+    gIsDirty=false;
     setSyncStatus("ok","OK");closeModal();showToast("Formulaire reinitialise.","");
   });
+}
+
+// Charge le dernier culte sauvegardé et remplit automatiquement le solde reporté
+function autoFillSoldeReporte(callback) {
+  function applyLastSolde(hist) {
+    if (!hist || !hist.length) { if(callback)callback(); return; }
+    // Trier par date décroissante et prendre le plus récent
+    var sorted = hist.slice().sort(function(a,b){
+      var da=(a.meta&&a.meta.date)||"";
+      var db=(b.meta&&b.meta.date)||"";
+      return db.localeCompare(da);
+    });
+    var last = sorted[0];
+    var s = last.sums || {};
+    var t = parseFloat((last.meta&&last.meta.taux)||getTaux());
+    var repCDF = parseFloat(last.meta&&last.meta.repCDF) || 0;
+    var repUSD = parseFloat(last.meta&&last.meta.repUSD) || 0;
+    var fCDF = (s.nCDF||0) + repCDF;
+    var fUSD = (s.nUSD||0) + repUSD;
+    // Arrondir à 50 FC près
+    fCDF = Math.floor(fCDF/50)*50;
+    fUSD = Math.round(fUSD*100)/100;
+    var elCDF = document.getElementById("rep-cdf");
+    var elUSD = document.getElementById("rep-usd");
+    if(elCDF) elCDF.value = fCDF > 0 ? fCDF : 0;
+    if(elUSD) elUSD.value = fUSD > 0 ? fUSD : 0;
+    showToast("Solde reporté : "+fmt(fCDF)+" CDF | "+fmt(fUSD)+" USD (dernier culte : "+(last.meta&&last.meta.date||"?")+")", "ok");
+    if(callback) callback();
+  }
+
+  if (IS_CONFIGURED && gDb) {
+    gDb.collection("historique").orderBy("savedAt","desc").limit(1).get()
+      .then(function(snap){
+        var h=[];
+        snap.forEach(function(d){h.push(d.data());});
+        applyLastSolde(h);
+      }).catch(function(){ applyLastSolde(getHistLocal()); });
+  } else {
+    applyLastSolde(getHistLocal());
+  }
 }
 
 // == ADMIN ==
@@ -3977,22 +4450,7 @@ function showToast(msg,type){
   clearTimeout(gToastTimer);gToastTimer=setTimeout(function(){t.className="toast";},3400);
 }
 
-// == AUTO-LOGIN if Firebase session exists ==
-function setupAuthListener() {
-  if(IS_CONFIGURED && gAuth){
-    gAuth.onAuthStateChanged(function(user){
-      if(user && !gCurrentUser){
-        var email = user.email.toLowerCase();
-        var info = USER_ROLES[email] || {nom:email.split("@")[0], role:"finances", label:"Utilisateur"};
-        gCurrentUser = {email:email, nom:info.nom, role:info.role, label:info.label, uid:user.uid};
-        launchAppFin();
-      }
-    });
-  }
-}
-if(document.readyState === "complete") { setupAuthListener(); }
-else { window.addEventListener("load", setupAuthListener); }
-
+// setupAuthListener supprimé — setupAuthListener2 (plus bas) prend le relais
 
 // == MEMBRES JS ==
 
@@ -4004,7 +4462,7 @@ var COTIS_MENSUELLE = 1000;
 var MOIS_LABELS = ["","Janv","Fevr","Mars","Avr","Mai","Juin","Juil","Aout","Sept","Oct","Nov","Dec"];
 var COLORS = ["#1f6fad","#27ae60","#e67e22","#8e44ad","#c0392b","#16a085","#2c3e50","#d35400","#1abc9c","#e74c3c"];
 
-// == STORAGE ==
+// == STORAGE MEMBRES ==
 function loadDB() {
   try {
     var d = localStorage.getItem("ecc_membres_db");
@@ -4012,17 +4470,42 @@ function loadDB() {
   } catch(e) { return {membres:[], cotisations:[], nextId:1}; }
 }
 function saveDB(db) {
+  // 1. Toujours sauvegarder en local (fallback)
   try { localStorage.setItem("ecc_membres_db", JSON.stringify(db)); } catch(e) {}
+  // 2. Synchroniser vers Firebase si connecté
+  if (IS_CONFIGURED && gDb) {
+    gDb.collection("membres_db").doc("main").set({
+      membres: db.membres,
+      cotisations: db.cotisations,
+      nextId: db.nextId,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: gCurrentUser ? gCurrentUser.email : ""
+    }).catch(function(e){ console.warn("Membres Firebase sync error:", e.message); });
+  }
+}
+
+// Charger les membres depuis Firebase (priorité) puis localStorage
+function loadDBFromFirebase(callback) {
+  if (!IS_CONFIGURED || !gDb) { if(callback) callback(loadDB()); return; }
+  gDb.collection("membres_db").doc("main").get()
+    .then(function(doc) {
+      if (doc.exists) {
+        var data = doc.data();
+        var db = {membres: data.membres||[], cotisations: data.cotisations||[], nextId: data.nextId||1};
+        // Mettre à jour le cache local
+        try { localStorage.setItem("ecc_membres_db", JSON.stringify(db)); } catch(e) {}
+        if(callback) callback(db);
+      } else {
+        if(callback) callback(loadDB());
+      }
+    }).catch(function() { if(callback) callback(loadDB()); });
 }
 
 var DB = loadDB();
 
-// == UTILS ==
-function fmt(n) { return (parseFloat(n)||0).toLocaleString("fr-FR"); }
-function today() {
-  var d=new Date(), mm=d.getMonth()+1, dd=d.getDate();
-  return d.getFullYear()+"-"+(mm<10?"0"+mm:mm)+"-"+(dd<10?"0"+dd:dd);
-}
+// == UTILS MEMBRES ==
+// fmt() est défini dans le module Finances — partagé globalement
+function today() { return getTodayStr(); } // alias local vers getTodayStr()
 function currentYear() { return new Date().getFullYear(); }
 function currentMonth() { var m=new Date().getMonth()+1; return m<10?"0"+m:String(m); }
 function escH(s) { return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
@@ -4734,8 +5217,7 @@ function renderArrieres() {
 
 function quickPay(membreId) {
   // Switch to cotisations tab and pre-select member
-  showTab("cotisations");
-  document.getElementById("tab-btn-cotisations").className="tab active";
+  showTabM("cotisations");
   var pm=document.getElementById("pay-membre");
   if(pm) pm.value=membreId;
   showToast("Membre selectionne. Choisissez le mois a payer.","ok");
@@ -4994,13 +5476,7 @@ function showConfirm(title, msg, cb) {
   document.getElementById("modal-confirm").className="modal-back open";
 }
 
-var gToastTimer=null;
-function showToast(msg,type) {
-  var t=document.getElementById("toast");
-  t.textContent=msg; t.className="toast show"+(type?" "+type:"");
-  clearTimeout(gToastTimer);
-  gToastTimer=setTimeout(function(){t.className="toast";},3400);
-}
+// showToast() et gToastTimer définis dans le module Finances — partagés globalement
 
 // == INIT ==
 function initM() {
@@ -5122,6 +5598,8 @@ function launchApp() {
   document.getElementById("uav").textContent = gCurrentUser.nom.charAt(0).toUpperCase();
   safeStyle("login-screen","display","none");
   safeStyle("app-wrapper","display","block");
+  // Initialiser le badge de sync Firebase
+  initSyncBadge();
 
   // Show finances main area only if user has access
   var finMain = document.getElementById("fin-main");
@@ -5245,7 +5723,41 @@ function newIdS() { gSocUid++; return "sr"+gSocUid; }
 function loadSocDB() {
   try { return JSON.parse(localStorage.getItem("ecc_social_db") || "null") || {recettes:[], assistances:[], sessions:[], nextId:1}; } catch(e) { return {recettes:[],assistances:[],sessions:[],nextId:1}; }
 }
-function saveSocDB(db) { try { localStorage.setItem("ecc_social_db", JSON.stringify(db)); } catch(e) {} }
+function saveSocDB(db) {
+  // 1. Local (fallback)
+  try { localStorage.setItem("ecc_social_db", JSON.stringify(db)); } catch(e) {}
+  // 2. Firebase
+  if (IS_CONFIGURED && gDb) {
+    gDb.collection("social_db").doc("main").set({
+      assistances: db.assistances || [],
+      sessions: db.sessions || [],
+      nextId: db.nextId || 1,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: gCurrentUser ? gCurrentUser.email : ""
+    }).catch(function(e){ console.warn("Social Firebase sync error:", e.message); });
+  }
+}
+
+// Charger le Social depuis Firebase
+function loadSocDBFromFirebase(callback) {
+  if (!IS_CONFIGURED || !gDb) { if(callback) callback(loadSocDB()); return; }
+  gDb.collection("social_db").doc("main").get()
+    .then(function(doc) {
+      if (doc.exists) {
+        var data = doc.data();
+        var db = {
+          assistances: data.assistances || [],
+          sessions: data.sessions || [],
+          nextId: data.nextId || 1,
+          recettes: []
+        };
+        try { localStorage.setItem("ecc_social_db", JSON.stringify(db)); } catch(e) {}
+        if(callback) callback(db);
+      } else {
+        if(callback) callback(loadSocDB());
+      }
+    }).catch(function() { if(callback) callback(loadSocDB()); });
+}
 var SOCDB = loadSocDB();
 
 // Tabs
@@ -5312,28 +5824,94 @@ function initDefaultRecS() {
 // Mots-clés qui identifient une recette "sociale" dans le module Finances
 var SOC_FINANCE_KEYWORDS = ["offrandes sociales","social","offrande sociale","offr. soc","sociales"];
 
-function getSocFromFinances() {
-  // Lit les lignes CF et CL du module Finances et extrait les montants "sociaux"
+// Cache du cumul social depuis l'historique Finances (toutes périodes)
+var gSocFinCache = {cdf:0, usd:0, count:0, loaded:false};
+
+// Extrait les offrandes sociales d'un enregistrement historique (objet data)
+function extractSocFromRecord(data) {
   var cdf=0, usd=0;
-  var finContainers = ["cf-rows","cl-rows"];
-  for (var ci=0;ci<finContainers.length;ci++) {
-    var cont = document.getElementById(finContainers[ci]);
-    if (!cont) continue;
-    var ers = cont.querySelectorAll(".er");
-    for (var i=0;i<ers.length;i++) {
-      var inputs = ers[i].querySelectorAll("input");
-      var lbl = inputs[0] ? normStr(inputs[0].value) : "";
+  var sections = ["cf","cl"];
+  for (var si=0;si<sections.length;si++) {
+    var arr = data[sections[si]] || [];
+    for (var i=0;i<arr.length;i++) {
+      var lbl = normStr(arr[i].l||"");
       var isSoc = false;
       for (var k=0;k<SOC_FINANCE_KEYWORDS.length;k++) {
-        if (lbl.indexOf(SOC_FINANCE_KEYWORDS[k]) >= 0) { isSoc=true; break; }
+        if (lbl.indexOf(SOC_FINANCE_KEYWORDS[k])>=0){isSoc=true;break;}
       }
       if (!isSoc) continue;
-      var amts = ers[i].querySelectorAll("input.amt");
-      if (amts[0]) cdf += parseFloat(amts[0].value)||0;
-      if (amts[1]) usd += parseFloat(amts[1].value)||0;
+      cdf += parseFloat(arr[i].cdf)||0;
+      usd += parseFloat(arr[i].usd)||0;
     }
   }
   return {cdf:cdf, usd:usd};
+}
+
+// Charge et cumule toutes les offrandes sociales depuis tout l'historique
+function loadSocFromAllHistory(callback) {
+  var cdf=0, usd=0, count=0;
+
+  function processRecords(records) {
+    for (var i=0;i<records.length;i++) {
+      var extracted = extractSocFromRecord(records[i]);
+      if (extracted.cdf>0||extracted.usd>0) {
+        cdf += extracted.cdf;
+        usd += extracted.usd;
+        count++;
+      }
+    }
+    // Aussi ajouter le culte en cours (formulaire actif) si non encore sauvegardé
+    var curDate = document.getElementById("meta-date") ? document.getElementById("meta-date").value : "";
+    var alreadySaved = false;
+    for (var j=0;j<records.length;j++) {
+      if (records[j].meta && records[j].meta.date === curDate) { alreadySaved=true; break; }
+    }
+    if (!alreadySaved) {
+      // Lire le formulaire en cours
+      var finContainers = ["cf-rows","cl-rows"];
+      var keys = ["cf","cl"];
+      for (var ci=0;ci<finContainers.length;ci++) {
+        var cont = document.getElementById(finContainers[ci]);
+        if (!cont) continue;
+        var ers = cont.querySelectorAll(".er");
+        for (var ei=0;ei<ers.length;ei++) {
+          var inputs = ers[ei].querySelectorAll("input");
+          var lbl2 = inputs[0] ? normStr(inputs[0].value) : "";
+          var isSoc2 = false;
+          for (var k2=0;k2<SOC_FINANCE_KEYWORDS.length;k2++) {
+            if (lbl2.indexOf(SOC_FINANCE_KEYWORDS[k2])>=0){isSoc2=true;break;}
+          }
+          if (!isSoc2) continue;
+          var amts2 = ers[ei].querySelectorAll("input.amt");
+          if (amts2[0]) cdf += parseFloat(amts2[0].value)||0;
+          if (amts2[1]) usd += parseFloat(amts2[1].value)||0;
+          if (!alreadySaved) count++;
+          alreadySaved = true; // ne compter qu'une fois
+        }
+      }
+    }
+    gSocFinCache = {cdf:cdf, usd:usd, count:count, loaded:true};
+    if (callback) callback(gSocFinCache);
+  }
+
+  if (IS_CONFIGURED && gDb) {
+    gDb.collection("historique").get()
+      .then(function(snap) {
+        var records = [];
+        snap.forEach(function(d){ records.push(d.data()); });
+        processRecords(records);
+      })
+      .catch(function() {
+        processRecords(getHistLocal());
+      });
+  } else {
+    processRecords(getHistLocal());
+  }
+}
+
+function getSocFromFinances() {
+  // Retourne le cache (chargé de manière asynchrone au démarrage et à chaque recalcul Social)
+  return {cdf: gSocFinCache.cdf, usd: gSocFinCache.usd};
 }
 
 function sumRecS() {
@@ -5373,9 +5951,14 @@ function dirtyS() {
 }
 
 function recalcS() {
+  // Recharger le cumul depuis tout l'historique puis recalculer
+  loadSocFromAllHistory(function() { _doRecalcS(); });
+}
+
+function _doRecalcS() {
   var t=getTaux();
   var fromFin = getSocFromFinances();
-  var rec=sumRecS(); // inclut déjà fromFin
+  var rec=sumRecS(); // inclut déjà fromFin via cache
   var repCDF=parseFloat((document.getElementById("soc-solde-rep")||{}).value)||0;
   var repUSD=parseFloat((document.getElementById("soc-solde-rep-usd")||{}).value)||0;
   var dispCDF = rec.cdf+repCDF;
@@ -5402,10 +5985,11 @@ function recalcS() {
   if(noteEl) {
     if(fromFin.cdf>0||fromFin.usd>0) {
       noteEl.style.display="block";
-      noteEl.innerHTML="🔗 <strong>Consolidé depuis Finances :</strong> "+
+      noteEl.innerHTML="🔗 <strong>Consolidé depuis Finances (toutes périodes) :</strong> "+
         (fromFin.cdf>0?fmt(fromFin.cdf)+" CDF":"")+
         (fromFin.cdf>0&&fromFin.usd>0?" + ":"")+
-        (fromFin.usd>0?fmt(fromFin.usd)+" USD":"")+" (Offrandes Sociales CF+CL)";
+        (fromFin.usd>0?fmt(fromFin.usd)+" USD":"")+
+        " — "+gSocFinCache.count+" culte(s)";
     } else {
       noteEl.style.display="none";
     }
@@ -5577,6 +6161,10 @@ function clearHistS() {
 }
 
 function renderDashboardSoc() {
+  loadSocFromAllHistory(function() { _doRenderDashboardSoc(); });
+}
+
+function _doRenderDashboardSoc() {
   var t=getTaux();
   var fromFin = getSocFromFinances();
   var rec=sumRecS(); // inclut déjà fromFin
@@ -5601,14 +6189,14 @@ function renderDashboardSoc() {
     else if(a.statut==="attente") totalAtt++;
   }
 
-  // Note de consolidation
+  // Note de consolidation — toutes périodes
   var finNote="";
   if(fromFin.cdf>0||fromFin.usd>0){
-    finNote=" <span style='font-size:.65rem;font-weight:400;color:#6b88a4'>(dont "+
+    finNote=" <span style='font-size:.65rem;font-weight:400;color:#6b88a4'>("+gSocFinCache.count+" culte(s) cumulé(s) — "+
       (fromFin.cdf>0?fmt(fromFin.cdf)+" CDF":"")+
       (fromFin.cdf>0&&fromFin.usd>0?" + ":"")+
       (fromFin.usd>0?fmt(fromFin.usd)+" USD":"")+
-      " depuis Finances)</span>";
+      " toutes périodes)</span>";
   }
 
   var kpis=[
@@ -7042,49 +7630,109 @@ function editerProjet(id) {
   showTabProj("nouveau");
 }
 
-function ajouterRecetteProjet(id) {
-  var montantFC = prompt("Montant en FC (0 si aucun):");
-  if(montantFC===null) return;
-  var montantUSD = prompt("Montant en USD (0 si aucun):");
-  if(montantUSD===null) return;
-  var libelle = prompt("Libellé / Source:");
-  if(libelle===null) return;
-  loadPROJDB();
-  var idx=PROJDB.projets.findIndex(function(p){ return p.id===id; });
-  if(idx<0) return;
-  if(!PROJDB.projets[idx].recettes) PROJDB.projets[idx].recettes=[];
-  PROJDB.projets[idx].recettes.push({
-    id:"r"+Date.now(), libelle:libelle||"Recette",
-    cdf:parseFloat(montantFC)||0, usd:parseFloat(montantUSD)||0,
-    date:getTodayStr(), par:gCurrentUser?gCurrentUser.nom:""
-  });
-  savePROJDB();
-  if(IS_CONFIGURED&&gDb){ gDb.collection("projets").doc(id).update({recettes:PROJDB.projets[idx].recettes}).catch(function(e){}); }
-  showToast("Recette ajoutée !","ok");
-  renderProjListe();
+function openProjTxModal(id, type) {
+  var titleEl = document.getElementById("proj-tx-title");
+  var depFields = document.getElementById("proj-tx-dep-fields");
+  var catEl = document.getElementById("proj-tx-categorie");
+  document.getElementById("proj-tx-proj-id").value = id;
+  document.getElementById("proj-tx-type").value = type;
+  document.getElementById("proj-tx-cdf").value = "";
+  document.getElementById("proj-tx-usd").value = "";
+  document.getElementById("proj-tx-libelle").value = "";
+  document.getElementById("proj-tx-fournisseur").value = "";
+  document.getElementById("proj-tx-note").value = "";
+  document.getElementById("proj-tx-date").value = getTodayStr();
+  document.getElementById("proj-tx-err").style.display = "none";
+  if (type === "depense") {
+    if (titleEl) titleEl.textContent = "📤 Ajouter une dépense";
+    if (depFields) depFields.style.display = "block";
+    document.getElementById("proj-tx-travaux").value = "";
+    document.getElementById("proj-tx-resp-travaux").value = "";
+    document.getElementById("proj-tx-avancement").value = "";
+    document.getElementById("proj-tx-facture").value = "";
+    // Catégories dépenses par défaut
+    if (catEl) { catEl.value = "materiaux"; }
+  } else {
+    if (titleEl) titleEl.textContent = "💰 Ajouter une recette / collecte";
+    if (depFields) depFields.style.display = "none";
+    if (catEl) { catEl.value = "don"; }
+  }
+  document.getElementById("proj-tx-modal").style.display = "block";
 }
 
-function ajouterDepenseProjet(id) {
-  var montantFC = prompt("Montant en FC (0 si aucun):");
-  if(montantFC===null) return;
-  var montantUSD = prompt("Montant en USD (0 si aucun):");
-  if(montantUSD===null) return;
-  var libelle = prompt("Libellé / Fournisseur:");
-  if(libelle===null) return;
-  loadPROJDB();
-  var idx=PROJDB.projets.findIndex(function(p){ return p.id===id; });
-  if(idx<0) return;
-  if(!PROJDB.projets[idx].depenses) PROJDB.projets[idx].depenses=[];
-  PROJDB.projets[idx].depenses.push({
-    id:"d"+Date.now(), libelle:libelle||"Dépense",
-    cdf:arrondi(parseFloat(montantFC)||0), usd:parseFloat(montantUSD)||0,
-    date:getTodayStr(), par:gCurrentUser?gCurrentUser.nom:""
-  });
-  savePROJDB();
-  if(IS_CONFIGURED&&gDb){ gDb.collection("projets").doc(id).update({depenses:PROJDB.projets[idx].depenses}).catch(function(e){}); }
-  showToast("Dépense ajoutée !","ok");
-  renderProjListe();
+function closeProjTxModal() {
+  document.getElementById("proj-tx-modal").style.display = "none";
 }
+
+function saveProjTransaction() {
+  var id    = document.getElementById("proj-tx-proj-id").value;
+  var type  = document.getElementById("proj-tx-type").value;
+  var cdf   = parseFloat(document.getElementById("proj-tx-cdf").value)||0;
+  var usd   = parseFloat(document.getElementById("proj-tx-usd").value)||0;
+  var lib   = (document.getElementById("proj-tx-libelle").value||"").trim();
+  var cat   = document.getElementById("proj-tx-categorie").value||"autre";
+  var date  = document.getElementById("proj-tx-date").value||getTodayStr();
+  var four  = (document.getElementById("proj-tx-fournisseur").value||"").trim();
+  var note  = (document.getElementById("proj-tx-note").value||"").trim();
+  var errEl = document.getElementById("proj-tx-err");
+
+  if (!lib) {
+    errEl.textContent = "Le libellé est obligatoire."; errEl.style.display = "block"; return;
+  }
+  if (cdf <= 0 && usd <= 0) {
+    errEl.textContent = "Saisissez un montant (FC ou USD)."; errEl.style.display = "block"; return;
+  }
+  errEl.style.display = "none";
+
+  var obj = {
+    id: (type==="depense"?"d":"r")+Date.now(),
+    libelle: lib,
+    categorie: cat,
+    cdf: type==="depense" ? arrondi(cdf) : cdf,
+    usd: usd,
+    date: date,
+    fournisseur: four,
+    note: note,
+    par: gCurrentUser ? gCurrentUser.nom : ""
+  };
+
+  if (type === "depense") {
+    obj.travaux    = (document.getElementById("proj-tx-travaux").value||"").trim();
+    obj.respTravaux= (document.getElementById("proj-tx-resp-travaux").value||"").trim();
+    obj.avancement = parseInt(document.getElementById("proj-tx-avancement").value)||0;
+    obj.facture    = (document.getElementById("proj-tx-facture").value||"").trim();
+  }
+
+  loadPROJDB();
+  var idx = PROJDB.projets.findIndex(function(p){ return p.id===id; });
+  if (idx < 0) { showToast("Projet introuvable.","err"); return; }
+  var field = type==="depense" ? "depenses" : "recettes";
+  if (!PROJDB.projets[idx][field]) PROJDB.projets[idx][field] = [];
+  PROJDB.projets[idx][field].push(obj);
+
+  // Mise à jour avancement global du projet si dépense avec %
+  if (type === "depense" && obj.avancement > 0) {
+    PROJDB.projets[idx].avancementGlobal = obj.avancement;
+  }
+
+  savePROJDB();
+  if (IS_CONFIGURED && gDb) {
+    var upd = {}; upd[field] = PROJDB.projets[idx][field];
+    if (type==="depense" && obj.avancement>0) upd.avancementGlobal = obj.avancement;
+    gDb.collection("projets").doc(id).update(upd).catch(function(e){});
+  }
+
+  closeProjTxModal();
+  showToast((type==="depense"?"Dépense":"Recette")+" ajoutée !","ok");
+  renderProjListe();
+  // Rouvrir le détail si le modal détail était ouvert
+  if (document.getElementById("proj-detail-modal").style.display !== "none") {
+    voirProjet(id);
+  }
+}
+
+function ajouterRecetteProjet(id) { openProjTxModal(id, "recette"); }
+function ajouterDepenseProjet(id) { openProjTxModal(id, "depense"); }
 
 function voirProjet(id) {
   loadPROJDB();
@@ -7122,26 +7770,61 @@ function voirProjet(id) {
     html+="<div style='font-size:.69rem;color:#6b88a4;margin-top:3px'>"+prog+"% du budget collecté</div></div>";
   }
   html+="</div>";
+  var CAT_LABELS = {materiaux:"🧱 Matériaux",main_oeuvre:"👷 Main d'œuvre",transport:"🚚 Transport",equipement:"🔌 Équipement",don:"🎁 Don",collecte:"💰 Collecte",subvention:"📋 Subvention",autre:"📌 Autre"};
+
   // Recettes list
   if(p.recettes&&p.recettes.length){
-    html+="<div style='font-weight:700;font-size:.78rem;color:#1a3a5c;margin-bottom:6px;text-transform:uppercase'>Recettes ("+p.recettes.length+")</div>";
+    html+="<div style='font-weight:700;font-size:.78rem;color:#1a3a5c;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em'>💰 Recettes / Collectes ("+p.recettes.length+")</div>";
     p.recettes.forEach(function(r){
-      html+="<div style='display:flex;justify-content:space-between;padding:5px 8px;background:#f0faf4;border-radius:5px;margin-bottom:4px;font-size:.75rem'>";
-      html+="<span>"+escH(r.libelle)+" <span style='color:#6b88a4'>"+r.date+"</span></span>";
-      html+="<span style='color:#1e7d52;font-weight:700'>"+(r.cdf?fmt(r.cdf)+" FC":"")+( r.cdf&&r.usd?" / ":"")+(r.usd?r.usd+" $":"")+"</span></div>";
+      html+="<div style='background:#f0faf4;border-radius:7px;padding:8px 10px;margin-bottom:6px;border-left:3px solid #1e7d52'>";
+      html+="<div style='display:flex;justify-content:space-between;align-items:center'>";
+      html+="<span style='font-size:.78rem;font-weight:700;color:#1a3a5c'>"+escH(r.libelle)+"</span>";
+      html+="<span style='font-family:DM Mono,monospace;font-size:.78rem;color:#1e7d52;font-weight:700'>"+(r.cdf?fmt(r.cdf)+" FC":"")+( r.cdf&&r.usd?" / ":"")+(r.usd?r.usd+" $":"")+"</span></div>";
+      html+="<div style='font-size:.7rem;color:#6b88a4;margin-top:3px'>";
+      if(r.categorie) html+="<span style='background:#eef4fb;padding:1px 6px;border-radius:8px;margin-right:5px'>"+( CAT_LABELS[r.categorie]||r.categorie)+"</span>";
+      html+=r.date;
+      if(r.fournisseur) html+=" • <strong>"+escH(r.fournisseur)+"</strong>";
+      if(r.par) html+=" • par "+escH(r.par);
+      html+="</div>";
+      if(r.note) html+="<div style='font-size:.71rem;color:#4a5568;margin-top:4px;font-style:italic'>"+escH(r.note)+"</div>";
+      html+="</div>";
     });
   }
+
   // Depenses list
   if(p.depenses&&p.depenses.length){
-    html+="<div style='font-weight:700;font-size:.78rem;color:#1a3a5c;margin:10px 0 6px;text-transform:uppercase'>Dépenses ("+p.depenses.length+")</div>";
+    html+="<div style='font-weight:700;font-size:.78rem;color:#1a3a5c;margin:12px 0 6px;text-transform:uppercase;letter-spacing:.04em'>📤 Dépenses ("+p.depenses.length+")</div>";
     p.depenses.forEach(function(d){
-      html+="<div style='display:flex;justify-content:space-between;padding:5px 8px;background:#fdf0ee;border-radius:5px;margin-bottom:4px;font-size:.75rem'>";
-      html+="<span>"+escH(d.libelle)+" <span style='color:#6b88a4'>"+d.date+"</span></span>";
-      html+="<span style='color:#c0392b;font-weight:700'>"+(d.cdf?fmt(d.cdf)+" FC":"")+( d.cdf&&d.usd?" / ":"")+(d.usd?d.usd+" $":"")+"</span></div>";
+      html+="<div style='background:#fdf0ee;border-radius:7px;padding:8px 10px;margin-bottom:6px;border-left:3px solid #c0392b'>";
+      html+="<div style='display:flex;justify-content:space-between;align-items:center'>";
+      html+="<span style='font-size:.78rem;font-weight:700;color:#1a3a5c'>"+escH(d.libelle)+"</span>";
+      html+="<span style='font-family:DM Mono,monospace;font-size:.78rem;color:#c0392b;font-weight:700'>"+(d.cdf?fmt(d.cdf)+" FC":"")+( d.cdf&&d.usd?" / ":"")+(d.usd?d.usd+" $":"")+"</span></div>";
+      html+="<div style='font-size:.7rem;color:#6b88a4;margin-top:3px'>";
+      if(d.categorie) html+="<span style='background:#fdf0ee;border:1px solid #e8b4ad;padding:1px 6px;border-radius:8px;margin-right:5px'>"+( CAT_LABELS[d.categorie]||d.categorie)+"</span>";
+      html+=d.date;
+      if(d.fournisseur) html+=" • <strong>"+escH(d.fournisseur)+"</strong>";
+      if(d.facture) html+=" • Reçu: <em>"+escH(d.facture)+"</em>";
+      if(d.par) html+=" • par "+escH(d.par);
+      html+="</div>";
+      if(d.travaux) html+="<div style='font-size:.73rem;color:#4a5568;margin-top:5px;padding:5px 7px;background:rgba(255,255,255,.6);border-radius:5px;line-height:1.4'><strong>Travaux :</strong> "+escH(d.travaux)+"</div>";
+      if(d.respTravaux||d.avancement>0){
+        html+="<div style='font-size:.7rem;color:#6b88a4;margin-top:4px'>";
+        if(d.respTravaux) html+="👷 "+escH(d.respTravaux)+" ";
+        if(d.avancement>0) html+="<span style='background:#fff8e1;color:#b45309;padding:1px 6px;border-radius:8px;font-weight:700'>⚙️ Avancement: "+d.avancement+"%</span>";
+        html+="</div>";
+      }
+      if(d.note) html+="<div style='font-size:.71rem;color:#4a5568;margin-top:4px;font-style:italic'>"+escH(d.note)+"</div>";
+      html+="</div>";
     });
   }
-  html+="<div style='display:flex;gap:8px;margin-top:14px;flex-wrap:wrap'>";
+
+  // Boutons action en bas du détail
+  html+="<div style='display:flex;gap:8px;margin-top:16px;flex-wrap:wrap'>";
   html+="<button class='btn btn-o' onclick='fermerDetailProjet()'>Fermer</button>";
+  if(gCurrentUser&&gCurrentUser.role==="admin"){
+    html+="<button class='btn btn-sm btn-o' onclick=\"ajouterRecetteProjet('"+p.id+"')\">💰 Recette</button>";
+    html+="<button class='btn btn-sm btn-o' onclick=\"ajouterDepenseProjet('"+p.id+"')\">📤 Dépense</button>";
+  }
   html+="<button class='btn btn-g' onclick=\"printProjet('"+p.id+"')\">🖨️ Rapport PDF</button>";
   html+="</div></div>";
   var cont=document.getElementById("proj-detail-cont"); if(cont) cont.innerHTML=html;
