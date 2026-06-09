@@ -4359,7 +4359,8 @@ function renderAdmin(){
   html+="Exportez l'intégralité des données de l'application pour archivage ou sauvegarde.";
   html+="</div>";
   html+="<div style='display:flex;gap:7px;flex-wrap:wrap;margin-top:9px'>";
-  html+="<button class='btn btn-g' onclick='exportGlobalXLS()'>📊 Export Excel complet (tous modules)</button>";
+  html+="<button class='btn btn-g' onclick='exportGlobalXLS()'>📊 Export Excel .xlsx (PC)</button>";
+  html+="<button class='btn btn-o' onclick='exportGlobalCSV()'>📄 Export CSV (Android/universel)</button>";
   html+="<button class='btn btn-o' onclick='exportGlobalJSON()'>💾 Sauvegarde JSON (restaurable)</button>";
   html+="</div>";
   html+="<div id='access-history-box' style='margin-top:10px'></div>";
@@ -12300,18 +12301,117 @@ function exportGlobalXLS() {
   });
   addSheet('Budget',['Mois','Poste','Prévu FC','Réalisé FC','Écart FC','Taux %'],bgtRows);
 
-  // Générer le vrai .xlsx
-  var wbout = XLSX.write(wb, {bookType:'xlsx', type:'binary'});
-  var buf = new ArrayBuffer(wbout.length);
-  var view = new Uint8Array(buf);
-  for(var i=0;i<wbout.length;i++) view[i] = wbout.charCodeAt(i) & 0xFF;
-  var blob = new Blob([buf], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  // Générer le vrai .xlsx (compatible Android + PC)
+  try {
+    var wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+    var blob = new Blob([wbout], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ECC_Kingasani2_Export_'+getTodayStr().replace(/-/g,'')+'.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 1000);
+    showToast('Export Excel (.xlsx) — '+wb.SheetNames.length+' onglets téléchargé !','ok');
+  } catch(e) {
+    console.warn('exportGlobalXLS erreur:', e.message);
+    showToast('Erreur export Excel : '+e.message+'. Essayez l\'export CSV.','err');
+  }
+}
+
+
+function exportGlobalCSV() {
+  if(!gCurrentUser||gCurrentUser.role!=='admin'){showToast('Acces refuse.','err');return;}
+  var t = getTaux();
+  var lines = [];
+  var sep = ';';
+
+  function csvRow(arr){ return arr.map(function(v){ var s=String(v===null||v===undefined?'':v); return s.indexOf(sep)>=0||s.indexOf('"')>=0?'"'+s.replace(/"/g,'""')+'"':s; }).join(sep); }
+  function section(title, headers, rows){
+    lines.push(''); lines.push('=== '+title+' ===');
+    lines.push(csvRow(headers));
+    rows.forEach(function(r){ lines.push(csvRow(r)); });
+  }
+
+  // FINANCES
+  section('FINANCES HISTORIQUE',
+    ['Date','Responsable','Eff.CF','Eff.CL','Recettes FC','Depenses FC','Solde FC','Taux'],
+    (gHistCache||[]).map(function(h){ var m=h.meta||{},cf=h.sums?h.sums.rCDF:0,dep=h.sums?h.sums.dCDF:0; return [m.date||'',m.resp||'',m.effCF||0,m.effCL||0,cf,dep,cf-dep,m.taux||t]; }));
+
+  // MEMBRES
+  section('MEMBRES',
+    ['N°','Nom','Prénom','Sexe','Naissance','Téléphone','Adresse','Statut','Adhésion'],
+    (DB||[]).map(function(mb){ return [mb.numero||'',mb.nom||'',mb.prenom||'',mb.sexe||'',mb.dateNaissance||'',mb.telephone||'',mb.adresse||'',mb.statut||'',mb.dateAdhesion||'']; }));
+
+  // SOCIAL
+  section('SOCIAL ASSISTANCES',
+    ['Date','Bénéficiaire','Type','Montant FC','Statut','Validé par'],
+    ((SOCDB&&SOCDB.assistances)||[]).map(function(a){ return [a.dateEnr||a.date||'',a.nom||'',SOC_TYPE_LABELS[a.type]||a.type||'',a.cdf||0,a.statut||'',a.valideBy||'']; }));
+
+  // SÉMINAIRE
+  section('SÉMINAIRE',
+    ['Date','Titre','Participants','Recettes FC','Depenses FC','Solde FC'],
+    ((SEMDB&&SEMDB.sessions)||[]).map(function(s){
+      var rCDF=0,dCDF=0;
+      (s.recettes||[]).forEach(function(r){rCDF+=(parseFloat(r.cdf)||0)+(parseFloat(r.usd)||0)*t;});
+      (s.depenses||[]).forEach(function(d){dCDF+=(parseFloat(d.cdf)||0)+(parseFloat(d.usd)||0)*t;});
+      return [s.date||'',s.titre||'',s.participants||0,Math.round(rCDF),Math.round(dCDF),Math.round(rCDF-dCDF)];
+    }));
+
+  // ECODIM
+  section('ECODIM',
+    ['Date','Filles','Garcons','Moniteurs','Total','Recettes FC','Depenses FC'],
+    ((ECODB&&ECODB.sessions)||[]).map(function(e){
+      var erCDF=0,edCDF=0;
+      (e.recettes||[]).forEach(function(r){erCDF+=(parseFloat(r.cdf)||0)+(parseFloat(r.usd)||0)*t;});
+      (e.depenses||[]).forEach(function(d){edCDF+=(parseFloat(d.cdf)||0)+(parseFloat(d.usd)||0)*t;});
+      return [e.date||'',e.filles||0,e.garcons||0,e.moniteurs||0,(e.filles||0)+(e.garcons||0),Math.round(erCDF),Math.round(edCDF)];
+    }));
+
+  // EFFECTIF
+  section('EFFECTIF',
+    ['Date','CF','CL','Total','Observation'],
+    ((EFFDB&&EFFDB.seances)||[]).map(function(s){ return [s.date||'',s.cf||0,s.cl||0,s.total||0,s.obs||'']; }));
+
+  // VISITEURS
+  section('VISITEURS',
+    ['Date','Nom','Téléphone','Adresse','Culte','Catégorie'],
+    ((EFFDB&&EFFDB.visiteurs)||[]).map(function(v){ return [v.date||'',v.nom||'',v.tel||'',v.adresse||'',v.culte||'',VIS_CATS[v.cat]||v.cat||'']; }));
+
+  // PROJETS + SUBLIGNES
+  section('PROJETS',
+    ['Titre','Budget FC','Dépensé FC','Disponible FC'],
+    ((PROJDB&&PROJDB.projets)||[]).map(function(p){ var b=(p.budgetFC||0)+(p.budgetUSD||0)*t,d=getProjDepenseEq(p); return [p.titre||p.nom||'',Math.round(b),Math.round(d),Math.round(b-d)]; }));
+  var slRows=[];
+  ((PROJDB&&PROJDB.projets)||[]).forEach(function(p){ (p.sublignes||[]).forEach(function(l){ slRows.push([p.titre||p.nom||'',l.type||'',l.date||'',l.lib||'',l.cdf||0,l.injecte?'Oui':'Non']); }); });
+  section('ACHATS-TRAVAUX-MO',['Projet','Type','Date','Désignation','Montant FC','Injecté'],slRows);
+
+  // EB
+  section('EXPRESSIONS DE BESOINS',
+    ['N°','Date','Objet','Structure','Montant est.FC','Statut','Montant réel FC'],
+    ((EBDB&&EBDB.demandes)||[]).map(function(eb){ return [eb.num||'',eb.dateSoumis||'',eb.objet||'',eb.structure||'',eb.montantFC||0,eb.statut||'',eb.montantReel||0]; }));
+
+  // LOYER
+  section('LOYER',
+    ['Date','Contributeur','Mois','Année','Montant FC'],
+    ((LOYDB&&LOYDB.versements)||[]).map(function(lv){ return [lv.date||'',lv.contribNom||'',lv.mois||'',lv.annee||'',lv.cdf||0]; }));
+
+  // BUDGET
+  var bgtRows=[];
+  Object.keys(BUDGETDB).sort().forEach(function(ym){
+    var postes=BUDGETDB[ym]||{};
+    BUDGET_POSTES.forEach(function(bp){ bgtRows.push([ym,bp.label,parseFloat(postes[bp.key])||0,getRealiseMois(ym,bp.key)]); });
+  });
+  section('BUDGET',['Mois','Poste','Prévu FC','Réalisé FC'],bgtRows);
+
+  var content = '\uFEFF' + lines.join('\n');
+  var blob = new Blob([content], {type:'text/csv;charset=utf-8;'});
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'ECC_Kingasani2_Export_'+getTodayStr().replace(/-/g,'')+'.xlsx';
+  a.download = 'ECC_Kingasani2_Export_'+getTodayStr().replace(/-/g,'')+'.csv';
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(a.href);
-  showToast('Export Excel (.xlsx) — '+wb.SheetNames.length+' onglets téléchargé !','ok');
+  setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 1000);
+  showToast('Export CSV téléchargé — ouvrable sur Android et PC !','ok');
 }
 
 </script>
