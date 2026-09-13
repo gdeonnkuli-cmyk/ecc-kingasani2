@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Diagnostic Historique — ECC Kingasani 2</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<style>
+  body{font-family:monospace;background:#0d1b2a;color:#e2e8f0;padding:16px;font-size:13px;line-height:1.5}
+  h1{color:#e8c97e;font-size:18px}
+  .box{background:#101d2b;border:1px solid #2a3f52;border-radius:8px;padding:12px;margin-bottom:12px}
+  .ok{color:#34b876}
+  .err{color:#e8615a}
+  .warn{color:#f2994a}
+  input{background:#0d1a26;color:#e2e8f0;border:1px solid #2a3f52;padding:8px;border-radius:5px;width:100%;box-sizing:border-box;margin-bottom:6px}
+  button{background:#1f6fad;color:#fff;border:none;padding:10px 16px;border-radius:6px;cursor:pointer;font-weight:700;margin-top:6px}
+  pre{white-space:pre-wrap;word-break:break-all;font-size:11px;background:#0a1622;padding:8px;border-radius:5px;max-height:400px;overflow-y:auto}
+  table{width:100%;border-collapse:collapse;margin-top:8px;font-size:11px}
+  th,td{border:1px solid #2a3f52;padding:4px 6px;text-align:left}
+  th{background:#16283a}
+</style>
+</head>
+<body>
+<h1>🔍 Diagnostic — Collection "historique"</h1>
+
+<div class="box">
+  <div>Email :</div>
+  <input type="email" id="email" placeholder="ton email admin">
+  <div>Mot de passe :</div>
+  <input type="password" id="pwd" placeholder="mot de passe">
+  <button onclick="connecter()">Se connecter et diagnostiquer</button>
+</div>
+
+<div id="resultat"></div>
+
+<script>
+var firebaseConfig = {
+  apiKey:            "AIzaSyD9biWeNAiiDF99MXMIG_ZsmMAKgubnox4",
+  authDomain:        "ecc-kingasani2-finances.firebaseapp.com",
+  projectId:         "ecc-kingasani2-finances",
+  storageBucket:     "ecc-kingasani2-finances.firebasestorage.app",
+  messagingSenderId: "523140449373",
+  appId:             "1:523140449373:web:1f9d791d06ef802edfb9b4"
+};
+firebase.initializeApp(firebaseConfig);
+var auth = firebase.auth();
+var db = firebase.firestore();
+
+function log(html){
+  document.getElementById("resultat").innerHTML += html;
+}
+
+function connecter(){
+  document.getElementById("resultat").innerHTML = "";
+  var email = document.getElementById("email").value;
+  var pwd = document.getElementById("pwd").value;
+  log("<div class='box'>⏳ Connexion en cours...</div>");
+
+  auth.signInWithEmailAndPassword(email, pwd).then(function(){
+    log("<div class='box ok'>✅ Connecté avec succès.</div>");
+    diagnostiquer();
+  }).catch(function(e){
+    log("<div class='box err'>❌ Erreur de connexion : "+e.message+"</div>");
+  });
+}
+
+function diagnostiquer(){
+  log("<div class='box'>⏳ Lecture de TOUTE la collection 'historique' (sans limite, sans tri)...</div>");
+
+  db.collection("historique").get().then(function(snap){
+    var total = snap.size;
+    log("<div class='box'><strong>Total de documents dans 'historique' : "+total+"</strong></div>");
+
+    if(total === 0){
+      log("<div class='box err'>⚠️ La collection est VRAIMENT vide, ou les règles Firestore bloquent la lecture pour ce compte.</div>");
+      return;
+    }
+
+    var sansSavedAt = 0, sansMetaDate = 0, avecTout = 0;
+    var rows = "";
+    var docs = [];
+    snap.forEach(function(doc){
+      var d = doc.data();
+      docs.push({id: doc.id, data: d});
+      var hasSavedAt = d.savedAt !== undefined && d.savedAt !== null;
+      var hasMetaDate = d.meta && d.meta.date;
+      if(!hasSavedAt) sansSavedAt++;
+      if(!hasMetaDate) sansMetaDate++;
+      if(hasSavedAt && hasMetaDate) avecTout++;
+
+      var savedAtType = hasSavedAt ? (d.savedAt.toDate ? "Timestamp Firestore" : typeof d.savedAt) : "ABSENT";
+      var savedAtVal = hasSavedAt ? (d.savedAt.toDate ? d.savedAt.toDate().toISOString() : String(d.savedAt)) : "—";
+
+      rows += "<tr>"
+        + "<td>"+doc.id+"</td>"
+        + "<td>"+(hasMetaDate ? d.meta.date : "<span class='err'>ABSENT</span>")+"</td>"
+        + "<td>"+(hasSavedAt ? "<span class='ok'>"+savedAtType+"</span>" : "<span class='err'>ABSENT</span>")+"</td>"
+        + "<td>"+savedAtVal+"</td>"
+        + "</tr>";
+    });
+
+    log("<div class='box'>"
+      + "<div>Documents avec meta.date ET savedAt (visibles dans l'app) : <span class='ok'>"+avecTout+"</span></div>"
+      + "<div>Documents SANS champ savedAt (invisibles à cause du tri orderBy) : <span class='"+(sansSavedAt>0?"err":"ok")+"'>"+sansSavedAt+"</span></div>"
+      + "<div>Documents SANS meta.date : <span class='"+(sansMetaDate>0?"warn":"ok")+"'>"+sansMetaDate+"</span></div>"
+      + "</div>");
+
+    if(sansSavedAt > 0){
+      log("<div class='box err'><strong>⚠️ DIAGNOSTIC : "+sansSavedAt+" culte(s) n'ont PAS de champ 'savedAt'.</strong><br>"
+        + "C'est très probablement la cause : la requête de l'application utilise <code>orderBy(\"savedAt\")</code>, "
+        + "qui EXCLUT automatiquement et silencieusement tout document sans ce champ, même s'il existe bien dans Firestore.</div>");
+    }
+
+    log("<div class='box'><strong>Détail de tous les documents :</strong><br><table><tr><th>ID document</th><th>meta.date</th><th>savedAt (type)</th><th>savedAt (valeur)</th></tr>"+rows+"</table></div>");
+
+    // Tester maintenant EXACTEMENT la requête que l'app utilise
+    log("<div class='box'>⏳ Test de la requête réelle de l'app (orderBy savedAt, limit 500)...</div>");
+    db.collection("historique").orderBy("savedAt","desc").limit(500).get().then(function(snap2){
+      log("<div class='box "+(snap2.size===total?"ok":"err")+"'>"
+        + "<strong>Résultat de la requête app : "+snap2.size+" document(s) sur "+total+" au total.</strong><br>"
+        + (snap2.size < total ? "⚠️ "+(total-snap2.size)+" document(s) sont EXCLUS par cette requête (probablement car ils n'ont pas de champ savedAt valide)." : "✅ Tous les documents sont retournés.")
+        + "</div>");
+    }).catch(function(e){
+      log("<div class='box err'>❌ ERREUR sur la requête orderBy(savedAt) : "+e.message+"<br>"
+        + "Ceci confirmerait un problème d'index Firestore manquant, ou de permissions.</div>");
+    });
+
+  }).catch(function(e){
+    log("<div class='box err'>❌ Erreur de lecture : "+e.message+"<br>Code : "+e.code+"</div>");
+  });
+}
+</script>
+</body>
+</html>
