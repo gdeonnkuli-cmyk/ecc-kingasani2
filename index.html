@@ -4162,6 +4162,19 @@ function initFirebase() {
       firebase.initializeApp(FIREBASE_CONFIG);
     }
     gDb   = firebase.firestore();
+    // Firestore dialogue par WebChannel, un flux HTTPS maintenu ouvert. Certains
+    // VPN et proxys le coupent : le SDK s'initialise, l'utilisateur est bien
+    // authentifié, mais chaque lecture ou écriture échoue. Le repli en
+    // long-polling passe par des requêtes HTTPS classiques, que ces réseaux
+    // laissent passer. Désactivé par défaut (il est plus lent) — l'utilisateur
+    // l'active depuis la barre d'erreur de synchronisation.
+    try {
+      var _fl = false;
+      try { _fl = localStorage.getItem("ecc_force_longpolling") === "1"; } catch(e){}
+      if (_fl) gDb.settings({ experimentalForceLongPolling: true, merge: true });
+    } catch(e) {
+      console.warn("Transport long-polling refusé par ce SDK :", e && e.message);
+    }
     gAuth = firebase.auth();
     try { gStorage = firebase.storage(); } catch(e){ gStorage = null; }
     return true;
@@ -4584,7 +4597,7 @@ function showSyncError(e, contexte) {
 
   var explications = {
     "permission-denied":   "Les règles de sécurité Firestore refusent l'écriture. Cause la plus fréquente : des règles en mode test, qui expirent au bout de 30 jours.",
-    "unavailable":         "Le service est injoignable depuis cet appareil. Un VPN, un pare-feu d'entreprise ou une connexion instable bloquent souvent Firestore.",
+    "unavailable":         "Le service est injoignable depuis cet appareil. Un VPN, un pare-feu d'entreprise ou une connexion instable coupent le flux permanent qu'utilise Firestore. Essayez « Mode réseau restreint » ci-dessous, ou coupez le VPN.",
     "resource-exhausted":  "Quota Firebase atteint (plan gratuit : 20 000 écritures par jour).",
     "failed-precondition": "Requête impossible en l'état — souvent un index Firestore manquant.",
     "unauthenticated":     "Session expirée. Se déconnecter puis se reconnecter."
@@ -4602,10 +4615,28 @@ function showSyncError(e, contexte) {
     '</div>' +
     '<div class="seb-act">' +
       '<button onclick="fullSync()">Réessayer</button>' +
+      '<button onclick="toggleLongPolling()">' +
+        (function(){ var o=false; try{o=localStorage.getItem("ecc_force_longpolling")==="1";}catch(e){}
+                     return o ? "Réseau restreint : activé" : "Mode réseau restreint"; })() +
+      '</button>' +
       '<button onclick="copySyncError()">Copier</button>' +
       '<button onclick="document.getElementById(\'sync-error-bar\').style.display=\'none\'">Fermer</button>' +
     '</div>';
   bar.style.display = "flex";
+}
+
+// Bascule le transport de secours puis recharge : c'est au démarrage que
+// Firestore lit ce réglage.
+function toggleLongPolling() {
+  var on = false;
+  try { on = localStorage.getItem("ecc_force_longpolling") === "1"; } catch(e){}
+  try { localStorage.setItem("ecc_force_longpolling", on ? "0" : "1"); } catch(e){
+    showToast("Stockage local indisponible sur ce navigateur.", "err");
+    return;
+  }
+  showToast(on ? "Mode réseau restreint désactivé. Rechargement..."
+               : "Mode réseau restreint activé. Rechargement...", "ok");
+  setTimeout(function(){ location.reload(); }, 900);
 }
 
 function copySyncError() {
