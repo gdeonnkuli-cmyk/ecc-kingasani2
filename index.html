@@ -1419,6 +1419,37 @@ body.dark-mode [style*="border:1px solid #e5eaf0"]{border-color:var(--v3-line)!i
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}
 }
+/* Barre d'erreur de synchronisation — persistante, lisible, transmissible */
+#sync-error-bar{
+  display:none;position:fixed;left:0;right:0;
+  bottom:0;z-index:998;gap:12px;align-items:flex-start;flex-wrap:wrap;
+  padding:12px 14px calc(12px + env(safe-area-inset-bottom,0px));
+  background:linear-gradient(135deg,#7f1d1d,#a32a1f);
+  color:#fff;border-top:2px solid #f0b6b0;
+  box-shadow:0 -8px 28px rgba(6,15,26,.45);
+  font-size:.8rem;line-height:1.45;
+}
+#sync-error-bar .seb-txt{flex:1;min-width:210px}
+#sync-error-bar .seb-code{
+  font-family:'DM Mono',monospace;font-size:.72rem;
+  color:#ffd9d4;margin-top:4px;
+}
+#sync-error-bar .seb-aide{margin-top:5px;color:rgba(255,255,255,.88);font-size:.76rem}
+#sync-error-bar .seb-act{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+#sync-error-bar button{
+  background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.3);
+  color:#fff;border-radius:var(--v3-r-pill);padding:7px 14px;
+  font-family:'DM Sans',sans-serif;font-size:.75rem;font-weight:600;
+  cursor:pointer;min-height:34px;
+}
+#sync-error-bar button:hover{background:rgba(255,255,255,.26)}
+@media (max-width:640px){
+  #sync-error-bar{font-size:.78rem;padding:11px 12px calc(11px + env(safe-area-inset-bottom,0px))}
+  #sync-error-bar .seb-act{width:100%}
+  #sync-error-bar button{flex:1}
+}
+@media print{ #sync-error-bar{display:none!important} }
+
 /* ===================== 17. FLUIDITÉ AU DÉFILEMENT ========================
    Correction des tremblements signalés sur téléphone pendant le défilement.
    Trois causes, toutes liées au coût de repeinture par image :
@@ -4534,8 +4565,59 @@ function saveToFirestore() {
     .catch(function(e) {
       gSyncing = false;
       setSyncStatus("dirty", "Echec — données en local");
-      showToast("❌ Echec Firebase — données sauvegardées localement seulement. " + e.message, "err");
+      showSyncError(e, "enregistrement du culte");
     });
+}
+
+// Dernière erreur de synchronisation, conservée pour diagnostic.
+var gLastSyncError = null;
+
+// Un toast disparaît en 3 secondes : insuffisant pour lire, noter ou transmettre
+// un code d'erreur Firebase. On affiche donc une barre persistante, que
+// l'utilisateur ferme lui-même.
+function showSyncError(e, contexte) {
+  var code = (e && e.code) || "";
+  var msg  = (e && e.message) || String(e || "");
+  var now  = new Date();
+  var hh = now.getHours(), mm = now.getMinutes();
+  gLastSyncError = {code:code, message:msg, contexte:contexte||"", heure:hh+":"+(mm<10?"0"+mm:mm)};
+
+  var explications = {
+    "permission-denied":   "Les règles de sécurité Firestore refusent l'écriture. Cause la plus fréquente : des règles en mode test, qui expirent au bout de 30 jours.",
+    "unavailable":         "Le service est injoignable depuis cet appareil. Un VPN, un pare-feu d'entreprise ou une connexion instable bloquent souvent Firestore.",
+    "resource-exhausted":  "Quota Firebase atteint (plan gratuit : 20 000 écritures par jour).",
+    "failed-precondition": "Requête impossible en l'état — souvent un index Firestore manquant.",
+    "unauthenticated":     "Session expirée. Se déconnecter puis se reconnecter."
+  };
+  var aide = explications[code] || "";
+
+  var bar = document.getElementById("sync-error-bar");
+  if (!bar) { bar = document.createElement("div"); bar.id = "sync-error-bar"; document.body.appendChild(bar); }
+  bar.innerHTML =
+    '<div class="seb-txt">' +
+      '<strong>Firebase a refusé l\'enregistrement.</strong> Vos données restent sur cet appareil et repartiront à la prochaine synchronisation réussie.' +
+      '<div class="seb-code">' + escHtml(code || "sans code") + ' · ' + escHtml(gLastSyncError.heure) +
+        (contexte ? ' · ' + escHtml(contexte) : '') + '</div>' +
+      (aide ? '<div class="seb-aide">' + escHtml(aide) + '</div>' : '') +
+    '</div>' +
+    '<div class="seb-act">' +
+      '<button onclick="fullSync()">Réessayer</button>' +
+      '<button onclick="copySyncError()">Copier</button>' +
+      '<button onclick="document.getElementById(\'sync-error-bar\').style.display=\'none\'">Fermer</button>' +
+    '</div>';
+  bar.style.display = "flex";
+}
+
+function copySyncError() {
+  if (!gLastSyncError) return;
+  var t = "Firebase " + (gLastSyncError.code || "sans code") + " — " + gLastSyncError.message +
+          (gLastSyncError.contexte ? " (" + gLastSyncError.contexte + ")" : "");
+  try {
+    navigator.clipboard.writeText(t);
+    showToast("Détail copié.", "ok");
+  } catch(err) {
+    showToast(t, "err");
+  }
 }
 
 function saveToHistory() {
@@ -4603,7 +4685,7 @@ function _saveToHistoryFinal(data, histId, wasExisting) {
     .catch(function(e) {
       saveToHistLocal();
       setSyncStatus("dirty", "Echec — données en local");
-      showToast("❌ Echec Firebase — données en local seulement. " + e.message, "err");
+      showSyncError(e, "enregistrement dans l'historique");
     });
 }
 
@@ -5156,6 +5238,7 @@ function _chargerHistoriqueComplet(cb) {
     })
     .catch(function(e){
       gHistSource = {mode:"local", read:0, sansSavedAt:0, erreur:(e&&e.message)||"lecture refusée"};
+      if(typeof showSyncError === "function") showSyncError(e, "lecture de l'historique");
       if(!gHistCache || gHistCache.length===0) gHistCache = getHistLocal();
       if(cb) cb(gHistCache);
     });
