@@ -106,6 +106,42 @@ persistant (`localStorage: ecc_dark_mode`).
   colonne Note est resserrée, pour absorber la taille de frappe sans troncature :
   un montant à 8 chiffres (12 500 000) s'affiche intégralement.
 
+## 8. Fluidité au défilement sur téléphone (v3.1)
+
+Trois causes de tremblement pendant le défilement, toutes liées au coût de
+repeinture par image :
+
+| Cause | Correctif |
+|---|---|
+| `background-attachment:fixed` sur `body` — repeinture du fond à chaque image | réservé aux pointeurs fins (`hover:hover and pointer:fine`) ; `scroll` sur tactile |
+| `backdrop-filter` (verre dépoli) sur l'en-tête collant, les barres d'onglets, les tuiles, le résumé financier — recomposition de la zone floutée à chaque image | neutralisé sous `pointer:coarse`, remplacé par des surfaces opaques de teinte équivalente : le rendu reste identique à l'œil |
+| les règles `:hover` se déclenchent au contact du doigt — la tuile se soulève pendant le défilement, puis retombe | tous les effets de survol (`transform`, `filter`, ombres portées) neutralisés sous `hover:none` ; le retour tactile passe par `:active`, bref et sans déplacement |
+
+Deux ajouts connexes :
+
+- `touch-action:pan-x` sur les barres d'onglets : un geste vertical fait défiler
+  la page au lieu de secouer la barre horizontalement ;
+- `overscroll-behavior-y:contain` sur `body` : supprime le rebond
+  « tirer pour rafraîchir » d'Android — un rechargement accidentel en pleine
+  saisie ferait perdre les lignes en cours.
+
+L'en-tête collant reçoit `transform:translateZ(0)` : il occupe sa propre couche
+de composition, le contenu qui défile dessous ne force plus sa repeinture.
+
+Mesures en contexte tactile émulé (390 × 844, `pointer:coarse`, `hover:none`) :
+
+| | Avant | Après |
+|---|---|---|
+| `background-attachment` de `body` | `fixed` | `scroll` |
+| `backdrop-filter` de l'en-tête | `saturate(1.6) blur(14px)` | `none` |
+| `backdrop-filter` des tuiles | `blur(6px)` | `none` |
+| `transform` d'une tuile survolée | règle de soulèvement active | `none` |
+| Décalage cumulé de mise en page (CLS) sur 48 défilements | 0 | 0 |
+
+Le poste de travail conserve le verre dépoli et le fond fixe : vérifié en
+1280 px (`hover:hover and pointer:fine`), `backdrop-filter` et
+`background-attachment:fixed` toujours actifs.
+
 ## Vérifications effectuées
 
 Rendu contrôlé sous Chromium (Playwright), thèmes clair et sombre, sur les modules

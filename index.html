@@ -1419,6 +1419,76 @@ body.dark-mode [style*="border:1px solid #e5eaf0"]{border-color:var(--v3-line)!i
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}
 }
+/* ===================== 17. FLUIDITÉ AU DÉFILEMENT ========================
+   Correction des tremblements signalés sur téléphone pendant le défilement.
+   Trois causes, toutes liées au coût de repeinture par image :
+   1. background-attachment:fixed oblige le navigateur à repeindre tout le
+      fond à chaque image de défilement ;
+   2. backdrop-filter sur des éléments collants (en-tête, onglets, tuiles)
+      recompose la zone floutée à chaque image ;
+   3. les règles :hover se déclenchent au contact du doigt : la tuile se
+      soulève pendant qu'on fait défiler, puis retombe.
+   ====================================================================== */
+
+/* 1. Fond fixe réservé aux pointeurs fins (souris) */
+body{background-attachment:scroll}
+@media (hover:hover) and (pointer:fine){ body{background-attachment:fixed} }
+
+/* Évite le rebond « tirer pour rafraîchir » d'Android en haut de page :
+   un rechargement accidentel en pleine saisie ferait perdre les lignes en cours. */
+body{overscroll-behavior-y:contain}
+
+/* 2. Sur écran tactile : surfaces opaques au lieu du verre dépoli */
+@media (pointer:coarse){
+  .app-header{
+    -webkit-backdrop-filter:none;backdrop-filter:none;
+    background:linear-gradient(100deg,#08131f,#14314e);
+  }
+  .tabs,.module-bar{
+    -webkit-backdrop-filter:none;backdrop-filter:none;
+    background:#0a1826;
+    scroll-snap-type:none;      /* l'aimantation « tire » le doigt pendant le défilement */
+    touch-action:pan-x;         /* un geste vertical sur la barre fait défiler la page,
+                                   au lieu de secouer la barre horizontalement */
+  }
+  .menu-tile,#ah-resume-fin,.toast,.modal-back{
+    -webkit-backdrop-filter:none;backdrop-filter:none;
+  }
+  .modal-back{background:rgba(6,15,26,.74)}
+  .menu-tile{background:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.035))}
+  #ah-resume-fin{background:linear-gradient(155deg,rgba(255,255,255,.10),rgba(255,255,255,.045))!important}
+  .toast{background:linear-gradient(135deg,#0a1726,#17395c)}
+}
+
+/* 3. Aucun effet de survol là où il n'y a pas de souris : rien ne bouge au doigt */
+@media (hover:none){
+  .menu-tile:hover,.card:hover,.stat:hover,.stat-card:hover,.dc2:hover,
+  .member-card:hover,.hist-item:hover,.ah-kpi-card:hover,.btn:hover,
+  .btn-p:hover,.btn-g:hover,.tab:hover,.module-btn:hover,
+  .notif-bell:hover,.taux-box:hover,.user-chip:hover,.btn-logout:hover,
+  #dark-toggle-btn:hover,#sync-banner:hover,#v3-cmdk-btn:hover,#v3-top:hover,
+  .bar-wrap:hover .bar-inner,.btn-del:hover,.add-btn:hover{
+    transform:none!important;filter:none!important;
+  }
+  .card:hover{box-shadow:var(--v3-sh-2)}
+  .stat:hover,.stat-card:hover,.dc2:hover,.hist-item:hover,.member-card:hover{box-shadow:var(--v3-sh-1)}
+  .menu-tile:hover{
+    box-shadow:0 2px 10px rgba(0,0,0,.16);
+    border-color:rgba(255,255,255,.14)!important;
+    background:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.035))!important;
+  }
+  .er:hover,.dtable tbody tr:hover td,.cotis-table tr:hover td{background:inherit}
+  .dtable tbody tr:nth-child(even):hover td{background:#fbfdff}
+  body.dark-mode .dtable tbody tr:nth-child(even):hover td{background:#101e2b}
+  /* Le retour tactile passe par :active, bref et sans déplacement de la mise en page */
+  .menu-tile:active{background:rgba(255,255,255,.16)!important}
+  .btn:active{transform:scale(.98)!important}
+}
+
+/* L'en-tête collant obtient sa propre couche : le contenu qui défile
+   dessous ne force plus sa repeinture. */
+.app-header{will-change:transform;transform:translateZ(0)}
+
 @media print{
   #v3-top,#v3-cmdk,#v3-cmdk-btn,.module-bar,.toast,#notif-panel{display:none!important}
   .card{box-shadow:none!important;border:1px solid #ccc!important}
