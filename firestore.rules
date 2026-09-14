@@ -1,0 +1,106 @@
+rules_version = '2';
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ECC / 13e CBFC — Kingasani 2  ·  Règles de sécurité Firestore
+//  Projet : ecc-kingasani2-finances
+//
+//  Principe : toutes les données de gestion exigent une session authentifiée.
+//  Deux exceptions assumées, encadrées ci-dessous : la consultation d'une
+//  fiche de membre par son code, et l'enregistrement de cette consultation.
+//
+//  Ce fichier est la source de vérité : modifier ici, puis coller dans
+//  Console Firebase → Firestore Database → Règles → Publier.
+// ═══════════════════════════════════════════════════════════════════════════
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Données de gestion : session authentifiée obligatoire ──────────────
+    // Ces 19 collections sont celles réellement utilisées par l'application.
+    match /accounts/{doc}            { allow read, write: if request.auth != null; }
+    match /membres_db/{doc}          { allow read, write: if request.auth != null; }
+    match /social_db/{doc}           { allow read, write: if request.auth != null; }
+    match /seminaire_db/{doc}        { allow read, write: if request.auth != null; }
+    match /ecodim_db/{doc}           { allow read, write: if request.auth != null; }
+    match /effectif_db/{doc}         { allow read, write: if request.auth != null; }
+    match /loyer_db/{doc}            { allow read, write: if request.auth != null; }
+    match /projets/{doc}             { allow read, write: if request.auth != null; }
+    match /eb_demandes/{doc}         { allow read, write: if request.auth != null; }
+    match /annonces/{doc}            { allow read, write: if request.auth != null; }
+    match /cultes/{doc}              { allow read, write: if request.auth != null; }
+    match /historique/{doc}          { allow read, write: if request.auth != null; }
+    match /presence/{doc}            { allow read, write: if request.auth != null; }
+    match /config/{doc}              { allow read, write: if request.auth != null; }
+    match /notifications/{doc}       { allow read, write: if request.auth != null; }
+    match /budget_db/{doc}           { allow read, write: if request.auth != null; }
+    match /mutuelle_db/{doc}         { allow read, write: if request.auth != null; }
+    match /distrib_validations/{doc} { allow read, write: if request.auth != null; }
+    match /connexions/{doc}          { allow read, write: if request.auth != null; }
+
+    // ── Journal d'audit ───────────────────────────────────────────────────
+    // ATTENTION — faiblesse connue, laissée en l'état pour ne rien casser :
+    // tout compte connecté peut modifier ou supprimer une entrée d'audit, ce
+    // qui prive le journal de sa valeur probante. La suppression est utilisée
+    // par clearAccessHistory(), réservée aux administrateurs côté interface
+    // seulement. Le durcissement correct (update/delete réservés aux admins)
+    // suppose un modèle de rôles vérifiable dans les règles — voir la note
+    // en fin de fichier.
+    match /audit_log/{doc}           { allow read, write: if request.auth != null; }
+
+    // ── Fiche de membre consultable par code ──────────────────────────────
+    // La règle précédente était « allow read: if true », ce qui autorisait
+    // aussi le LIST : n'importe qui pouvait énumérer le registre complet
+    // (nom, adresse, e-mail, date de naissance, cotisations) avec une seule
+    // requête HTTP, la clé API étant publique par conception.
+    //
+    // get et list sont donc séparés. L'application ne lit jamais cette
+    // collection autrement que par identifiant exact — checkMemberCard() fait
+    // .doc(code).get() — la consultation par code fonctionne donc à
+    // l'identique, mais l'énumération devient impossible.
+    match /fiches_publiques/{doc} {
+      allow get:   if true;                  // ouvrir SA fiche, code exact requis
+      allow list:  if request.auth != null;  // énumération réservée à l'équipe
+      allow write: if request.auth != null;  // création, mise à jour, retrait
+    }
+
+    // ── Trace des consultations de fiches ─────────────────────────────────
+    // La création reste ouverte : logConsultation() écrit avant toute
+    // authentification. Elle est en revanche bornée aux cinq champs
+    // réellement écrits, avec des types et des tailles contrôlés : sans cela,
+    // n'importe qui pouvait injecter des documents arbitraires, aux dépens de
+    // votre quota.
+    match /consultations/{doc} {
+      allow create: if request.resource.data.keys().hasOnly(['code','nom','numero','time','ts'])
+                    && request.resource.data.code is string
+                    && request.resource.data.code.size() <= 32
+                    && (!('nom' in request.resource.data)    || request.resource.data.nom is string)
+                    && (!('numero' in request.resource.data) || request.resource.data.numero is string)
+                    && (!('time' in request.resource.data)   || request.resource.data.time is string);
+      allow read, update, delete: if request.auth != null;
+    }
+
+    // ── Tout le reste est refusé ──────────────────────────────────────────
+    // Firestore refuse par défaut ce qui n'est pas explicitement autorisé.
+    // Une nouvelle collection doit donc être déclarée ici pour fonctionner.
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ÉTAPE SUIVANTE — passer aux rôles
+//
+//  Aujourd'hui, tout compte connecté peut écrire dans toutes les collections
+//  de gestion : un utilisateur « finances » peut modifier le registre des
+//  membres, et les rôles ne sont appliqués que par l'interface. Pour les faire
+//  respecter côté serveur, deux voies :
+//
+//  1. Custom claims (recommandé) — poser le rôle sur le compte Firebase Auth
+//     via l'Admin SDK, puis l'exploiter directement :
+//       allow write: if request.auth.token.role == 'admin';
+//
+//  2. Documents accounts indexés par uid — aujourd'hui ils portent un champ
+//     email et un identifiant automatique ; en les renommant avec l'uid du
+//     compte, les règles pourraient lire :
+//       get(/databases/$(database)/documents/accounts/$(request.auth.uid)).data.role
+//
+//  Les deux demandent une migration : à faire à froid, pas pendant une panne.
+// ═══════════════════════════════════════════════════════════════════════════
