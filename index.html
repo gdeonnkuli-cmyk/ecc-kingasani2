@@ -4175,6 +4175,18 @@ function initFirebase() {
     } catch(e) {
       console.warn("Transport long-polling refusé par ce SDK :", e && e.message);
     }
+    // Persistance hors ligne : la base reste lisible sans réseau et les écritures
+    // sont mises en file dans IndexedDB, puis synchronisées seules au retour.
+    // Doit être appelé avant toute autre opération Firestore.
+    try {
+      gDb.enablePersistence({ synchronizeTabs: true }).catch(function(err) {
+        // failed-precondition : plusieurs onglets ouverts sans synchronizeTabs
+        // unimplemented    : navigateur sans IndexedDB utilisable
+        console.warn("Persistance hors ligne indisponible :", err && err.code);
+      });
+    } catch(e) {
+      console.warn("Persistance hors ligne refusée :", e && e.message);
+    }
     gAuth = firebase.auth();
     try { gStorage = firebase.storage(); } catch(e){ gStorage = null; }
     return true;
@@ -4559,6 +4571,20 @@ function subscribeToDoc(docId) {
     });
 }
 
+// Avec la persistance hors ligne, une écriture faite sans réseau est appliquée
+// localement immédiatement, mais sa promesse ne se résout qu'au retour du réseau.
+// Sans ce garde-temps, l'interface resterait indéfiniment sur « Sauvegarde... »
+// alors que les données sont bel et bien enregistrées sur l'appareil.
+function _signalerAttenteReseau(p, quoi, ms) {
+  var fini = false;
+  p.then(function(){ fini = true; }, function(){ fini = true; });
+  setTimeout(function() {
+    if (fini) return;
+    setSyncStatus("dirty", "En attente du reseau");
+    showToast(quoi + " sur cet appareil. Synchronisation automatique au retour du réseau.", "warn");
+  }, ms || 6000);
+}
+
 function saveToFirestore() {
   if (!IS_CONFIGURED) { saveToStorage(); setSyncStatus("local","Sauvegarde locale"); return; }
   var docId = getDocId();
@@ -4567,7 +4593,9 @@ function saveToFirestore() {
   var data = captureState();
   data.lastEditBy    = gCurrentUser ? gCurrentUser.nom : "";
   data.lastEditEmail = gCurrentUser ? gCurrentUser.email : "";
-  gDb.collection("cultes").doc(docId).set(data, {merge: true})
+  var _pCulte = gDb.collection("cultes").doc(docId).set(data, {merge: true});
+  _signalerAttenteReseau(_pCulte, "Culte enregistré");
+  _pCulte
     .then(function() {
       gSyncing = false; gIsDirty = false;
       var now = new Date();
@@ -4705,7 +4733,9 @@ function _saveToHistoryFinal(data, histId, wasExisting) {
   data.savedAt    = firebase.firestore.FieldValue.serverTimestamp();
   data.savedBy    = gCurrentUser ? gCurrentUser.nom : "";
   data.savedEmail = gCurrentUser ? gCurrentUser.email : "";
-  gDb.collection("historique").doc(histId).set(data, {merge: false})
+  var _pHist = gDb.collection("historique").doc(histId).set(data, {merge: false});
+  _signalerAttenteReseau(_pHist, "Culte enregistré dans l'historique");
+  _pHist
     .then(function() {
       var now = new Date();
       var hh = now.getHours(), mm = now.getMinutes();
@@ -5147,6 +5177,19 @@ function restoreState(data) {
 }
 
 // == VALIDATION ==
+// Culte le plus récent antérieur à une date, d'après le cache d'historique.
+// Renvoie null si le cache est vide : mieux vaut ne rien affirmer que se tromper.
+function _culteAvant(dateStr) {
+  if (!dateStr || !gHistCache || !gHistCache.length) return null;
+  var best = null;
+  for (var i = 0; i < gHistCache.length; i++) {
+    var h = gHistCache[i], d = (h && h.meta && h.meta.date) || "";
+    if (!d || d >= dateStr) continue;
+    if (!best || d > ((best.meta && best.meta.date) || "")) best = h;
+  }
+  return best;
+}
+
 function runValidation() {
   var errors=[],warnings=[],successes=[];
   var date=document.getElementById("meta-date").value;
@@ -5164,11 +5207,63 @@ function runValidation() {
   if(effCF===0&&effCL===0)errors.push("Effectif CF ou CL requis.");
   if(rTotal===0)errors.push("Aucune recette saisie.");
   if(date){var diff=Math.abs(new Date()-new Date(date))/864e5;if(diff>14)warnings.push("Date il y a plus de 14 jours.");}
-  if(dTotal>rTotal)warnings.push("Depenses superieures aux recettes. Solde: "+fmt(solde)+" CDF.");
   // Avertir si aucune dépense saisie mais des recettes existent (injection distribution oubliée)
   if(rTotal>0 && dTotal===0) warnings.push("Aucune depense saisie. Avez-vous injecte les depenses depuis la Distribution ?");
   if(cf.cdf===0&&cf.usd===0)warnings.push("Aucune recette CF.");
   if(cl.cdf===0&&cl.usd===0)warnings.push("Aucune recette CL.");
+
+  // ── Trésorerie : le disponible du jour, ce n'est pas la recette du jour ────
+  // Une journée peut légitimement dépenser plus qu'elle n'encaisse : le solde
+  // reporté finance la différence. Ce qui est impossible, c'est de décaisser
+  // plus que le disponible, soit solde reporté + recettes.
+  var repCDF = parseFloat((document.getElementById("rep-cdf")||{}).value) || 0;
+  var repUSD = parseFloat((document.getElementById("rep-usd")||{}).value) || 0;
+  var repEq  = repCDF + repUSD * t;
+  var dispo  = repEq + rTotal;
+  var nouveauSolde = dispo - dTotal;
+
+  if (nouveauSolde < 0) {
+    errors.push("Décaissement supérieur au disponible : " + fmt(dTotal)
+      + " CDF de dépenses pour " + fmt(dispo) + " CDF disponibles (solde reporté "
+      + fmt(repEq) + " + recettes " + fmt(rTotal) + "). Manque "
+      + fmt(Math.abs(nouveauSolde)) + " CDF.");
+  } else if (dTotal > rTotal) {
+    successes.push("Dépenses supérieures aux recettes du jour (" + fmt(dTotal)
+      + " contre " + fmt(rTotal) + "), couvertes par le solde reporté. Nouveau solde : "
+      + fmt(nouveauSolde) + " CDF.");
+  }
+
+  // ── Continuité du solde reporté ───────────────────────────────────────────
+  // Le report saisi doit valoir le nouveau solde du culte précédent.
+  // Avertissement, jamais blocage : un mouvement hors culte peut expliquer l'écart.
+  if (date && gHistCache && gHistCache.length) {
+    var prev = _culteAvant(date);
+    if (prev) {
+      var attCDF = (parseFloat(prev.meta && prev.meta.repCDF) || 0) + ((prev.sums && prev.sums.nCDF) || 0);
+      var attUSD = (parseFloat(prev.meta && prev.meta.repUSD) || 0) + ((prev.sums && prev.sums.nUSD) || 0);
+      // Le report est arrondi à 50 FC près par l'application : tolérance identique.
+      if (Math.abs(repCDF - attCDF) > 50) {
+        warnings.push("Solde reporté CDF : " + fmt(repCDF) + " saisi, " + fmt(attCDF)
+          + " attendu d'après le culte du " + (prev.meta.date || "?")
+          + " (écart " + fmt(repCDF - attCDF) + " CDF).");
+      }
+      if (Math.abs(repUSD - attUSD) > 0.01) {
+        warnings.push("Solde reporté USD : " + fmt(repUSD) + " saisi, " + fmt(attUSD)
+          + " attendu (écart " + fmt(repUSD - attUSD) + " USD).");
+      }
+    }
+    // ── Doublon de date ─────────────────────────────────────────────────────
+    for (var _k = 0; _k < gHistCache.length; _k++) {
+      var _h = gHistCache[_k];
+      if (_h && _h.meta && _h.meta.date === date
+          && !(window.gEditingHistId && _h.id === window.gEditingHistId)) {
+        warnings.push("Un culte est déjà enregistré au " + date
+          + ". Vérifiez qu'il ne s'agit pas d'un doublon.");
+        break;
+      }
+    }
+  }
+
   if(!errors.length&&!warnings.length){
     successes.push("Date: "+date);
     successes.push("Responsable: "+resp);
