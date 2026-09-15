@@ -4474,6 +4474,7 @@ function rouvrirMois(ym) {
 
 function launchAppFin() {
   chargerClotures();
+  chargerSycebnl();
   launchApp();
 }
 
@@ -6443,6 +6444,192 @@ function autoFillSoldeReporte(callback) {
 }
 
 // == ADMIN ==
+// ═══ CORRESPONDANCE COMPTABLE SYCEBNL ═════════════════════════════════════
+// Le SYCEBNL (Acte uniforme OHADA des entités à but non lucratif, en vigueur
+// depuis le 1er janvier 2024) compte environ 1 130 comptes. Les numéros ne sont
+// PAS codés en dur ici : ils viennent du plan officiel, saisis par le
+// comptable. L'application fournit la mécanique, pas l'arbitrage comptable.
+var gSycebnl = { comptes: {}, tresCDF: "", tresUSD: "" };
+
+function chargerSycebnl(cb) {
+  try { gSycebnl = JSON.parse(localStorage.getItem("ecc_sycebnl") || "null") || gSycebnl; } catch(e) {}
+  if (!gSycebnl.comptes) gSycebnl.comptes = {};
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(); return; }
+  gDb.collection("config").doc("sycebnl").get()
+    .then(function(doc) {
+      if (doc.exists && doc.data()) {
+        var d = doc.data();
+        gSycebnl = { comptes: d.comptes || {}, tresCDF: d.tresCDF || "", tresUSD: d.tresUSD || "" };
+        try { localStorage.setItem("ecc_sycebnl", JSON.stringify(gSycebnl)); } catch(e) {}
+      }
+      if (cb) cb();
+    })
+    .catch(function() { if (cb) cb(); });
+}
+
+// Toutes les rubriques susceptibles d'être mouvementées : les listes par défaut
+// de l'application, plus tout libellé réellement saisi dans l'historique.
+function _rubriquesConnues() {
+  var rec = {}, dep = {};
+  CF_DEF.forEach(function(l){ rec[l] = true; });
+  CL_DEF.forEach(function(l){ rec[l] = true; });
+  [CM_DEF, FR_DEF, CO_DEF].forEach(function(arr){ arr.forEach(function(o){ dep[o.l] = true; }); });
+  (gHistCache || []).forEach(function(h) {
+    ["cf","cl"].forEach(function(k){ (h[k] || []).forEach(function(r){ if (r && r.l) rec[r.l] = true; }); });
+    ["cm","fr","co","ot"].forEach(function(k){ (h[k] || []).forEach(function(r){ if (r && r.l) dep[r.l] = true; }); });
+  });
+  return { recettes: Object.keys(rec).sort(), depenses: Object.keys(dep).sort() };
+}
+
+function _carteSycebnl() {
+  var rub = _rubriquesConnues();
+  var tot = rub.recettes.length + rub.depenses.length;
+  var faits = 0;
+  rub.recettes.concat(rub.depenses).forEach(function(l){ if (gSycebnl.comptes[l]) faits++; });
+
+  var h = '<div class="sec-lbl">Correspondance comptable SYCEBNL</div>';
+  h += '<p style="font-size:.76rem;color:var(--muted);margin-bottom:9px">'
+     + 'Les numéros proviennent de votre plan de comptes SYCEBNL officiel : saisissez-les ici. '
+     + 'L\'application ne propose aucun numéro — un compte inexact sur une pièce comptable vaut moins que pas de compte du tout. '
+     + '<strong>' + faits + ' / ' + tot + ' rubriques renseignées.</strong></p>';
+  h += '<div class="mgrid" style="margin-bottom:10px">'
+     + '<div class="fg"><label>Compte de trésorerie CDF</label><input type="text" id="syc-tres-cdf" value="'
+       + escH(gSycebnl.tresCDF || "") + '" placeholder="ex. 57.."></div>'
+     + '<div class="fg"><label>Compte de trésorerie USD</label><input type="text" id="syc-tres-usd" value="'
+       + escH(gSycebnl.tresUSD || "") + '" placeholder="ex. 57.."></div></div>';
+
+  function tableau(titre, liste, type) {
+    if (!liste.length) return "";
+    var t = '<div style="font-size:.74rem;font-weight:700;color:var(--blue);margin:10px 0 5px">' + titre + '</div>';
+    t += '<table class="cotis-table"><thead><tr><th>Rubrique</th><th style="width:140px">Compte SYCEBNL</th></tr></thead><tbody>';
+    liste.forEach(function(l) {
+      t += '<tr><td style="font-size:.78rem">' + escH(l) + '</td>'
+         + '<td><input type="text" class="syc-compte" data-rubrique="' + escH(l) + '" data-type="' + type + '" value="'
+         + escH(gSycebnl.comptes[l] || "") + '" style="width:100%;padding:5px 7px;border:1.5px solid var(--border);border-radius:6px;font-family:DM Mono,monospace;font-size:.76rem"></td></tr>';
+    });
+    return t + '</tbody></table>';
+  }
+  h += tableau("Ressources (recettes)", rub.recettes, "R");
+  h += tableau("Emplois (dépenses)", rub.depenses, "D");
+  h += '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
+     + '<button class="btn btn-sm btn-p" onclick="enregistrerSycebnl()">Enregistrer la correspondance</button>'
+     + '<button class="btn btn-sm btn-g" onclick="exporterJournalSycebnl()">Exporter le journal et la balance</button></div>';
+  return h;
+}
+
+function enregistrerSycebnl() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.", "err"); return; }
+  var comptes = {};
+  var champs = document.querySelectorAll(".syc-compte");
+  for (var i = 0; i < champs.length; i++) {
+    var v = (champs[i].value || "").trim();
+    if (v) comptes[champs[i].getAttribute("data-rubrique")] = v;
+  }
+  gSycebnl = {
+    comptes: comptes,
+    tresCDF: ((document.getElementById("syc-tres-cdf") || {}).value || "").trim(),
+    tresUSD: ((document.getElementById("syc-tres-usd") || {}).value || "").trim()
+  };
+  try { localStorage.setItem("ecc_sycebnl", JSON.stringify(gSycebnl)); } catch(e) {}
+  var fini = function() {
+    showToast(Object.keys(comptes).length + " rubrique(s) enregistrée(s).", "ok");
+    if (typeof logAudit === "function") logAudit("CONFIG", "Finances", "Correspondance SYCEBNL mise à jour");
+    renderAdmin();
+  };
+  if (!IS_CONFIGURED || !gDb) { fini(); return; }
+  gDb.collection("config").doc("sycebnl").set(gSycebnl, { merge: false })
+    .then(fini).catch(function(e){ showSyncError(e, "enregistrement de la correspondance"); fini(); });
+}
+
+// Journal en partie double + balance, sur l'historique complet.
+// Recette : débit trésorerie / crédit compte de ressource.
+// Dépense : débit compte d'emploi / crédit trésorerie.
+// Monnaie de tenue : le CDF. L'USD est converti au taux du culte, et la devise
+// d'origine reste portée sur la ligne pour la traçabilité.
+function exporterJournalSycebnl() {
+  if (typeof XLSX === "undefined") { showToast("SheetJS non chargé. Vérifiez votre connexion.", "err"); return; }
+  var hist = (gHistCache || []).slice().sort(function(a,b){
+    return (((a.meta&&a.meta.date)||"")).localeCompare(((b.meta&&b.meta.date)||""));
+  });
+  if (!hist.length) { showToast("Aucun culte dans l'historique.", "err"); return; }
+  if (!gSycebnl.tresCDF) { showToast("Renseignez d'abord le compte de trésorerie CDF.", "err"); return; }
+
+  var lignes = [], manquantes = {}, piece = 0;
+
+  hist.forEach(function(h) {
+    var date = (h.meta && h.meta.date) || "";
+    var taux = parseFloat(h.meta && h.meta.taux) || getTaux();
+    piece++;
+    var ref = "C" + String(piece).padStart(4, "0");
+
+    function ecrire(rub, mtCDF, mtUSD, sens) {
+      var brutCDF = parseFloat(String(mtCDF).replace(",", ".")) || 0;
+      var brutUSD = parseFloat(String(mtUSD).replace(",", ".")) || 0;
+      if (!brutCDF && !brutUSD) return;
+      var compte = gSycebnl.comptes[rub];
+      if (!compte) { manquantes[rub] = true; return; }
+
+      [[brutCDF, "CDF", gSycebnl.tresCDF], [brutUSD, "USD", gSycebnl.tresUSD || gSycebnl.tresCDF]]
+        .forEach(function(p) {
+          var montant = p[0]; if (!montant) return;
+          var devise = p[1], tres = p[2];
+          var enCDF = devise === "USD" ? montant * taux : montant;
+          var lib = rub + (devise === "USD" ? " (" + montant + " USD au taux " + taux + ")" : "");
+          if (sens === "R") {
+            lignes.push([date, ref, tres,   lib, Math.round(enCDF), 0, devise, montant]);
+            lignes.push([date, ref, compte, lib, 0, Math.round(enCDF), devise, montant]);
+          } else {
+            lignes.push([date, ref, compte, lib, Math.round(enCDF), 0, devise, montant]);
+            lignes.push([date, ref, tres,   lib, 0, Math.round(enCDF), devise, montant]);
+          }
+        });
+    }
+
+    ["cf","cl"].forEach(function(k){ (h[k]||[]).forEach(function(r){ if(r&&r.l) ecrire(r.l, r.cdf, r.usd, "R"); }); });
+    ["cm","fr","co","ot"].forEach(function(k){ (h[k]||[]).forEach(function(r){ if(r&&r.l) ecrire(r.l, r.cdf, r.usd, "D"); }); });
+  });
+
+  var listeManq = Object.keys(manquantes);
+  if (listeManq.length) {
+    showModal("Rubriques sans compte",
+      "Ces rubriques sont mouvementées mais n'ont pas de compte SYCEBNL :\n\n• "
+      + listeManq.join("\n• ")
+      + "\n\nComplétez la correspondance avant d'exporter : un journal incomplet n'est pas exploitable.",
+      function(){ closeModal(); });
+    return;
+  }
+  if (!lignes.length) { showToast("Aucun montant à exporter.", "err"); return; }
+
+  // Balance par compte
+  var bal = {};
+  lignes.forEach(function(l) {
+    var c = l[2];
+    if (!bal[c]) bal[c] = { d: 0, c: 0 };
+    bal[c].d += l[4]; bal[c].c += l[5];
+  });
+  var ligBal = Object.keys(bal).sort().map(function(c) {
+    return [c, bal[c].d, bal[c].c, bal[c].d - bal[c].c];
+  });
+  var totD = ligBal.reduce(function(a,l){ return a + l[1]; }, 0);
+  var totC = ligBal.reduce(function(a,l){ return a + l[2]; }, 0);
+  ligBal.push(["TOTAL", totD, totC, totD - totC]);
+
+  var wb = XLSX.utils.book_new();
+  var wsJ = XLSX.utils.aoa_to_sheet(
+    [["Date","Pièce","Compte","Libellé","Débit (CDF)","Crédit (CDF)","Devise","Montant devise"]].concat(lignes));
+  wsJ["!cols"] = [{wch:11},{wch:8},{wch:12},{wch:44},{wch:14},{wch:14},{wch:8},{wch:14}];
+  XLSX.utils.book_append_sheet(wb, wsJ, "Journal");
+  var wsB = XLSX.utils.aoa_to_sheet(
+    [["Compte","Débit (CDF)","Crédit (CDF)","Solde (CDF)"]].concat(ligBal));
+  wsB["!cols"] = [{wch:12},{wch:15},{wch:15},{wch:15}];
+  XLSX.utils.book_append_sheet(wb, wsB, "Balance");
+
+  var nom = "SYCEBNL_Journal_" + getTodayStr().replace(/-/g,"") + ".xlsx";
+  XLSX.writeFile(wb, nom);
+  showToast("Journal SYCEBNL : " + lignes.length + " lignes, balance équilibrée à " + fmt(totD) + " FC.", "ok");
+  if (typeof logAudit === "function") logAudit("EXPORT", "Finances", "Journal SYCEBNL — " + lignes.length + " lignes");
+}
+
 // Carte d'administration : état de clôture des douze derniers mois présents
 // dans l'historique, avec le nombre de cultes et le total de chacun.
 function _carteClotures() {
@@ -6672,6 +6859,7 @@ function renderAdmin(){
   html += "<div id='audit-zone'></div>";
 
   html += _carteClotures();
+  html += _carteSycebnl();
   var ab=document.getElementById("admin-body-mod");if(ab)ab.innerHTML=html;
 
   // Charger les zones dynamiques après rendu
