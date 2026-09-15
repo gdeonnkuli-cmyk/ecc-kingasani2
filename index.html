@@ -4606,11 +4606,18 @@ function showSyncError(e, contexte) {
 
   var bar = document.getElementById("sync-error-bar");
   if (!bar) { bar = document.createElement("div"); bar.id = "sync-error-bar"; document.body.appendChild(bar); }
+  // Sans code, ce n'est pas Firebase qui refuse : c'est une erreur JavaScript.
+  // Le message devient alors le seul renseignement utile — on l'affiche.
+  var titre = code
+    ? '<strong>Firebase a refusé l\'opération.</strong> Vos données restent sur cet appareil et repartiront à la prochaine synchronisation réussie.'
+    : '<strong>Erreur pendant : ' + escHtml(contexte || "une opération") + '.</strong> Ce n\'est pas un refus de Firebase : la lecture a pu réussir. Détail technique ci-dessous.';
+  var ligne = code ? escHtml(code) : escHtml((msg || "détail indisponible").slice(0, 160));
+
   bar.innerHTML =
     '<div class="seb-txt">' +
-      '<strong>Firebase a refusé l\'enregistrement.</strong> Vos données restent sur cet appareil et repartiront à la prochaine synchronisation réussie.' +
-      '<div class="seb-code">' + escHtml(code || "sans code") + ' · ' + escHtml(gLastSyncError.heure) +
-        (contexte ? ' · ' + escHtml(contexte) : '') + '</div>' +
+      titre +
+      '<div class="seb-code">' + ligne + ' · ' + escHtml(gLastSyncError.heure) +
+        (contexte && code ? ' · ' + escHtml(contexte) : '') + '</div>' +
       (aide ? '<div class="seb-aide">' + escHtml(aide) + '</div>' : '') +
     '</div>' +
     '<div class="seb-act">' +
@@ -5237,6 +5244,19 @@ function _histSavedMillis(h){
   return isNaN(n) ? 0 : n;
 }
 
+// Le callback d'affichage ne doit pas s'exécuter DANS le .then() de la requête :
+// une exception de rendu y serait rattrapée par le .catch() de la promesse et
+// présentée comme un refus de Firebase, alors que la lecture a parfaitement
+// réussi. C'est ce qui affichait « sans code · lecture de l'historique ».
+function _rendreHistorique(cb) {
+  if (!cb) return;
+  try { cb(gHistCache); }
+  catch (err) {
+    if (typeof showSyncError === "function") showSyncError(err, "affichage de l'historique");
+    else if (window.console) console.error(err);
+  }
+}
+
 function _chargerHistoriqueComplet(cb) {
   if(!IS_CONFIGURED || !gDb){
     gHistSource = {mode:"local", read:0, sansSavedAt:0, erreur:"Firebase non configuré"};
@@ -5265,13 +5285,13 @@ function _chargerHistoriqueComplet(cb) {
       }).length, erreur:""};
       // Anti-écrasement : ne jamais remplacer un cache plus complet par un plus petit
       if(!gHistCache || hist.length >= gHistCache.length) gHistCache = hist;
-      if(cb) cb(gHistCache);
+      _rendreHistorique(cb);
     })
     .catch(function(e){
       gHistSource = {mode:"local", read:0, sansSavedAt:0, erreur:(e&&e.message)||"lecture refusée"};
       if(typeof showSyncError === "function") showSyncError(e, "lecture de l'historique");
       if(!gHistCache || gHistCache.length===0) gHistCache = getHistLocal();
-      if(cb) cb(gHistCache);
+      _rendreHistorique(cb);
     });
 }
 
@@ -14820,7 +14840,7 @@ function exportGlobalXLS() {
 
   // 2. MEMBRES
   addSheet('Membres',['N°','Nom','Prénom','Sexe','Naissance','Téléphone','Adresse','Eglise origine','Statut','Adhésion'],
-    (DB||[]).map(function(mb){ return [mb.numero||'',mb.nom||'',mb.prenom||'',mb.sexe||'',mb.dateNaissance||'',mb.telephone||'',mb.adresse||'',mb.egliseOrigine||'',mb.statut||'',mb.dateAdhesion||'']; }));
+    ((DB&&DB.membres)||[]).map(function(mb){ return [mb.numero||'',mb.nom||'',mb.prenom||'',mb.sexe||'',mb.dateNaissance||'',mb.telephone||'',mb.adresse||'',mb.egliseOrigine||'',mb.statut||'',mb.dateAdhesion||'']; }));
 
   // 3. SOCIAL
   addSheet('Social',['Date','Bénéficiaire','Type','Montant FC','Montant USD','Statut','Validé par','Date décision','Note'],
@@ -14946,7 +14966,7 @@ function buildCSVText() {
 
   section('MEMBRES',
     ['N°','Nom','Prénom','Sexe','Naissance','Téléphone','Adresse','Statut','Adhésion'],
-    (DB||[]).map(function(mb){ return [mb.numero||'',mb.nom||'',mb.prenom||'',mb.sexe||'',mb.dateNaissance||'',mb.telephone||'',mb.adresse||'',mb.statut||'',mb.dateAdhesion||'']; }));
+    ((DB&&DB.membres)||[]).map(function(mb){ return [mb.numero||'',mb.nom||'',mb.prenom||'',mb.sexe||'',mb.dateNaissance||'',mb.telephone||'',mb.adresse||'',mb.statut||'',mb.dateAdhesion||'']; }));
 
   section('SOCIAL ASSISTANCES',
     ['Date','Bénéficiaire','Type','Montant FC','Statut','Validé par'],
@@ -15119,7 +15139,7 @@ function doRapportConsolide(type, periode) {
   moisList.forEach(function(ym){
     var mo=parseInt(ym.split('-')[1]), an=parseInt(ym.split('-')[0]);
     var encaisse=0;
-    (DB||[]).forEach(function(m){
+    ((DB&&DB.membres)||[]).forEach(function(m){
       var paid=(m.cotisations&&m.cotisations[an])||[];
       if(paid.indexOf(mo)>=0) encaisse+=cotUn;
     });
@@ -15705,7 +15725,7 @@ function _renderAccueil() {
 
   // 3. Membres
   var mbActifs=0, mbArrears=0;
-  (DB||[]).forEach(function(m){
+  ((DB&&DB.membres)||[]).forEach(function(m){
     if((m.activite||"actif")==="actif") mbActifs++;
     if(getArrears(m,yr)>0) mbArrears++;
   });
@@ -15860,7 +15880,7 @@ function buildRapportHTML(type, periode) {
   var semRec=0,semDep=0; ((SEMDB&&SEMDB.sessions)||[]).forEach(function(s){ if(!inP(s.date))return; (s.recettes||[]).forEach(function(x){semRec+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;}); (s.depenses||[]).forEach(function(x){semDep+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;}); });
   var ecoRec=0,ecoDep=0; ((ECODB&&ECODB.sessions)||[]).forEach(function(s){ if(!inP(s.date))return; (s.recettes||[]).forEach(function(x){ecoRec+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;}); (s.depenses||[]).forEach(function(x){ecoDep+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;}); });
   var membTot=0; var cotUn=(typeof getCotisMontant==='function')?getCotisMontant():0;
-  moisList.forEach(function(ym){ var mo=parseInt(ym.split('-')[1]),an=parseInt(ym.split('-')[0]); (DB||[]).forEach(function(mb){ var paid=(mb.cotisations&&mb.cotisations[an])||[]; if(paid.indexOf(mo)>=0) membTot+=cotUn; }); });
+  moisList.forEach(function(ym){ var mo=parseInt(ym.split('-')[1]),an=parseInt(ym.split('-')[0]); ((DB&&DB.membres)||[]).forEach(function(mb){ var paid=(mb.cotisations&&mb.cotisations[an])||[]; if(paid.indexOf(mo)>=0) membTot+=cotUn; }); });
 
   var totRec = finRec+loyTot+semRec+ecoRec+membTot;
   var totDep = finDep+socTot+projTot+semDep+ecoDep;
