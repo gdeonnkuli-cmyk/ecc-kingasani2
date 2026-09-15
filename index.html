@@ -2361,6 +2361,11 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
           <input type="number" id="pay-montant" value="1000" min="0">
         </div>
         <div class="fg">
+          <label>Date d'encaissement</label>
+          <input type="date" id="pay-date">
+          <div style="font-size:.64rem;color:var(--muted);margin-top:3px;line-height:1.4">Le jour où l'argent est entré en caisse, qui n'est pas forcément le mois couvert.</div>
+        </div>
+        <div class="fg">
           <label>Note</label>
           <input type="text" id="pay-note" placeholder="Optionnel">
         </div>
@@ -4989,6 +4994,9 @@ function saveToHistory() {
 }
 
 function _saveToHistoryAvecPiece(data) {
+  // Modifier un culte déjà enregistré ne doit pas re-porter des cotisations :
+  // celles qu'il contient ont été marquées au premier enregistrement.
+  if (gEditingHistId) gCotisAInjecter = [];
   var dateStr = (data.meta.date || "").replace(/-/g, "");
   var baseId = "hist_" + dateStr;
 
@@ -5042,6 +5050,7 @@ function _saveToHistoryFinal(data, histId, wasExisting) {
         showToast("✅ Sauvegardé dans Firebase — visible sur tous les appareils", "ok");
       }
       clearDraft();
+      _marquerCotisInjectees(data);
       renderHistory();
       gSocFinCache = {cdf:0, usd:0, count:0, loaded:false};
       pushNotif("💰","Finances sauvegardees","Culte du "+(data.meta&&data.meta.date?data.meta.date:""),"finances");
@@ -5134,6 +5143,7 @@ function saveToHistLocal() {
   if (hist.length > 52) hist = hist.slice(0, 52);
   try {
     localStorage.setItem("ecc_hist", JSON.stringify(hist));
+    _marquerCotisInjectees(data);
     showToast("Sauvegarde dans l historique !", "ok");
     logAudit("SAVE", "Finances", "Culte du "+(gCurrentData&&gCurrentData.date||"?")+" sauvegardé");
     renderHistory();
@@ -5598,6 +5608,40 @@ function runValidation() {
     successes.push("Dépenses supérieures aux recettes du jour (" + fmt(dTotal)
       + " contre " + fmt(rTotal) + "), couvertes par le solde reporté. Nouveau solde : "
       + fmt(nouveauSolde) + " CDF.");
+  }
+
+  // ── Cotisations encaissées non encore portées en recette ──────────────────
+  // Elles n'ont pas de raison d'attendre un culte de plus : l'argent est déjà
+  // en caisse et il manquera au rapprochement tant qu'il n'est pas comptabilisé.
+  if (date && typeof _cotisEnAttente === "function") {
+    var _att = _cotisEnAttente(date);
+    if (_att.length) {
+      var _mtAtt = 0, _vieille = "";
+      for (var _a = 0; _a < _att.length; _a++) {
+        _mtAtt += parseFloat(_att[_a].montant) || 0;
+        var _d = _att[_a].dateEnr || "";
+        if (_d && (!_vieille || _d < _vieille)) _vieille = _d;
+      }
+      // Déjà portée dans le formulaire ? Alors il n'y a rien à signaler.
+      var _dansForm = 0;
+      ["cf-rows", "cl-rows"].forEach(function(cid) {
+        var cc = document.getElementById(cid);
+        if (!cc) return;
+        var rr = cc.querySelectorAll(".er");
+        for (var z = 0; z < rr.length; z++) {
+          var li = rr[z].querySelector("input.li");
+          if (li && _estLigneCotisMembres(li.value)) {
+            var am = rr[z].querySelectorAll("input.amt");
+            if (am[0]) _dansForm += parseFloat(String(am[0].value).replace(",", ".")) || 0;
+          }
+        }
+      });
+      if (_dansForm <= 0) {
+        warnings.push(_att.length + " cotisation(s) de membres encaissée(s) pour "
+          + fmt(_mtAtt) + " FC" + (_vieille ? " depuis le " + _vieille : "")
+          + " ne sont pas portées en recette. Onglet Membres → Cotisations, ou saisissez la ligne « Cotisation Cartes de Membre ».");
+      }
+    }
   }
 
   // ── Arrêté de caisse ──────────────────────────────────────────────────────
@@ -8972,6 +9016,20 @@ function loadDB() {
     return d ? JSON.parse(d) : {membres:[], cotisations:[], nextId:1};
   } catch(e) { return {membres:[], cotisations:[], nextId:1}; }
 }
+// Avant ce changement, les cotisations étaient reportées en recette par un
+// cumul du mois calendaire, sans trace de ce qui avait déjà été porté. Les
+// cotisations existantes sont donc marquées « antérieur » une fois pour
+// toutes : sans cela, la première synchronisation les injecterait en bloc.
+function _migrerCotisInjection() {
+  try { if (localStorage.getItem("ecc_cotis_inject_migr") === "1") return; } catch(e) {}
+  var liste = (DB && DB.cotisations) || [], n = 0;
+  for (var i = 0; i < liste.length; i++) {
+    if (!liste[i].injecteCulte) { liste[i].injecteCulte = "anterieur"; n++; }
+  }
+  try { localStorage.setItem("ecc_cotis_inject_migr", "1"); } catch(e) {}
+  if (n) saveDB(DB);
+}
+
 function saveDB(db) {
   // 1. Toujours sauvegarder en local (fallback)
   try { localStorage.setItem("ecc_membres_db", JSON.stringify(db)); } catch(e) {}
@@ -10108,6 +10166,9 @@ function populateYearSelects() {
   // Set current month
   var pm=document.getElementById("pay-mois");
   if(pm) pm.value=currentMonth();
+  // Date d'encaissement : aujourd'hui par défaut, modifiable pour une saisie différée.
+  var pd=document.getElementById("pay-date");
+  if(pd && !pd.value) pd.value=getTodayStr();
 }
 
 function enregistrerPaiement() {
@@ -10134,7 +10195,9 @@ function enregistrerPaiement() {
     mois:mois, annee:annee,
     montant:montant,
     note:note,
-    dateEnr:today()
+    // Date d'ENCAISSEMENT : ce qui déclenche la recette. Distincte du mois
+    // couvert, qui n'est qu'un rattachement de période.
+    dateEnr:((document.getElementById("pay-date")||{}).value)||today()
   };
   DB.cotisations.push(cotis);
   saveDB(DB);
@@ -10208,10 +10271,21 @@ function renderHistorique() {
 }
 
 function deleteCotis(id) {
-  showConfirm("Supprimer ce paiement ?","Cette action est irreversible.",function(){
+  // Supprimer une cotisation déjà portée en recette laisse le culte inchangé :
+  // on le dit, plutôt que de créer un écart silencieux entre les deux modules.
+  var cible = null, liste = (DB && DB.cotisations) || [];
+  for (var i = 0; i < liste.length; i++) if (liste[i].id === id) { cible = liste[i]; break; }
+  var dejaPorte = cible && cible.injecteCulte && cible.injecteCulte !== "anterieur";
+  var msg = "Cette action est irreversible.";
+  if (dejaPorte) {
+    msg += "\n\nAttention : ce paiement de " + fmt(parseFloat(cible.montant) || 0)
+      + " FC a déjà été porté en recette sur le culte « " + cible.injecteCulte
+      + " ». Le supprimer ici ne corrige pas ce culte : reprenez-le dans l'historique "
+      + "si la recette doit être réduite d'autant.";
+  }
+  showConfirm("Supprimer ce paiement ?", msg, function(){
     DB.cotisations=DB.cotisations.filter(function(c){return c.id!==id;});
     saveDB(DB); renderHistorique(); renderDashboardM();
-    syncCotisToRecettes();
     showToast("Paiement supprime.","");
   });
 }
@@ -10791,30 +10865,52 @@ function initM() {
 
 
 // == SYNC COTISATIONS -> RECETTES ==
-function syncCotisToRecettes() {
-  // Use today's date for month/year reference
-  var now = new Date();
-  var currentMonth = now.getMonth() + 1;
-  var currentYear  = now.getFullYear();
-  var mm = currentMonth < 10 ? "0" + currentMonth : String(currentMonth);
-  var yyyy = String(currentYear);
+// Reconnaît la ligne de recette qui porte les cotisations de membres.
+function _estLigneCotisMembres(lbl) {
+  var l = String(lbl || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").trim();
+  var mots = ["cotisation cartes", "cartes de membre", "cartes membre"];
+  for (var i = 0; i < mots.length; i++) if (l.indexOf(mots[i]) >= 0) return true;
+  return false;
+}
 
-  // Sum ALL cotisations paid this month
-  var totalCotis = 0;
-  var memberCount = 0;
-  for (var i = 0; i < DB.cotisations.length; i++) {
-    var c = DB.cotisations[i];
-    if (c.mois === mm && c.annee === yyyy) {
-      totalCotis += parseFloat(c.montant) || 0;
-      memberCount++;
-    }
+// Cotisations encaissées mais pas encore portées en recette dans un culte,
+// jusqu'à la date donnée incluse.
+function _cotisEnAttente(dateLimite) {
+  var res = [], liste = (DB && DB.cotisations) || [];
+  for (var i = 0; i < liste.length; i++) {
+    var c = liste[i];
+    if (c.injecteCulte) continue;
+    var d = c.dateEnr || "";
+    if (dateLimite && d && d > dateLimite) continue;
+    res.push(c);
+  }
+  return res;
+}
+
+// Ce qui doit entrer dans la recette d'un culte, c'est l'argent RÉELLEMENT
+// encaissé et pas encore comptabilisé — pas le cumul du mois calendaire.
+// L'ancien calcul reportait le cumul du mois dans CHAQUE culte du mois, donc
+// deux fois pour deux cultes ; et il ignorait les arriérés payés, puisqu'il
+// filtrait sur la période couverte au lieu de la date d'encaissement.
+var gCotisAInjecter = [];
+
+function syncCotisToRecettes() {
+  var dateCulte = ((document.getElementById("meta-date") || {}).value) || getTodayStr();
+  var enAttente = _cotisEnAttente(dateCulte);
+
+  var totalCotis = 0, memberCount = enAttente.length, plusAncienne = "";
+  gCotisAInjecter = [];
+  for (var i = 0; i < enAttente.length; i++) {
+    totalCotis += parseFloat(enAttente[i].montant) || 0;
+    gCotisAInjecter.push(enAttente[i].id);
+    var d = enAttente[i].dateEnr || "";
+    if (d && (!plusAncienne || d < plusAncienne)) plusAncienne = d;
   }
 
-  // Build note
-  var note = memberCount + " membre(s) - " + mm + "/" + yyyy;
+  var note = memberCount + " cotisation(s) encaissée(s)"
+    + (plusAncienne && plusAncienne !== dateCulte ? " du " + plusAncienne : "")
+    + " au " + dateCulte;
 
-  // Search for existing "Cotisation Cartes de Membre" row in CL then CF
-  var keywords = ["cotisation cartes", "cartes de membre", "cartes membre"];
   var found = false;
   var searchIds = ["cl-rows", "cf-rows"];
 
@@ -10826,12 +10922,7 @@ function syncCotisToRecettes() {
       var row = rows[ri];
       var liInp = row.querySelector("input.li");
       if (!liInp) continue;
-      var lbl = liInp.value.toLowerCase().replace(/[^a-z0-9 ]/g," ").trim();
-      var match = false;
-      for (var ki = 0; ki < keywords.length; ki++) {
-        if (lbl.indexOf(keywords[ki]) >= 0) { match = true; break; }
-      }
-      if (match) {
+      if (_estLigneCotisMembres(liInp.value)) {
         // Update existing row
         var amts = row.querySelectorAll("input.amt");
         if (amts[0]) {
@@ -10856,8 +10947,33 @@ function syncCotisToRecettes() {
   if (totalCotis > 0) {
     dirty();
     recalc();
-    showToast("Cotisations -> Recettes : " + fmt(totalCotis) + " FC (" + memberCount + " mbr)", "ok");
+    showToast("Cotisations → recettes : " + fmt(totalCotis) + " FC ("
+      + memberCount + " encaissement(s) non encore comptabilisé(s))", "ok");
   }
+}
+
+// Marque comme portées en recette les cotisations qui viennent de l'être —
+// mais seulement si la ligne a réellement été enregistrée avec un montant. Si
+// le trésorier l'a effacée du formulaire, elles restent en attente et
+// ressortiront au culte suivant.
+function _marquerCotisInjectees(data) {
+  if (!gCotisAInjecter || !gCotisAInjecter.length) return;
+  var mt = 0;
+  ["cf", "cl"].forEach(function(k) {
+    ((data && data[k]) || []).forEach(function(r) {
+      if (r && _estLigneCotisMembres(r.l)) mt += parseFloat(String(r.cdf).replace(",", ".")) || 0;
+    });
+  });
+  if (mt <= 0) { gCotisAInjecter = []; return; }
+  var ref = (data && data.meta && (data.meta.piece || data.meta.date)) || "culte";
+  var ids = {}, n = 0;
+  gCotisAInjecter.forEach(function(id) { ids[id] = true; });
+  var liste = (DB && DB.cotisations) || [];
+  for (var i = 0; i < liste.length; i++) {
+    if (ids[liste[i].id] && !liste[i].injecteCulte) { liste[i].injecteCulte = ref; n++; }
+  }
+  gCotisAInjecter = [];
+  if (n) saveDB(DB);
 }
 
 // == SHARED LAUNCH ==
@@ -10872,6 +10988,7 @@ function launchApp() {
   safeStyle("app-wrapper","display","block");
   // Initialiser le badge de sync Firebase
   initSyncBadge();
+  _migrerCotisInjection();
 
   // Show finances main area only if user has access
   var finMain = document.getElementById("fin-main");
