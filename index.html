@@ -3946,7 +3946,26 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
         </select>
       </div>
       <div class="fg"><label>Activite</label>
-        <select id="m-activite"><option value="actif">Actif</option><option value="inactif">Inactif</option></select>
+        <select id="m-activite" onchange="_majBlocSortie()"><option value="actif">Actif</option><option value="inactif">Inactif</option></select>
+      </div>
+    </div>
+    <div id="m-bloc-sortie" style="display:none">
+      <div class="form-grid">
+        <div class="fg"><label>Date de sortie</label><input type="date" id="m-sortie-date"></div>
+        <div class="fg"><label>Motif</label>
+          <select id="m-sortie-motif">
+            <option value="">— Choisir —</option>
+            <option value="Décès">Décès</option>
+            <option value="Déménagement">Déménagement</option>
+            <option value="Transfert vers une autre paroisse">Transfert vers une autre paroisse</option>
+            <option value="Radiation">Radiation</option>
+            <option value="Départ volontaire">Départ volontaire</option>
+            <option value="Autre">Autre</option>
+          </select>
+        </div>
+      </div>
+      <div style="font-size:.68rem;color:var(--muted);margin:-4px 0 8px;line-height:1.45">
+        À partir de cette date, le membre ne doit plus de cotisation : ses arriérés s'arrêtent là au lieu de courir jusqu'à aujourd'hui.
       </div>
     </div>
 
@@ -9116,6 +9135,19 @@ function getMonthsDue(membre, annee) {
   }
 
   var endMonth = yr < now.getFullYear() ? 12 : now.getMonth() + 1;
+
+  // Un membre sorti ne doit plus rien à compter de sa sortie : sans cela, les
+  // arriérés d'un membre décédé ou parti continuent de courir jusqu'à
+  // aujourd'hui, et le registre réclame de l'argent à qui n'est plus là.
+  if (membre.sortieDate) {
+    var so = new Date(membre.sortieDate);
+    if (!isNaN(so.getTime())) {
+      var soYear = so.getFullYear();
+      if (soYear < yr) return 0;
+      if (soYear === yr) endMonth = Math.min(endMonth, so.getMonth() + 1);
+    }
+  }
+
   return Math.max(0, endMonth - startMonth + 1);
 }
 
@@ -9145,6 +9177,12 @@ function getSpecDue(membre, annee) {
   if (membre.adhesion) {
     var adhYear = new Date(membre.adhesion).getFullYear();
     if (adhYear > yr) return 0;
+  }
+  // Un membre sorti avant la fin de l'année n'a pas eu l'année complète : les
+  // spéciales, exigibles au 31 décembre, ne lui sont plus réclamées.
+  if (membre.sortieDate) {
+    var so = new Date(membre.sortieDate);
+    if (!isNaN(so.getTime()) && so.getFullYear() <= yr) return 0;
   }
   // Année en cours → pas encore exigibles (0 dû). Année passée → les 3 sont dues.
   var nowYear = new Date().getFullYear();
@@ -9418,6 +9456,61 @@ function renderMembers(list) {
 function filterMembers() { renderMembers(); }
 
 // == MEMBER FORM ==
+
+// Comparaison de noms tolérante : casse, accents, espaces multiples, tirets.
+function _normNom(s) {
+  s = (s == null ? "" : String(s)).toLowerCase().trim();
+  try { s = s.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); } catch(e) {}
+  return s.replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+// Fiches qui désignent probablement la même personne : mêmes nom et prénom,
+// ou même numéro de téléphone exploitable. Le registre n'a aucune autre clé.
+function _doublonsMembre(nom, prenom, tel, idExclu) {
+  var cleNom = _normNom(nom) + " " + _normNom(prenom);
+  var cleTel = (typeof waNumero === "function") ? waNumero(tel) : "";
+  var res = [];
+  var liste = (DB && DB.membres) || [];
+  for (var i = 0; i < liste.length; i++) {
+    var m = liste[i];
+    if (idExclu && m.id === idExclu) continue;
+    var memeNom = (_normNom(m.nom) + " " + _normNom(m.prenom)) === cleNom;
+    var memeTel = cleTel && (typeof waNumero === "function") && waNumero(m.tel) === cleTel;
+    if (memeNom || memeTel) res.push({ m: m, nom: memeNom, tel: !!memeTel });
+  }
+  return res;
+}
+
+function _majBlocSortie() {
+  var sel = document.getElementById("m-activite");
+  var bloc = document.getElementById("m-bloc-sortie");
+  if (!sel || !bloc) return;
+  bloc.style.display = (sel.value === "inactif") ? "block" : "none";
+  // Un membre remis en actif ne garde pas une date de sortie qui fausserait
+  // ses arriérés : on vide, plutôt que de laisser une donnée contradictoire.
+  if (sel.value !== "inactif") {
+    var d = document.getElementById("m-sortie-date"), mo = document.getElementById("m-sortie-motif");
+    if (d) d.value = ""; if (mo) mo.value = "";
+  } else {
+    var dd = document.getElementById("m-sortie-date");
+    if (dd && !dd.value) dd.value = today();
+  }
+}
+
+// Le compteur de numéros ne recule jamais : supprimer le dernier membre ne
+// doit pas rendre son numéro réattribuable, sinon deux personnes partagent
+// la même référence dans les registres papier déjà distribués.
+function _prochainNumeroMembre() {
+  var maxN = parseInt((DB && DB.maxNumero) || 0, 10) || 0;
+  var liste = (DB && DB.membres) || [];
+  for (var i = 0; i < liste.length; i++) {
+    var ex = String(liste[i].numero || "").replace("KG-", "").replace("KG", "");
+    var n = parseInt(ex, 10);
+    if (!isNaN(n) && n > maxN) maxN = n;
+  }
+  return maxN + 1;
+}
+
 function openAddMember() {
   document.getElementById("modal-titre").textContent="Nouveau membre";
   document.getElementById("m-id").value="";
@@ -9429,13 +9522,10 @@ function openAddMember() {
   document.getElementById("m-activite").value="actif";
   document.getElementById("m-responsable").value="";
   document.getElementById("m-adhesion").value=today();
-  // Preview next numero
-  var maxN = 0;
-  for (var pni=0;pni<DB.membres.length;pni++) {
-    var pex = (DB.membres[pni].numero||"").replace("KG-","").replace("KG","");
-    var pp = parseInt(pex); if(!isNaN(pp)&&pp>maxN) maxN=pp;
-  }
-  document.getElementById("m-numero").value = "KG-"+pad4(maxN+1)+" (auto)";
+  var sd=document.getElementById("m-sortie-date"); if(sd) sd.value="";
+  var sm=document.getElementById("m-sortie-motif"); if(sm) sm.value="";
+  _majBlocSortie();
+  document.getElementById("m-numero").value = "KG-"+pad4(_prochainNumeroMembre())+" (auto)";
   safeStyle("btn-delete-member","display","none");
   document.getElementById("modal-membre").className="modal-back open";
 }
@@ -9457,6 +9547,9 @@ function openEditMember(id) {
   document.getElementById("m-responsable").value=m.responsable||"";
   document.getElementById("m-dept").value=m.dept||"";
   document.getElementById("m-adhesion").value=m.adhesion||"";
+  var esd=document.getElementById("m-sortie-date"); if(esd) esd.value=m.sortieDate||"";
+  var esm=document.getElementById("m-sortie-motif"); if(esm) esm.value=m.sortieMotif||"";
+  _majBlocSortie();
   document.getElementById("m-numero").value=m.numero||"";
   // Make editable when editing (to allow correction if needed)
   var numEl=document.getElementById("m-numero");
@@ -9730,6 +9823,35 @@ function saveMember() {
   if (!nom || !prenom) { showToast("Nom et prenom obligatoires.","err"); return; }
 
   var id = document.getElementById("m-id").value;
+  var tel = document.getElementById("m-tel").value;
+
+  // Un doublon de fiche fausse l'effectif, double les arriérés et fait sortir
+  // deux cartes pour la même personne. On ne bloque pas — deux homonymes
+  // existent — mais on ne laisse pas passer en silence.
+  var dbl = _doublonsMembre(nom, prenom, tel, id);
+  if (dbl.length && !window.__forcerDoublonMembre) {
+    var lst = dbl.slice(0, 5).map(function(d) {
+      return "• " + (d.m.prenom || "") + " " + (d.m.nom || "") + " (" + (d.m.numero || "sans numéro") + ")"
+        + (d.nom && d.tel ? " — même nom et même téléphone" : (d.tel ? " — même téléphone" : " — même nom et prénom"));
+    }).join("\n");
+    showConfirm("Fiche déjà existante ?",
+      "Le registre contient déjà " + dbl.length + " fiche(s) qui pourraient être la même personne :\n\n"
+      + lst + (dbl.length > 5 ? "\n• …" : "")
+      + "\n\nEnregistrer quand même ? S'il s'agit d'un homonyme, c'est légitime ; sinon, annulez et modifiez la fiche existante.",
+      function() {
+        window.__forcerDoublonMembre = true;
+        try { saveMember(); } finally { window.__forcerDoublonMembre = false; }
+      });
+    return;
+  }
+  window.__forcerDoublonMembre = false;
+
+  // Le numéro est le seul moyen de relancer un membre : un format inutilisable
+  // ne se découvre aujourd'hui qu'au moment où la relance WhatsApp échoue.
+  if (tel && tel.trim() && typeof waNumero === "function" && !waNumero(tel)) {
+    showToast("Téléphone « " + tel.trim() + " » inexploitable pour WhatsApp — attendu 0812345678 ou +243812345678. Fiche enregistrée quand même.", "warn");
+  }
+
   var isNew = !id;
 
   if (isNew) {
@@ -9740,15 +9862,10 @@ function saveMember() {
   // Always auto-generate numero for new members, never allow manual override
   var numero = "";
   if (isNew) {
-    // Find highest existing numero and increment
-    var maxNum = 0;
-    for (var ni = 0; ni < DB.membres.length; ni++) {
-      var existing = DB.membres[ni].numero || "";
-      var match = existing.replace("KG-","").replace("KG","");
-      var parsed = parseInt(match);
-      if (!isNaN(parsed) && parsed > maxNum) maxNum = parsed;
-    }
-    numero = "KG-" + pad4(maxNum+1);
+    var suivant = _prochainNumeroMembre();
+    numero = "KG-" + pad4(suivant);
+    // Mémorisé pour que le compteur ne recule pas après une suppression.
+    DB.maxNumero = suivant;
   } else {
     // Keep existing numero when editing
     numero = document.getElementById("m-numero").value.trim() || findMembre(id).numero || "";
@@ -9759,7 +9876,7 @@ function saveMember() {
     naissance:document.getElementById("m-naissance").value,
     sexe:document.getElementById("m-sexe").value,
     civil:document.getElementById("m-civil").value,
-    tel:document.getElementById("m-tel").value,
+    tel:tel,
     adresse:document.getElementById("m-adresse").value,
     email:document.getElementById("m-email").value,
     statut:document.getElementById("m-statut").value,
@@ -9767,6 +9884,12 @@ function saveMember() {
     responsable:document.getElementById("m-responsable").value,
     dept:document.getElementById("m-dept").value,
     adhesion:document.getElementById("m-adhesion").value,
+    // Sortie : seulement pour un membre inactif, sinon la donnée serait
+    // contradictoire avec son statut.
+    sortieDate:(document.getElementById("m-activite").value==="inactif"
+      ? (((document.getElementById("m-sortie-date")||{}).value)||"") : ""),
+    sortieMotif:(document.getElementById("m-activite").value==="inactif"
+      ? (((document.getElementById("m-sortie-motif")||{}).value)||"") : ""),
     numero:numero,
     notes:document.getElementById("m-notes").value
   };
@@ -9798,7 +9921,34 @@ function saveMember() {
 
 function deleteMember() {
   var id = document.getElementById("m-id").value;
-  showConfirm("Supprimer ce membre ?","Cette action est irreversible. Les cotisations seront aussi supprimees.",
+
+  // Supprimer un membre efface aussi ses cotisations. Celles déjà portées en
+  // recette dans un culte ne sont pas retirées de ce culte pour autant : la
+  // suppression creuserait un écart silencieux entre le registre et la
+  // comptabilité. On le dit, et on rappelle l'alternative : la sortie.
+  var cot = 0, porte = 0, mtPorte = 0, pieces = {};
+  var liste = (DB && DB.cotisations) || [];
+  for (var i = 0; i < liste.length; i++) {
+    if (liste[i].membreId !== id) continue;
+    cot++;
+    var ref = liste[i].injecteCulte;
+    if (ref && ref !== "anterieur") {
+      porte++; mtPorte += parseFloat(liste[i].montant) || 0; pieces[ref] = true;
+    }
+  }
+  var msg = "Cette action est irreversible.";
+  if (cot) msg += "\n\n" + cot + " cotisation(s) seront également supprimées.";
+  if (porte) {
+    var refs = Object.keys(pieces);
+    msg += "\n\nAttention : " + porte + " d'entre elles, pour " + fmt(mtPorte)
+      + " FC, ont déjà été portées en recette sur "
+      + (refs.length === 1 ? "le culte « " + refs[0] + " »" : refs.length + " cultes (" + refs.slice(0, 4).join(", ") + (refs.length > 4 ? "…" : "") + ")")
+      + ". Les supprimer ici ne corrige pas ces cultes.";
+  }
+  msg += "\n\nPour un membre qui a quitté la paroisse, préférez Activité → Inactif avec une date de sortie : "
+       + "ses arriérés s'arrêtent à cette date et son historique reste vérifiable.";
+
+  showConfirm("Supprimer ce membre ?", msg,
     function() {
       var delM = findMembre(id);
       if (delM && delM.checkCode) deleteFichePublique(delM.checkCode);
@@ -10362,7 +10512,10 @@ function copierListeArrieres() {
 
 function renderArrieres() {
   var annee=document.getElementById("arr-annee").value||String(currentYear());
-  var activeMembers=DB.membres.filter(function(m){return m.activite==="actif";});
+  // (m.activite||"actif") comme partout ailleurs : une fiche sans valeur est
+  // active. Le filtre strict la faisait disparaître de cet écran alors qu'elle
+  // restait comptée dans le tableau de bord.
+  var activeMembers=DB.membres.filter(function(m){return (m.activite||"actif")==="actif";});
   var rows=[];
   for (var i=0;i<activeMembers.length;i++) {
     var m=activeMembers[i];
