@@ -2284,6 +2284,7 @@ body{overscroll-behavior-y:contain}
     <div class="card-hdr"><h2>Membres avec arrieres</h2><span class="badge" id="arr-count">0</span>
       <div style="margin-left:auto;display:flex;gap:7px">
         <select id="arr-annee" style="padding:4px 8px;border:1px solid rgba(255,255,255,.3);border-radius:5px;background:rgba(255,255,255,.1);color:#fff;font-size:.75rem;outline:none" onchange="renderArrieres()"></select>
+        <button class="btn btn-sm btn-o" style="color:#fff;border-color:rgba(255,255,255,.35)" onclick="copierListeArrieres()" title="Copier la liste des retards">Copier la liste</button>
       </div>
     </div>
     <div class="card-body" style="padding:0;overflow-x:auto">
@@ -9049,6 +9050,75 @@ function deleteCotis(id) {
 }
 
 // == ARRIERES ==
+// Normalise un numéro congolais vers le format attendu par wa.me : 243XXXXXXXXX.
+// Accepte « 0812345678 », « +243 81 234 5678 », « 243812345678 », « 812345678 ».
+// Renvoie "" si le numéro est inutilisable — on n'invente pas un destinataire.
+function waNumero(tel) {
+  var n = String(tel || "").replace(/[^0-9]/g, "");
+  if (!n) return "";
+  if (n.indexOf("00243") === 0) n = n.slice(2);
+  if (n.indexOf("243") === 0)   return n.length === 12 ? n : "";
+  if (n.charAt(0) === "0")      n = n.slice(1);
+  return n.length === 9 ? "243" + n : "";
+}
+
+// Ouvre WhatsApp avec un message de relance pré-rempli. Aucune donnée ne sort
+// de l'appareil : c'est l'utilisateur qui envoie, depuis son propre compte.
+function relancerMembre(membreId, annee) {
+  var m = null;
+  for (var i = 0; i < DB.membres.length; i++) if (DB.membres[i].id === membreId) { m = DB.membres[i]; break; }
+  if (!m) { showToast("Membre introuvable.", "err"); return; }
+
+  var num = waNumero(m.telephone);
+  if (!num) {
+    showToast("Pas de numéro exploitable pour " + (m.prenom || "") + " " + (m.nom || "") + ". Complétez sa fiche.", "err");
+    return;
+  }
+
+  var arr = getArrears(m, annee);
+  var du  = getMontantDu(m, annee);
+  var eglise = (document.getElementById("app-title-txt") || {}).textContent || "notre communauté";
+
+  var msg = "Bonjour " + ((m.prenom || "") + " " + (m.nom || "")).trim() + ",\n\n"
+    + "Nous vous saluons fraternellement de la part de " + eglise + ".\n\n"
+    + "Nos registres indiquent " + arr + " mois de cotisation en attente pour l'année " + annee
+    + ", soit " + fmt(du) + " FC.\n\n"
+    + "Si ce montant vous semble inexact, merci de nous le signaler afin que nous vérifiions ensemble.\n\n"
+    + "Que Dieu vous bénisse.";
+
+  window.open("https://wa.me/" + num + "?text=" + encodeURIComponent(msg), "_blank");
+  if (typeof logAudit === "function") {
+    logAudit("RELANCE", "Membres", "Relance WhatsApp — " + (m.prenom || "") + " " + (m.nom || "") + " (" + arr + " mois)");
+  }
+}
+
+// Liste des retards dans le presse-papiers, pour un comité ou un compte rendu.
+function copierListeArrieres() {
+  var annee = (document.getElementById("arr-annee") || {}).value || String(currentYear());
+  var lignes = [], total = 0;
+  var actifs = DB.membres.filter(function(m){ return m.activite === "actif"; });
+  actifs.forEach(function(m) {
+    var arr = getArrears(m, annee);
+    if (arr <= 0) return;
+    var du = getMontantDu(m, annee);
+    total += du;
+    lignes.push(((m.prenom || "") + " " + (m.nom || "")).trim()
+      + " — " + arr + " mois — " + fmt(du) + " FC"
+      + (waNumero(m.telephone) ? "" : "  (numéro manquant)"));
+  });
+  if (!lignes.length) { showToast("Aucun arriéré pour " + annee + ".", "ok"); return; }
+  lignes.sort();
+  var txt = "Arriérés de cotisation — " + annee + "\n"
+    + lignes.length + " membre(s) — total " + fmt(total) + " FC\n\n"
+    + lignes.join("\n");
+  try {
+    navigator.clipboard.writeText(txt);
+    showToast(lignes.length + " membre(s) copiés dans le presse-papiers.", "ok");
+  } catch (e) {
+    showToast("Presse-papiers indisponible sur ce navigateur.", "err");
+  }
+}
+
 function renderArrieres() {
   var annee=document.getElementById("arr-annee").value||String(currentYear());
   var activeMembers=DB.membres.filter(function(m){return m.activite==="actif";});
@@ -9084,7 +9154,12 @@ function renderArrieres() {
     html+="<td style='font-weight:700;color:var(--red)'>"+r.arr+" mois</td>";
     html+="<td style='text-align:right;font-family:DM Mono,monospace;font-weight:700;color:var(--red)'>"+fmt(r.due)+" FC</td>";
     html+="<td style='font-size:.74rem;color:var(--muted)'>"+(r.lastCotis?moisLabel(r.lastCotis.mois)+" "+r.lastCotis.annee:"Jamais")+"</td>";
-    html+="<td><button class='pay-btn' onclick='quickPay(\""+r.m.id+"\")'>Payer</button></td></tr>";
+    var _num = waNumero(r.m.telephone);
+    html+="<td style='white-space:nowrap'><button class='pay-btn' onclick='quickPay(\""+r.m.id+"\")'>Payer</button>";
+    html+= _num
+      ? "<button class='pay-btn' style='margin-left:5px;background:#e8f5ee;border-color:#a8d5b8' onclick='relancerMembre(\""+r.m.id+"\",\""+annee+"\")' title='Relancer par WhatsApp'>Relancer</button>"
+      : "<button class='pay-btn' style='margin-left:5px;opacity:.45;cursor:not-allowed' disabled title='Aucun numéro de téléphone sur la fiche'>Relancer</button>";
+    html+="</td></tr>";
   }
   document.getElementById("arr-body").innerHTML=html||"<tr><td colspan='7' style='text-align:center;padding:18px;color:var(--muted)'>Aucun arriere pour "+annee+" !</td></tr>";
 }
