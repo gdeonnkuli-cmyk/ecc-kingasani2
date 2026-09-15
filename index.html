@@ -20840,17 +20840,19 @@ function __renderRecapMensuelWithValid(ym, valid){
   if(vLoyer && vLoyer.paye){
     var dtL = vLoyer.date ? new Date(vLoyer.date).toLocaleDateString("fr-FR") : "";
     alertes+="<div style='background:#f0faf4;border-left:3px solid #1e7d52;padding:7px 10px;border-radius:5px;margin-bottom:6px;color:#14532d;display:flex;justify-content:space-between;align-items:center'>"
-      +"<span>✅ <strong>Loyer de "+MOIS[mo-1]+"</strong> réglé par <strong>"+escH(vLoyer.par||"")+"</strong> le "+dtL+".</span>"
+      +"<span>✅ <strong>Collecte de "+MOIS[mo-1]+"</strong> libérée"
+        +(vLoyer.moisCouvert ? " pour le <strong>loyer "+escH(_deMois(vLoyer.moisCouvert))+"</strong>" : "")
+        +" par <strong>"+escH(vLoyer.par||"")+"</strong> le "+dtL+".</span>"
       +"<button onclick=\"annulerValidationDistrib('"+ym+"','loyer')\" style='background:none;border:1px solid #1e7d52;color:#1e7d52;border-radius:5px;padding:2px 8px;font-size:.62rem;cursor:pointer'>Annuler</button>"
       +"</div>";
   } else if(ym===prevYm && today.getDate()<=10 && tot.loyer>0) {
     alertes+="<div style='background:#fff7ed;border-left:3px solid #e67e22;padding:7px 10px;border-radius:5px;margin-bottom:6px;color:#9a3412;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px'>"
-      +"<span>⏰ <strong>Loyer de "+MOIS[mo-1]+"</strong> à libérer <strong>avant le 10 "+nextLbl+"</strong> (1er dimanche : "+d1Str+").</span>"
+      +"<span>⏰ <strong>Collecte de "+MOIS[mo-1]+"</strong> ("+fmt(tot.loyer)+" FC) à libérer <strong>avant le 10 "+nextLbl+"</strong> (1er dimanche : "+d1Str+"). Le mois de loyer couvert se déclare à la validation.</span>"
       +"<button onclick=\"validerDistribAccueil('"+ym+"','loyer')\" style='background:#1e7d52;color:#fff;border:none;border-radius:5px;padding:3px 10px;font-size:.65rem;font-weight:700;cursor:pointer'>✓ Marquer réglé</button>"
       +"</div>";
   } else if(tot.loyer>0) {
     alertes+="<div style='background:#fff7ed;border-left:3px solid #e67e22;padding:7px 10px;border-radius:5px;margin-bottom:6px;color:#9a3412;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px'>"
-      +"<span>🏠 Loyer de "+MOIS[mo-1]+" — pas encore marqué comme réglé.</span>"
+      +"<span>🏠 <strong>Collecte de "+MOIS[mo-1]+"</strong> ("+fmt(tot.loyer)+" FC) — pas encore libérée.</span>"
       +"<button onclick=\"validerDistribAccueil('"+ym+"','loyer')\" style='background:#1e7d52;color:#fff;border:none;border-radius:5px;padding:3px 10px;font-size:.65rem;font-weight:700;cursor:pointer'>✓ Marquer réglé</button>"
       +"</div>";
   }
@@ -20877,7 +20879,7 @@ function __renderRecapMensuelWithValid(ym, valid){
   function card(lbl,val,color,sub){ return "<div style='background:#fff;border:1px solid var(--border);border-radius:8px;padding:9px 10px'><div style='font-size:.6rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em'>"+lbl+"</div><div style='font-family:DM Mono,monospace;font-weight:800;font-size:.95rem;color:"+color+"'>"+fmt(val)+" FC</div>"+(sub?"<div style='font-size:.62rem;color:var(--muted);margin-top:2px'>"+sub+"</div>":"")+"</div>"; }
 
   html+="<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px'>";
-  html+=card("🏠 Loyer Pasteur (cumul cotisations)",tot.loyer,"#c0392b","À libérer avant le 10 "+nextLbl);
+  html+=card("🏠 Loyer Pasteur (cumul cotisations)",tot.loyer,"#c0392b","Collecté en "+MOIS[mo-1]+" · à libérer avant le 10 "+nextLbl);
   html+=card("⚡ QP SNEL (cumul)",tot.snel,"#2563a8","32,75% de Base 1 par culte");
   html+=card("💧 QP REGIDESO (cumul)",tot.regideso,"#2563a8","32,75% de Base 1 par culte");
   html+=card("🕊️ Dîmes du mois",tot.dimes,"#1e7d52","Distribution le "+d1Str);
@@ -20975,10 +20977,12 @@ function _renderEcheancesAccueil() {
       var vLoyer = valid.loyer;
       if(vLoyer && vLoyer.paye){
         cards += "<div style='background:rgba(30,125,82,.15);border-left:3px solid #1e7d52;border-radius:6px;padding:8px 12px;margin-bottom:6px'>"
-          + "<div style='font-size:.68rem;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:.04em'>🏠 Loyer Pasteur — "+prevLbl+"</div>"
+          + "<div style='font-size:.68rem;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:.04em'>🏠 Loyer Pasteur — collecte de "+prevLbl+"</div>"
           + "<div style='display:flex;justify-content:space-between;align-items:center;margin-top:2px'>"
           + "<span style='font-family:DM Mono,monospace;font-weight:800;color:#fff;font-size:.9rem'>"+fmt(Math.round(tot.loyer))+" FC</span>"
-          + "<span style='font-size:.65rem;color:#1e7d52;font-weight:700'>✅ Réglé par "+escH(vLoyer.par||"")+"</span>"
+          + "<span style='font-size:.65rem;color:#1e7d52;font-weight:700'>✅ "
+            +(vLoyer.moisCouvert ? "Loyer "+escH(_deMois(vLoyer.moisCouvert))+" réglé" : "Réglé")
+            +" par "+escH(vLoyer.par||"")+"</span>"
           + "</div></div>";
       } else {
         var joursRestants = Math.ceil((jour10 - today)/86400000);
@@ -20987,7 +20991,7 @@ function _renderEcheancesAccueil() {
         var couleur = passe ? "#c0392b" : (urgent ? "#e67e22" : "#2563a8");
         var statut = passe ? "⚠️ Échéance dépassée !" : (urgent ? "⏰ Urgent — "+joursRestants+" jour(s) restant(s)" : "À libérer avant le 10");
         cards += "<div style='background:rgba(255,255,255,.08);border-left:3px solid "+couleur+";border-radius:6px;padding:8px 12px;margin-bottom:6px'>"
-          + "<div style='font-size:.68rem;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:.04em'>🏠 Loyer Pasteur — "+prevLbl+"</div>"
+          + "<div style='font-size:.68rem;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:.04em'>🏠 Loyer Pasteur — collecte de "+prevLbl+"</div>"
           + "<div style='display:flex;justify-content:space-between;align-items:center;margin-top:2px'>"
           + "<span style='font-family:DM Mono,monospace;font-weight:800;color:#fff;font-size:.9rem'>"+fmt(Math.round(tot.loyer))+" FC</span>"
           + "<span style='font-size:.65rem;color:"+couleur+";font-weight:700'>"+statut+"</span>"
@@ -21042,20 +21046,80 @@ function chargerValidationsDistrib(ym, cb) {
     .catch(function(){ cb({}); });
 }
 
-function validerDistribAccueil(ym, type) {
-  var labelType = type==="loyer" ? "le Loyer Pasteur" : "les Dîmes";
-  showModal("Confirmer le règlement",
-    "Confirmez-vous que "+labelType+" du mois concerné a bien été réglé/distribué ?",
-    function(){
-      closeModal();
-      _enregistrerValidationDistrib(ym, type, function(){
-        showToast("✅ Marqué comme réglé.", "ok");
-        renderEcheancesAccueil();
-      });
-    });
+var _MOIS_FR = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+
+function _labelMois(ym) {
+  if (!/^[0-9]{4}-[0-9]{2}$/.test(ym || "")) return ym || "";
+  return _MOIS_FR[parseInt(ym.substring(5, 7), 10) - 1] + " " + ym.substring(0, 4);
 }
 
-function _enregistrerValidationDistrib(ym, type, cb) {
+// « de Septembre 2026 » mais « d'Avril 2026 » : l'élision devant voyelle.
+function _deMois(ym) {
+  var l = _labelMois(ym);
+  if (!l) return "";
+  return ("AEIOU\u00c9\u00c8\u00c0".indexOf(l.charAt(0).toUpperCase()) >= 0 ? "d'" : "de ") + l;
+}
+
+function _ymDecale(ym, delta) {
+  var y = parseInt(ym.substring(0, 4), 10), m = parseInt(ym.substring(5, 7), 10);
+  var d = new Date(y, m - 1 + delta, 1);
+  var mm = d.getMonth() + 1;
+  return d.getFullYear() + "-" + (mm < 10 ? "0" : "") + mm;
+}
+
+// Le rattachement entre la collecte d'un mois et le loyer qu'elle finance
+// n'est pas fixe d'un mois à l'autre : c'est le trésorier qui le déclare au
+// moment de libérer les fonds. L'application ne le devine pas — un mois de
+// loyer faux sur une validation vaut moins que pas de mois du tout.
+var _loyerCouvertChoisi = "";
+
+function _optionsMoisLoyer(ymCollecte, selectionne) {
+  var h = "";
+  for (var k = -4; k <= 1; k++) {
+    var v = _ymDecale(ymCollecte, k);
+    h += '<option value="' + v + '"' + (v === selectionne ? ' selected' : '') + '>'
+       + _labelMois(v) + (k === -1 ? ' — mois précédent' : (k === 0 ? ' — mois de la collecte' : ''))
+       + '</option>';
+  }
+  return h;
+}
+
+function validerDistribAccueil(ym, type) {
+  if (type !== "loyer") {
+    showModal("Confirmer la distribution",
+      "Confirmez-vous que les Dîmes de la période concernée ont bien été distribuées ?",
+      function(){
+        closeModal();
+        _enregistrerValidationDistrib(ym, type, function(){
+          showToast("✅ Marqué comme distribué.", "ok");
+          renderEcheancesAccueil();
+          if(typeof renderRecapMensuel==="function") renderRecapMensuel(true);
+        });
+      });
+    return;
+  }
+
+  var defaut = _ymDecale(ym, -1);
+  _loyerCouvertChoisi = defaut;
+  showModalHTML("Libération du loyer",
+    "<p style='font-size:.8rem;line-height:1.5;margin:0 0 10px'>Cette collecte est celle des cultes de <strong>"
+      + escH(_labelMois(ym)) + "</strong>. Indiquez le <strong>mois de loyer</strong> qu'elle règle : "
+      + "ce rattachement varie, c'est donc vous qui le déclarez, et c'est lui qui sera inscrit sur la validation.</p>"
+    + "<div class='fg'><label>Mois de loyer couvert</label>"
+    + "<select id='loyer-couvert' onchange='_loyerCouvertChoisi=this.value'>"
+    + _optionsMoisLoyer(ym, defaut) + "</select></div>",
+    function(){
+      var couvert = _loyerCouvertChoisi || defaut;
+      _enregistrerValidationDistrib(ym, "loyer", function(){
+        showToast("✅ Loyer " + _deMois(couvert) + " marqué réglé.", "ok");
+        renderEcheancesAccueil();
+        if(typeof renderRecapMensuel==="function") renderRecapMensuel(true);
+      }, { moisCouvert: couvert });
+    },
+    "Confirmer la libération");
+}
+
+function _enregistrerValidationDistrib(ym, type, cb, extra) {
   if(!IS_CONFIGURED || !gDb){ showToast("Firebase requis pour cette action.","err"); return; }
   var payload = {};
   payload[type] = {
@@ -21064,9 +21128,12 @@ function _enregistrerValidationDistrib(ym, type, cb) {
     email: gCurrentUser ? gCurrentUser.email : "",
     date: new Date().toISOString()
   };
+  if (extra) for (var _k in extra) payload[type][_k] = extra[_k];
   gDb.collection("distrib_validations").doc(ym).set(payload, {merge:true})
     .then(function(){
-      logAudit("VALIDATION", "Distribution", (type==="loyer"?"Loyer":"Dîmes")+" "+ym+" marqué réglé par "+((gCurrentUser&&gCurrentUser.nom)||""));
+      logAudit("VALIDATION", "Distribution", (type==="loyer"?"Loyer":"Dîmes")+" "+ym
+        + ((extra && extra.moisCouvert) ? (" (loyer " + _deMois(extra.moisCouvert) + ")") : "")
+        + " marqué réglé par "+((gCurrentUser&&gCurrentUser.nom)||""));
       if(cb) cb();
     })
     .catch(function(e){ showToast("Erreur: "+e.message,"err"); });
