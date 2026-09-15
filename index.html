@@ -1450,6 +1450,36 @@ body.dark-mode [style*="border:1px solid #e5eaf0"]{border-color:var(--v3-line)!i
 }
 @media print{ #sync-error-bar{display:none!important} }
 
+/* ===================== 18. TABLE DE CORRESPONDANCE SYCEBNL ===============
+   Cette table hérite de .cotis-table, qui passe en défilement horizontal sur
+   téléphone : la colonne « Rubrique » sortait de l'écran et l'on saisissait un
+   compte sans voir à quelle rubrique il se rapportait. Sur mobile, chaque
+   ligne devient donc une carte : libellé au-dessus, champ en dessous.
+   ====================================================================== */
+@media (max-width:640px){
+  .syc-table,
+  .syc-table tbody,
+  .syc-table tr,
+  .syc-table td{
+    display:block!important;width:100%!important;
+    white-space:normal!important;overflow:visible!important;
+  }
+  .syc-table thead{display:none!important}
+  .syc-table tr{
+    border:1px solid var(--v3-line)!important;border-radius:var(--v3-r-md);
+    background:var(--v3-surface-2);padding:10px 12px;margin-bottom:8px;
+  }
+  .syc-table td{border:none!important;padding:0!important}
+  .syc-table td:first-child{
+    font-weight:600;font-size:.82rem;color:var(--v3-ink);margin-bottom:6px;
+  }
+  body.dark-mode .syc-table tr{background:#16293a!important}
+}
+
+/* Le bouton « retour en haut » recouvrait le champ en cours de saisie sur
+   petit écran. Il s'efface dès qu'un champ prend le focus. */
+#v3-top.v3-saisie{opacity:0!important;pointer-events:none!important}
+
 /* ===================== 17. FLUIDITÉ AU DÉFILEMENT ========================
    Correction des tremblements signalés sur téléphone pendant le défilement.
    Trois causes, toutes liées au coût de repeinture par image :
@@ -6511,7 +6541,7 @@ function _carteSycebnl() {
   function tableau(titre, liste, type) {
     if (!liste.length) return "";
     var t = '<div style="font-size:.74rem;font-weight:700;color:var(--blue);margin:10px 0 5px">' + titre + '</div>';
-    t += '<table class="cotis-table"><thead><tr><th>Rubrique</th><th style="width:140px">Compte SYCEBNL</th></tr></thead><tbody>';
+    t += '<table class="cotis-table syc-table"><thead><tr><th>Rubrique</th><th style="width:140px">Compte SYCEBNL</th></tr></thead><tbody>';
     liste.forEach(function(l) {
       t += '<tr><td style="font-size:.78rem">' + escH(l) + '</td>'
          + '<td><input type="text" class="syc-compte" list="syc-plan" data-rubrique="' + escH(l) + '" data-type="' + type + '" value="'
@@ -20577,6 +20607,17 @@ function filtrerCultesPeriodeDimes(hist, year, month) {
       window.scrollTo({top:0, behavior:"smooth"});
     });
     document.body.appendChild(b);
+    // Un champ qui prend le focus fait disparaître le bouton : sur téléphone,
+    // il se superposait au champ et au clavier.
+    document.addEventListener("focusin", function(e){
+      if(/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) b.classList.add("v3-saisie");
+    });
+    document.addEventListener("focusout", function(){
+      setTimeout(function(){
+        var a = document.activeElement;
+        if(!a || !/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) b.classList.remove("v3-saisie");
+      }, 100);
+    });
     var ticking = false;
     window.addEventListener("scroll", function(){
       if(ticking) return;
