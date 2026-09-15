@@ -1589,6 +1589,35 @@ body.dark-mode .syc-pop .syc-opt .syc-rg{color:#e8c97e;background:rgba(232,201,1
 body.dark-mode .syc-pop .syc-opt b{color:#e8c97e}
 body.dark-mode .syc-pop .syc-opt{border-bottom-color:#22374a}
 body.dark-mode .syc-pop .syc-opt.on,body.dark-mode .syc-pop .syc-opt:active{background:#1f3a52}
+.ctrl-piece{
+  border:1px solid var(--v3-line,#c5d8ed);border-left-width:4px;border-radius:var(--v3-r-md,10px);
+  padding:9px 12px;margin-bottom:7px;background:var(--v3-surface-2,#f8fafd);
+}
+.ctrl-piece.ok{border-left-color:#1f8f5a}
+.ctrl-piece.ko{border-left-color:#f0a500}
+.ctrl-piece .cp-tete{font-size:.78rem;margin-bottom:3px}
+.ctrl-piece .cp-l{font-size:.72rem;color:var(--v3-muted,#6b88a4);line-height:1.5;margin-top:3px;word-break:break-word}
+.ctrl-piece .cp-e{color:#9b2020}
+.ctrl-piece .cp-w{color:#8a5a00}
+body.dark-mode .ctrl-piece{background:#16293a;border-color:#2a4257}
+body.dark-mode .ctrl-piece .cp-e{color:#ffb3b3}
+body.dark-mode .ctrl-piece .cp-w{color:#ffd27a}
+.hi-piece{
+  display:inline-block;margin-left:8px;padding:1px 7px;border-radius:5px;
+  font-family:DM Mono,monospace;font-size:.66rem;font-weight:700;letter-spacing:.02em;
+  background:rgba(31,111,173,.12);color:#1f6fad;vertical-align:middle;
+}
+.hi-piece.prov{background:rgba(240,165,0,.16);color:#a06a00}
+body.dark-mode .hi-piece{background:rgba(232,201,126,.14);color:#e8c97e}
+body.dark-mode .hi-piece.prov{background:rgba(240,165,0,.2);color:#ffd27a}
+.cnt-ecart{
+  margin-top:9px;padding:9px 12px;border-radius:var(--v3-r-md,10px);
+  font-size:.78rem;font-weight:600;line-height:1.45;border:1px solid transparent;
+}
+.cnt-ecart.ok{background:rgba(31,143,90,.10);border-color:rgba(31,143,90,.30);color:#14663f}
+.cnt-ecart.ko{background:rgba(198,40,40,.10);border-color:rgba(198,40,40,.32);color:#9b2020}
+body.dark-mode .cnt-ecart.ok{background:rgba(63,191,127,.13);border-color:rgba(63,191,127,.3);color:#8fe0b4}
+body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(255,107,107,.3);color:#ffb3b3}
 .syc-pop .syc-vide{padding:11px;font-size:.73rem;color:var(--v3-muted,#6b88a4);line-height:1.4}
 #syc-etat{font-size:.7rem;color:var(--v3-muted,#6b88a4);margin-top:7px;min-height:1em}
 
@@ -1976,6 +2005,21 @@ body.dark-mode .syc-pop .syc-opt.on,body.dark-mode .syc-pop .syc-opt:active{back
       <div class="sgrid" style="margin-top:10px">
         <div class="sc neu" id="sc-fin"><div class="sc-lbl">Solde Final</div><div class="sc-cdf" id="s-fin-cdf">0 CDF</div><div class="sc-usd" id="s-fin-usd">0 USD</div><div class="sc-eq" id="s-fin-eq"></div></div>
         <div class="sc neu" id="sc-eq"><div class="sc-lbl">Equivalent unifie</div><div class="sc-cdf" id="s-eq-cdf">-</div><div class="sc-usd" id="s-eq-usd">-</div><div class="sc-eq">Au taux saisi</div></div>
+      </div>
+      <div class="sec-lbl" style="margin-top:14px">Arrêté de caisse</div>
+      <p style="font-size:.72rem;color:var(--muted);margin:0 0 8px;line-height:1.45">
+        Le solde final ci-dessus est une théorie ; la caisse comptée est un fait.
+        Comptez physiquement l'espèce en fin de culte et saisissez-la : l'écart est
+        calculé ici, et un écart non nul doit être justifié avant enregistrement.
+      </p>
+      <div class="mgrid">
+        <div class="fg"><label>Caisse comptée CDF</label><input type="number" id="cnt-cdf" placeholder="vide = non comptée" onchange="dirty();recalc()" oninput="recalc()"></div>
+        <div class="fg"><label>Caisse comptée USD</label><input type="number" id="cnt-usd" placeholder="vide = non comptée" onchange="dirty();recalc()" oninput="recalc()"></div>
+      </div>
+      <div id="cnt-ecart" class="cnt-ecart" style="display:none"></div>
+      <div class="fg" id="cnt-justif-box" style="display:none;margin-top:9px">
+        <label>Justification de l'écart (obligatoire)</label>
+        <input type="text" id="cnt-justif" maxlength="200" placeholder="ex. appoint remis au trésorier, erreur de rendu monnaie…" onchange="dirty();recalc()" oninput="dirty()">
       </div>
     </div>
   </div>
@@ -4833,6 +4877,107 @@ function copySyncError() {
   }
 }
 
+// ══ NUMEROTATION DES PIECES ════════════════════════════════════════════════
+// Chaque culte enregistre recoit un numero de piece de l'annee (2026-0001),
+// attribue une fois pour toutes. C'est lui qui sert de reference dans le
+// journal comptable : une reference recalculee a chaque export, comme c'etait
+// le cas jusqu'ici, ne vaut rien comme piste d'audit — inserer un culte ancien
+// decalait toutes les references des pieces suivantes.
+//
+// La sequence est tenue par une transaction Firestore, seule facon d'eviter
+// que deux postes attribuent le meme numero. Hors ligne, on attribue au mieux
+// a partir de l'historique connu et on marque le numero provisoire : le
+// controle de sequence (Administration) affiche ensuite doublons et trous.
+
+// Meme calcul que _dernierePieceLocale, mais sur l'historique du navigateur :
+// hors Firebase, gHistCache peut etre vide alors que des cultes sont stockes.
+function _dernierePieceHistLocal(annee) {
+  var max = 0, h;
+  try { h = JSON.parse(localStorage.getItem("ecc_hist") || "[]"); } catch (e) { h = []; }
+  (h || []).forEach(function(x) {
+    var pc = x && x.meta && x.meta.piece;
+    if (!pc || String(pc).substring(0, 4) !== annee) return;
+    var n = parseInt(String(pc).substring(5), 10) || 0;
+    if (n > max) max = n;
+  });
+  return max;
+}
+
+function _anneeDe(dateStr) {
+  var a = String(dateStr || "").substring(0, 4);
+  return /^[0-9]{4}$/.test(a) ? a : String(new Date().getFullYear());
+}
+
+function _formatPiece(annee, n) {
+  var v = String(n);
+  while (v.length < 4) v = "0" + v;
+  return annee + "-" + v;
+}
+
+// Plus grand numero deja attribue pour l'annee, d'apres le cache d'historique.
+function _dernierePieceLocale(annee) {
+  var max = 0;
+  (gHistCache || []).forEach(function(h) {
+    var pc = h && h.meta && h.meta.piece;
+    if (!pc || String(pc).substring(0, 4) !== annee) return;
+    var n = parseInt(String(pc).substring(5), 10) || 0;
+    if (n > max) max = n;
+  });
+  return max;
+}
+
+function _attribuerPiece(dateStr, cb) {
+  var annee = _anneeDe(dateStr), fini = false;
+  function local() { cb({ piece: _formatPiece(annee, _dernierePieceLocale(annee) + 1), provisoire: true }); }
+  if (!IS_CONFIGURED || !gDb || typeof gDb.runTransaction !== "function") { local(); return; }
+  // Une transaction ne se resout pas hors ligne : au-dela de 5 s, on n'attend
+  // pas le reseau pour laisser le tresorier enregistrer son culte.
+  var minuteur = setTimeout(function() { if (!fini) { fini = true; local(); } }, 5000);
+  var ref = gDb.collection("config").doc("compteurs");
+  gDb.runTransaction(function(tx) {
+    return tx.get(ref).then(function(doc) {
+      var d = (doc.exists && doc.data()) || {};
+      var pieces = d.pieces || {};
+      var n = (parseInt(pieces[annee], 10) || 0) + 1;
+      // Ne jamais reculer sous ce que l'historique connu contient deja : un
+      // compteur en retard ne doit pas reattribuer un numero existant.
+      var loc = _dernierePieceLocale(annee) + 1;
+      if (loc > n) n = loc;
+      pieces[annee] = n;
+      tx.set(ref, { pieces: pieces }, { merge: true });
+      return n;
+    });
+  }).then(function(n) {
+    if (fini) return; fini = true; clearTimeout(minuteur);
+    cb({ piece: _formatPiece(annee, n), provisoire: false });
+  }).catch(function() {
+    if (fini) return; fini = true; clearTimeout(minuteur);
+    local();
+  });
+}
+
+// Une modification conserve le numero du culte d'origine : renumeroter une
+// piece deja comptabilisee casserait la reference du journal.
+function _preparerPiece(data, suite) {
+  if (data.meta && data.meta.piece) { suite(); return; }
+  if (gEditingHistId) {
+    var src = null, liste = (gHistLastFiltered && gHistLastFiltered.length) ? gHistLastFiltered : (gHistCache || []);
+    for (var i = 0; i < liste.length; i++) {
+      if (liste[i] && liste[i].id === gEditingHistId) { src = liste[i]; break; }
+    }
+    if (src && src.meta && src.meta.piece) {
+      data.meta.piece = src.meta.piece;
+      if (src.meta.pieceProv) data.meta.pieceProv = true;
+      suite(); return;
+    }
+  }
+  _attribuerPiece(data.meta && data.meta.date, function(r) {
+    data.meta.piece = r.piece;
+    if (r.provisoire) data.meta.pieceProv = true;
+    suite();
+  });
+}
+
 function saveToHistory() {
   if (!IS_CONFIGURED) {
     saveToHistLocal();
@@ -4840,6 +4985,10 @@ function saveToHistory() {
     return;
   }
   var data = captureState();
+  _preparerPiece(data, function() { _saveToHistoryAvecPiece(data); });
+}
+
+function _saveToHistoryAvecPiece(data) {
   var dateStr = (data.meta.date || "").replace(/-/g, "");
   var baseId = "hist_" + dateStr;
 
@@ -4969,6 +5118,13 @@ function saveToStorage() {
 
 function saveToHistLocal() {
   var data = captureState();
+  // Hors Firebase, la sequence ne peut etre que locale : elle est marquee
+  // provisoire pour que le controle de sequence la signale.
+  if (!data.meta.piece) {
+    var _an = _anneeDe(data.meta.date);
+    data.meta.piece = _formatPiece(_an, Math.max(_dernierePieceLocale(_an), _dernierePieceHistLocal(_an)) + 1);
+    data.meta.pieceProv = true;
+  }
   var hist = getHistLocal();
   var idx = -1;
   for (var i = 0; i < hist.length; i++) {
@@ -5201,6 +5357,58 @@ function recalc() {
   setEl("ss-fr-c",fmt(fr.cdf)+" CDF");setEl("ss-fr-u",fmt(fr.usd)+" USD");
   setEl("ss-co-c",fmt(co.cdf)+" CDF");setEl("ss-co-u",fmt(co.usd)+" USD");
   setEl("ss-ot-c",fmt(ot.cdf)+" CDF");setEl("ss-ot-u",fmt(ot.usd)+" USD");
+  _majEcartCaisse(fCDF,fUSD,t);
+}
+
+// ══ ARRETE DE CAISSE ═══════════════════════════════════════════════════════
+// Le solde final est un calcul ; la caisse comptee est un fait. L'ecart entre
+// les deux est l'information de controle : il n'est pas absorbe en silence, il
+// est affiche et doit etre justifie avant enregistrement.
+
+// Tolerance : 1 FC et 1 cent, de quoi absorber un arrondi de saisie sans
+// laisser passer un manquant reel.
+var CAISSE_TOL_CDF = 1, CAISSE_TOL_USD = 0.01;
+
+function _caisseComptee() {
+  var eC = document.getElementById("cnt-cdf"), eU = document.getElementById("cnt-usd");
+  var sC = eC ? String(eC.value).trim() : "", sU = eU ? String(eU.value).trim() : "";
+  return {
+    saisi: !!(sC || sU),
+    cdf: parseFloat(sC) || 0,
+    usd: parseFloat(sU) || 0,
+    justif: ((document.getElementById("cnt-justif") || {}).value || "").trim()
+  };
+}
+
+// Renvoie null si la caisse n'a pas ete comptee : on ne fabrique pas un ecart
+// de zero a partir d'une absence de comptage.
+function _ecartCaisse(fCDF, fUSD) {
+  var c = _caisseComptee();
+  if (!c.saisi) return null;
+  var e = { cdf: c.cdf - fCDF, usd: c.usd - fUSD, justif: c.justif,
+            compteCDF: c.cdf, compteUSD: c.usd, theoCDF: fCDF, theoUSD: fUSD };
+  e.nul = Math.abs(e.cdf) < CAISSE_TOL_CDF && Math.abs(e.usd) < CAISSE_TOL_USD;
+  return e;
+}
+
+function _majEcartCaisse(fCDF, fUSD, t) {
+  var box = document.getElementById("cnt-ecart"), jb = document.getElementById("cnt-justif-box");
+  if (!box) return;
+  var e = _ecartCaisse(fCDF, fUSD);
+  if (!e) { box.style.display = "none"; if (jb) jb.style.display = "none"; return; }
+  box.style.display = "block";
+  box.className = "cnt-ecart " + (e.nul ? "ok" : "ko");
+  if (e.nul) {
+    box.textContent = "Caisse juste : le comptage correspond au solde final th\u00e9orique.";
+  } else {
+    var eq = e.cdf + e.usd * (t || getTaux());
+    box.textContent = "\u00c9cart de caisse : " + fmt(e.cdf) + " CDF"
+      + (e.usd ? " et " + fmt(e.usd) + " USD" : "")
+      + " \u2014 " + (eq > 0 ? "exc\u00e9dent" : "manquant") + " de " + fmt(Math.abs(eq))
+      + " CDF en \u00e9quivalent. Th\u00e9orique " + fmt(e.theoCDF) + " CDF / " + fmt(e.theoUSD)
+      + " USD, compt\u00e9 " + fmt(e.compteCDF) + " CDF / " + fmt(e.compteUSD) + " USD.";
+  }
+  if (jb) jb.style.display = e.nul ? "none" : "block";
 }
 
 // == DIRTY / SAVE ==
@@ -5281,7 +5489,11 @@ function captureState() {
     resp:document.getElementById("meta-resp").value,
     taux:document.getElementById("taux").value,
     repCDF:document.getElementById("rep-cdf").value,
-    repUSD:document.getElementById("rep-usd").value
+    repUSD:document.getElementById("rep-usd").value,
+    // Arrêté de caisse : le comptage et sa justification font partie de la pièce.
+    cntCDF:((document.getElementById("cnt-cdf")||{}).value)||"",
+    cntUSD:((document.getElementById("cnt-usd")||{}).value)||"",
+    justifEcart:(((document.getElementById("cnt-justif")||{}).value)||"").trim()
   };
   function captRows(cid,isRec) {
     var res=[]; var c=document.getElementById(cid); if(!c)return res;
@@ -5308,8 +5520,8 @@ function captureState() {
 function restoreState(data) {
   if(!data)return; clearRows();
   var m=data.meta||{};
-  var fields=["meta-date","eff-cf","eff-cl","eff-eco","meta-resp","taux","rep-cdf","rep-usd"];
-  var keys=["date","effCF","effCL","effEco","resp","taux","repCDF","repUSD"];
+  var fields=["meta-date","eff-cf","eff-cl","eff-eco","meta-resp","taux","rep-cdf","rep-usd","cnt-cdf","cnt-usd","cnt-justif"];
+  var keys=["date","effCF","effCL","effEco","resp","taux","repCDF","repUSD","cntCDF","cntUSD","justifEcart"];
   for(var i=0;i<fields.length;i++){var el=document.getElementById(fields[i]);if(el)el.value=m[keys[i]]||"";}
   var j;
   if(data.cf)for(j=0;j<data.cf.length;j++)addRec("cf","CF",data.cf[j].l,data.cf[j].cdf,data.cf[j].usd,data.cf[j].n);
@@ -5386,6 +5598,26 @@ function runValidation() {
     successes.push("Dépenses supérieures aux recettes du jour (" + fmt(dTotal)
       + " contre " + fmt(rTotal) + "), couvertes par le solde reporté. Nouveau solde : "
       + fmt(nouveauSolde) + " CDF.");
+  }
+
+  // ── Arrêté de caisse ──────────────────────────────────────────────────────
+  // Sans comptage, le solde final n'est qu'une théorie : on le dit, sans bloquer.
+  // Avec comptage, un écart non justifié bloque l'enregistrement.
+  var fCDFv = (cf.cdf + cl.cdf) - (cm.cdf + fr.cdf + co.cdf + ot.cdf) + repCDF;
+  var fUSDv = (cf.usd + cl.usd) - (cm.usd + fr.usd + co.usd + ot.usd) + repUSD;
+  var ec = _ecartCaisse(fCDFv, fUSDv);
+  var _libEcart = ec ? (fmt(ec.cdf) + " CDF" + (ec.usd ? " et " + fmt(ec.usd) + " USD" : "")) : "";
+  if (!ec) {
+    warnings.push("Caisse non comptée : l'arrêté de caisse n'a pas été fait, le solde final de "
+      + fmt(fCDFv) + " CDF reste une théorie non vérifiée.");
+  } else if (ec.nul) {
+    successes.push("Caisse comptée et juste : " + fmt(ec.compteCDF) + " CDF / "
+      + fmt(ec.compteUSD) + " USD.");
+  } else if (!ec.justif) {
+    errors.push("Écart de caisse de " + _libEcart
+      + " non justifié. Renseignez la justification sous l'arrêté de caisse avant d'enregistrer.");
+  } else {
+    warnings.push("Écart de caisse de " + _libEcart + ", justifié : « " + ec.justif + " ».");
   }
 
   // ── Continuité du solde reporté ───────────────────────────────────────────
@@ -5666,7 +5898,9 @@ function _displayFilteredHistory(hist, from, to) {
     var sd=h.savedAt?(typeof h.savedAt==="string"?h.savedAt.substring(0,16).replace("T"," "):""):"-";
     var hId = h.id || "";
     html+="<div class='hist-item'>";
-    html+="<div class='hi-date'>"+(m.date||"-")+"</div>";
+    var _pc = m.piece ? ("<span class='hi-piece"+(m.pieceProv?" prov":"")+"' title='"
+      +(m.pieceProv?"Numéro provisoire attribué hors ligne":"Numéro de pièce")+"'>"+escH(m.piece)+"</span>") : "";
+    html+="<div class='hi-date'>"+(m.date||"-")+_pc+"</div>";
     html+="<div class='hi-meta'>CF:"+(m.effCF||0)+" CL:"+(m.effCL||0)+" | "+sd+"</div>";
     html+="<div class='hi-amounts'><span class='hi-rec'>Rec. "+fmt(sv.rCDF||0)+" CDF</span><span class='"+cls+"'>Solde "+fmt(nEq)+" CDF</span></div>";
     html+="<div class='hi-actions'><button class='btn btn-o btn-sm' onclick='loadHist(\""+hId+"\")'>Charger</button><button class='btn btn-d btn-sm' onclick='delHist(\""+hId+"\")'>Suppr.</button></div>";
@@ -6441,7 +6675,7 @@ function dlCSV(){
 // Vide le formulaire après une sauvegarde réussie (sans confirmation, données déjà dans l'historique)
 function resetFormAfterSave() {
   clearRows(); initDefaults();
-  var fields2=["eff-cf","eff-cl","eff-eco","meta-resp","rep-cdf","rep-usd"];
+  var fields2=["eff-cf","eff-cl","eff-eco","meta-resp","rep-cdf","rep-usd","cnt-cdf","cnt-usd","cnt-justif"];
   for(var i=0;i<fields2.length;i++){var el2=document.getElementById(fields2[i]);if(el2)el2.value="";}
   var md=document.getElementById("meta-date");if(md)md.value=getTodayStr();
   gEditingHistId = null;
@@ -6457,7 +6691,7 @@ function resetAll(){
   showModal("Nouveau formulaire ?","Les donnees actuelles seront effacees.",function(){
     clearRows();initDefaults();
     gEditingHistId = null; // Nouveau culte : ne pas écraser l'ancien précédemment chargé
-    var fields2=["meta-date","eff-cf","eff-cl","eff-eco","meta-resp","rep-cdf","rep-usd"];
+    var fields2=["meta-date","eff-cf","eff-cl","eff-eco","meta-resp","rep-cdf","rep-usd","cnt-cdf","cnt-usd","cnt-justif"];
     for(var i=0;i<fields2.length;i++){var el2=document.getElementById(fields2[i]);if(el2)el2.value="";}
     document.getElementById("meta-date").value=getTodayStr();
     _afficherRubriquesFin(); // Une date (aujourd'hui) est pré-remplie : afficher les rubriques
@@ -6561,6 +6795,76 @@ function _rubriquesConnues() {
     ["cm","fr","co","ot"].forEach(function(k){ (h[k] || []).forEach(function(r){ if (r && r.l) dep[r.l] = true; }); });
   });
   return { recettes: Object.keys(rec).sort(), depenses: Object.keys(dep).sort() };
+}
+
+// ══ CONTROLE DE SEQUENCE DES PIECES ════════════════════════════════════════
+// Une numerotation ne vaut que si elle est continue et sans doublon. Ce
+// controle ne corrige rien : il expose ce qui manque, ce qui se repete et ce
+// qui reste provisoire, pour que la decision revienne au comptable.
+function _analyserPieces() {
+  var parAnnee = {}, sansNum = [];
+  (gHistCache || []).forEach(function(h) {
+    var m = (h && h.meta) || {}, pc = m.piece;
+    if (!pc) { sansNum.push(m.date || "date inconnue"); return; }
+    var an = String(pc).substring(0, 4), n = parseInt(String(pc).substring(5), 10) || 0;
+    if (!parAnnee[an]) parAnnee[an] = { nums: {}, prov: [], max: 0, total: 0 };
+    var a = parAnnee[an];
+    if (!a.nums[n]) a.nums[n] = [];
+    a.nums[n].push(m.date || "?");
+    if (m.pieceProv) a.prov.push(pc);
+    if (n > a.max) a.max = n;
+    a.total++;
+  });
+  var res = [];
+  Object.keys(parAnnee).sort().forEach(function(an) {
+    var a = parAnnee[an], trous = [], doublons = [];
+    for (var n = 1; n <= a.max; n++) {
+      if (!a.nums[n]) trous.push(_formatPiece(an, n));
+      else if (a.nums[n].length > 1) doublons.push(_formatPiece(an, n) + " (" + a.nums[n].join(", ") + ")");
+    }
+    res.push({ annee: an, total: a.total, max: a.max, trous: trous, doublons: doublons, prov: a.prov });
+  });
+  return { annees: res, sansNum: sansNum };
+}
+
+function _carteControlePieces() {
+  var a = _analyserPieces();
+  var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F5C2}\uFE0F Contr\u00f4le de s\u00e9quence des pi\u00e8ces</div>';
+  if (!a.annees.length && !a.sansNum.length) {
+    return h + '<p style="font-size:.76rem;color:var(--muted)">Aucun culte dans le cache d\'historique.</p>';
+  }
+  h += '<p style="font-size:.74rem;color:var(--muted);margin-bottom:9px;line-height:1.45">'
+     + 'Chaque culte enregistr\u00e9 porte un num\u00e9ro de pi\u00e8ce de l\'ann\u00e9e, qui sert de r\u00e9f\u00e9rence dans le journal. '
+     + 'Ce contr\u00f4le porte sur les cultes charg\u00e9s en cache.</p>';
+
+  a.annees.forEach(function(x) {
+    var sain = !x.trous.length && !x.doublons.length && !x.prov.length;
+    h += '<div class="ctrl-piece' + (sain ? " ok" : " ko") + '">';
+    h += '<div class="cp-tete"><strong>' + escH(x.annee) + '</strong> \u2014 ' + x.total
+       + ' pi\u00e8ce(s), derni\u00e8re ' + escH(_formatPiece(x.annee, x.max)) + '</div>';
+    if (sain) {
+      h += '<div class="cp-l">S\u00e9quence continue, sans doublon ni num\u00e9ro provisoire.</div>';
+    } else {
+      if (x.doublons.length) h += '<div class="cp-l cp-e"><strong>Doublons (' + x.doublons.length
+        + ')</strong> : ' + escH(x.doublons.join(" \u00b7 ")) + '. Deux cultes portent la m\u00eame r\u00e9f\u00e9rence : le journal les confondra.</div>';
+      if (x.trous.length) h += '<div class="cp-l cp-w"><strong>Num\u00e9ros manquants (' + x.trous.length
+        + ')</strong> : ' + escH(x.trous.slice(0, 25).join(", "))
+        + (x.trous.length > 25 ? "\u2026" : "")
+        + '. Culte supprim\u00e9, non encore synchronis\u00e9, ou hors du cache charg\u00e9.</div>';
+      if (x.prov.length) h += '<div class="cp-l cp-w"><strong>Num\u00e9ros provisoires (' + x.prov.length
+        + ')</strong> : ' + escH(x.prov.join(", "))
+        + '. Attribu\u00e9s sans acc\u00e8s au compteur central \u2014 \u00e0 v\u00e9rifier contre les doublons ci-dessus.</div>';
+    }
+    h += '</div>';
+  });
+
+  if (a.sansNum.length) {
+    h += '<div class="ctrl-piece ko"><div class="cp-tete"><strong>Sans num\u00e9ro (' + a.sansNum.length + ')</strong></div>'
+       + '<div class="cp-l">Cultes ant\u00e9rieurs \u00e0 la num\u00e9rotation : ' + escH(a.sansNum.slice(0, 20).join(", "))
+       + (a.sansNum.length > 20 ? "\u2026" : "")
+       + '. Ils sortent du journal avec une r\u00e9f\u00e9rence \u00ab s/n \u00bb. Recharger puis r\u00e9enregistrer un culte lui attribue un num\u00e9ro.</div></div>';
+  }
+  return h;
 }
 
 function _carteSycebnl() {
@@ -6924,7 +7228,11 @@ function exporterJournalSycebnl() {
     var date = (h.meta && h.meta.date) || "";
     var taux = parseFloat(h.meta && h.meta.taux) || getTaux();
     piece++;
-    var ref = "C" + String(piece).padStart(4, "0");
+    // La reference de la piece est celle attribuee a l'enregistrement du culte.
+    // Repli sur un rang d'export pour les cultes anterieurs a la numerotation :
+    // prefixe "s/n" pour qu'on ne les confonde pas avec une piece numerotee.
+    var ref = (h.meta && h.meta.piece) ? h.meta.piece
+            : ("s/n-" + String(piece).padStart(4, "0"));
 
     function ecrire(rub, mtCDF, mtUSD, sens) {
       var brutCDF = parseFloat(String(mtCDF).replace(",", ".")) || 0;
@@ -7226,6 +7534,7 @@ function renderAdmin(){
   html += "<div id='audit-zone'></div>";
 
   html += _carteClotures();
+  html += _carteControlePieces();
   html += _carteSycebnl();
   var ab=document.getElementById("admin-body-mod");if(ab)ab.innerHTML=html;
 
