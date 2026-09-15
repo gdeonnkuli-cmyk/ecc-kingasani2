@@ -4400,7 +4400,80 @@ function doLogin() {
     });
 }
 
+// ═══ CLÔTURE DE PÉRIODE ═══════════════════════════════════════════════════
+// Un mois clôturé n'accepte plus d'écriture dans l'historique. Le verrou est
+// déclaré dans config/clotures, avec un repli local pour rester fiable hors
+// réseau. Réouverture réservée à l'administrateur, et tracée.
+var gClotures = {};   // { "2026-08": {le:"…", par:"email"} }
+
+function _moisDe(dateStr) { return String(dateStr || "").slice(0, 7); }
+
+function estMoisCloture(dateStr) {
+  var m = _moisDe(dateStr);
+  return !!(m && gClotures[m]);
+}
+
+function _clotureLabel(ym) {
+  var MOIS = ["janvier","février","mars","avril","mai","juin","juillet",
+              "août","septembre","octobre","novembre","décembre"];
+  var p = String(ym || "").split("-");
+  return (MOIS[parseInt(p[1], 10) - 1] || ym) + " " + (p[0] || "");
+}
+
+function chargerClotures(cb) {
+  try { gClotures = JSON.parse(localStorage.getItem("ecc_clotures") || "{}"); } catch(e) { gClotures = {}; }
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(); return; }
+  gDb.collection("config").doc("clotures").get()
+    .then(function(doc) {
+      if (doc.exists && doc.data() && doc.data().mois) {
+        gClotures = doc.data().mois;
+        try { localStorage.setItem("ecc_clotures", JSON.stringify(gClotures)); } catch(e) {}
+      }
+      if (cb) cb();
+    })
+    .catch(function() { if (cb) cb(); });   // hors ligne : le repli local fait foi
+}
+
+function _enregistrerClotures(cb) {
+  try { localStorage.setItem("ecc_clotures", JSON.stringify(gClotures)); } catch(e) {}
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(); return; }
+  gDb.collection("config").doc("clotures").set({ mois: gClotures }, { merge: true })
+    .then(function() { if (cb) cb(); })
+    .catch(function(e) { showSyncError(e, "enregistrement des clôtures"); if (cb) cb(); });
+}
+
+function cloturerMois(ym) {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.", "err"); return; }
+  showModal("Clôturer " + _clotureLabel(ym) + " ?",
+    "Après clôture, plus aucun culte de ce mois ne pourra être enregistré ni supprimé. Vous pourrez rouvrir le mois si nécessaire.",
+    function() {
+      gClotures[ym] = { le: new Date().toISOString(), par: gCurrentUser.email || "" };
+      _enregistrerClotures(function() {
+        closeModal();
+        showToast(_clotureLabel(ym) + " clôturé.", "ok");
+        if (typeof logAudit === "function") logAudit("CLOTURE", "Finances", "Clôture de " + ym);
+        renderAdmin();
+      });
+    });
+}
+
+function rouvrirMois(ym) {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.", "err"); return; }
+  showModal("Rouvrir " + _clotureLabel(ym) + " ?",
+    "Le mois redeviendra modifiable. Cette réouverture est inscrite au journal d'audit.",
+    function() {
+      delete gClotures[ym];
+      _enregistrerClotures(function() {
+        closeModal();
+        showToast(_clotureLabel(ym) + " rouvert.", "warn");
+        if (typeof logAudit === "function") logAudit("REOUVERTURE", "Finances", "Réouverture de " + ym);
+        renderAdmin();
+      });
+    });
+}
+
 function launchAppFin() {
+  chargerClotures();
   launchApp();
 }
 
@@ -5204,6 +5277,14 @@ function runValidation() {
   var dTotal=cm.cdf+fr.cdf+co.cdf+ot.cdf+(cm.usd+fr.usd+co.usd+ot.usd)*t;
   var solde=rTotal-dTotal;
   if(!date)errors.push("La date est obligatoire.");
+  // Un mois clôturé n'accepte plus d'écriture. Contrôle placé ici : c'est le
+  // passage obligé avant tout enregistrement dans l'historique.
+  if(date && estMoisCloture(date)){
+    var _c = gClotures[_moisDe(date)] || {};
+    errors.push("Le mois de " + _clotureLabel(_moisDe(date)) + " est clôturé"
+      + (_c.par ? " par " + _c.par : "")
+      + ". Pour enregistrer ce culte, un administrateur doit d'abord rouvrir le mois (Administration).");
+  }
   if(!resp)errors.push("Le responsable est obligatoire.");
   if(effCF===0&&effCL===0)errors.push("Effectif CF ou CL requis.");
   if(rTotal===0)errors.push("Aucune recette saisie.");
@@ -5681,6 +5762,15 @@ function loadHist(id) {
 }
 
 function delHist(id) {
+  var _h0 = _findHistById(id);
+  var _d0 = _h0 && _h0.meta ? _h0.meta.date : "";
+  if (_d0 && estMoisCloture(_d0)) {
+    showModal("Mois clôturé",
+      "Le culte du " + escH(_d0) + " appartient à " + _clotureLabel(_moisDe(_d0))
+      + ", qui est clôturé. Un administrateur doit rouvrir le mois pour pouvoir le supprimer.",
+      function(){ closeModal(); });
+    return;
+  }
   showModal("Supprimer cette entree ?","Action irreversible.",function(){
     var h = _findHistById(id);
     if(IS_CONFIGURED && id){
@@ -6353,6 +6443,50 @@ function autoFillSoldeReporte(callback) {
 }
 
 // == ADMIN ==
+// Carte d'administration : état de clôture des douze derniers mois présents
+// dans l'historique, avec le nombre de cultes et le total de chacun.
+function _carteClotures() {
+  var hist = gHistCache || [];
+  var parMois = {};
+  for (var i = 0; i < hist.length; i++) {
+    var d = (hist[i].meta && hist[i].meta.date) || "";
+    var ym = _moisDe(d);
+    if (!ym) continue;
+    if (!parMois[ym]) parMois[ym] = { n: 0, net: 0 };
+    parMois[ym].n++;
+    var sm = hist[i].sums || {};
+    var tx = parseFloat(hist[i].meta && hist[i].meta.taux) || getTaux();
+    parMois[ym].net += (sm.nCDF || 0) + (sm.nUSD || 0) * tx;
+  }
+  // Les mois clôturés sans culte doivent rester visibles pour être rouverts.
+  for (var k in gClotures) if (!parMois[k]) parMois[k] = { n: 0, net: 0 };
+
+  var mois = Object.keys(parMois).sort().reverse().slice(0, 12);
+  var h = '<div class="sec-lbl">Clôture de période</div>';
+  h += '<p style="font-size:.76rem;color:var(--muted);margin-bottom:8px">'
+     + 'Un mois clôturé n\'accepte plus aucun enregistrement ni suppression de culte. '
+     + 'La réouverture est possible et inscrite au journal d\'audit.</p>';
+  if (!mois.length) return h + '<p style="font-size:.78rem;color:var(--muted)">Aucun culte enregistré pour le moment.</p>';
+
+  h += '<table class="cotis-table"><thead><tr><th>Mois</th><th>Cultes</th>'
+     + '<th style="text-align:right">Net cumulé</th><th>État</th><th></th></tr></thead><tbody>';
+  for (var j = 0; j < mois.length; j++) {
+    var ym = mois[j], info = parMois[ym], clos = gClotures[ym];
+    h += '<tr>';
+    h += '<td style="font-weight:600">' + escH(_clotureLabel(ym)) + '</td>';
+    h += '<td>' + info.n + '</td>';
+    h += '<td style="text-align:right;font-family:DM Mono,monospace">' + fmt(Math.round(info.net)) + ' FC</td>';
+    h += clos
+      ? '<td><span class="status-badge sb-excommunier">🔒 Clôturé</span><div style="font-size:.66rem;color:var(--muted);margin-top:2px">'
+        + escH((clos.par || "")) + '</div></td>'
+        + '<td><button class="btn btn-sm btn-o" onclick="rouvrirMois(\'' + ym + '\')">Rouvrir</button></td>'
+      : '<td><span class="status-badge sb-actif">Ouvert</span></td>'
+        + '<td><button class="btn btn-sm btn-d" onclick="cloturerMois(\'' + ym + '\')">Clôturer</button></td>';
+    h += '</tr>';
+  }
+  return h + '</tbody></table>';
+}
+
 function renderAdmin(){
   if(!gCurrentUser||gCurrentUser.role!=="admin"){
     var ab=document.getElementById("admin-body-mod");
@@ -6537,6 +6671,7 @@ function renderAdmin(){
   html += "<div class='sec-lbl' style='margin-top:14px'>📋 Journal d'audit</div>";
   html += "<div id='audit-zone'></div>";
 
+  html += _carteClotures();
   var ab=document.getElementById("admin-body-mod");if(ab)ab.innerHTML=html;
 
   // Charger les zones dynamiques après rendu
