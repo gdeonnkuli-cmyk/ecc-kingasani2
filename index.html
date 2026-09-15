@@ -1550,8 +1550,50 @@ body{overscroll-behavior-y:contain}
    dessous ne force plus sa repeinture. */
 .app-header{will-change:transform;transform:translateZ(0)}
 
+/* ══ 19. SELECTEUR DE COMPTES SYCEBNL ══════════════════════════════════════
+   Le <datalist> natif n'affiche pas d'intitule lisible sur Android : on rend
+   la liste nous-memes, en position fixe pour rester au-dessus des tableaux
+   et des cartes mobiles. */
+.syc-wrap{position:relative;display:block}
+.syc-wrap .syc-chev{
+  position:absolute;right:1px;top:1px;bottom:1px;width:30px;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  color:var(--v3-muted,#6b88a4);font-size:.7rem;border-radius:0 6px 6px 0;
+  background:linear-gradient(90deg,rgba(255,255,255,0),rgba(255,255,255,.9) 40%);
+}
+body.dark-mode .syc-wrap .syc-chev{
+  background:linear-gradient(90deg,rgba(16,30,43,0),#16293a 40%);color:#9fc0dd;
+}
+.syc-wrap .syc-champ{padding-right:32px!important}
+.syc-pop{
+  position:fixed;display:none;z-index:12000;
+  background:var(--v3-surface,#fff);border:1px solid var(--v3-line,#c5d8ed);
+  border-radius:10px;box-shadow:0 12px 34px rgba(13,27,42,.26);
+  overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+}
+body.dark-mode .syc-pop{background:#16293a;border-color:#2a4257}
+.syc-pop .syc-opt{
+  padding:9px 11px;cursor:pointer;border-bottom:1px solid var(--v3-line,#eef2f6);
+  display:flex;flex-direction:column;gap:1px;
+}
+.syc-pop .syc-opt:last-child{border-bottom:none}
+.syc-pop .syc-opt b{font-family:DM Mono,monospace;font-size:.8rem;color:var(--v3-accent,#1f6fad)}
+.syc-pop .syc-opt span{font-size:.72rem;color:var(--v3-muted,#6b88a4);line-height:1.25}
+.syc-pop .syc-opt .syc-rg{
+  font-style:normal;font-family:inherit;font-size:.6rem;font-weight:700;
+  text-transform:uppercase;letter-spacing:.04em;color:#a06a00;
+  background:rgba(240,165,0,.14);border-radius:4px;padding:1px 5px;margin-left:5px;
+}
+body.dark-mode .syc-pop .syc-opt .syc-rg{color:#e8c97e;background:rgba(232,201,126,.14)}
+.syc-pop .syc-opt.on,.syc-pop .syc-opt:active{background:rgba(31,111,173,.12)}
+body.dark-mode .syc-pop .syc-opt b{color:#e8c97e}
+body.dark-mode .syc-pop .syc-opt{border-bottom-color:#22374a}
+body.dark-mode .syc-pop .syc-opt.on,body.dark-mode .syc-pop .syc-opt:active{background:#1f3a52}
+.syc-pop .syc-vide{padding:11px;font-size:.73rem;color:var(--v3-muted,#6b88a4);line-height:1.4}
+#syc-etat{font-size:.7rem;color:var(--v3-muted,#6b88a4);margin-top:7px;min-height:1em}
+
 @media print{
-  #v3-top,#v3-cmdk,#v3-cmdk-btn,.module-bar,.toast,#notif-panel{display:none!important}
+  #v3-top,#v3-cmdk,#v3-cmdk-btn,.module-bar,.toast,#notif-panel,.syc-pop{display:none!important}
   .card{box-shadow:none!important;border:1px solid #ccc!important}
   .card-hdr{background:#f0f0f0!important}
   .card-hdr h2,.badge{color:#000!important}
@@ -6530,13 +6572,24 @@ function _carteSycebnl() {
   var h = '<div class="sec-lbl">Correspondance comptable SYCEBNL</div>';
   h += '<p style="font-size:.76rem;color:var(--muted);margin-bottom:9px">'
      + 'Les numéros proviennent de votre plan de comptes SYCEBNL officiel : saisissez-les ici. '
-     + 'L\'application ne propose aucun numéro — un compte inexact sur une pièce comptable vaut moins que pas de compte du tout. '
+     + 'Tapez un chiffre (7 pour les ressources, 6 pour les emplois) ou un mot de l\'intitulé : '
+     + 'les comptes du plan correspondants s\'affichent, vous en sélectionnez un, et il reste le compte par défaut de la rubrique jusqu\'à ce que vous le changiez. '
      + '<strong>' + faits + ' / ' + tot + ' rubriques renseignées.</strong></p>';
+  function champTres(id, lbl, val) {
+    return '<div class="fg"><label>' + lbl + '</label>'
+      + '<div class="syc-wrap"><input type="text" class="syc-champ" id="' + id + '" data-type="T" value="'
+      + escH(val || "") + '" placeholder="tapez 5\u2026"'
+      + ' autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="text"'
+      + ' onfocus="_sycOuvrir(this)" oninput="_majLibelleCompte(this);_sycOuvrir(this)"'
+      + ' onkeydown="_sycClavier(this,event)" onblur="_sycBlur(this)">'
+      + '<span class="syc-chev" onmousedown="event.preventDefault()" onclick="_sycChevron(this)">\u25be</span></div>'
+      + '<div class="syc-lib" style="font-size:.66rem;color:var(--muted);margin-top:2px">'
+      + escH(SYCEBNL_COMPTES[val] || "") + '</div></div>';
+  }
   h += '<div class="mgrid" style="margin-bottom:10px">'
-     + '<div class="fg"><label>Compte de trésorerie CDF</label><input type="text" id="syc-tres-cdf" value="'
-       + escH(gSycebnl.tresCDF || "") + '" placeholder="ex. 57.."></div>'
-     + '<div class="fg"><label>Compte de trésorerie USD</label><input type="text" id="syc-tres-usd" value="'
-       + escH(gSycebnl.tresUSD || "") + '" placeholder="ex. 57.."></div></div>';
+     + champTres("syc-tres-cdf", "Compte de trésorerie CDF", gSycebnl.tresCDF)
+     + champTres("syc-tres-usd", "Compte de trésorerie USD", gSycebnl.tresUSD)
+     + '</div>';
 
   function tableau(titre, liste, type) {
     if (!liste.length) return "";
@@ -6544,8 +6597,13 @@ function _carteSycebnl() {
     t += '<table class="cotis-table syc-table"><thead><tr><th>Rubrique</th><th style="width:140px">Compte SYCEBNL</th></tr></thead><tbody>';
     liste.forEach(function(l) {
       t += '<tr><td style="font-size:.78rem">' + escH(l) + '</td>'
-         + '<td><input type="text" class="syc-compte" list="syc-plan" data-rubrique="' + escH(l) + '" data-type="' + type + '" value="'
-         + escH(gSycebnl.comptes[l] || "") + '" oninput="_majLibelleCompte(this)" style="width:100%;padding:5px 7px;border:1.5px solid var(--border);border-radius:6px;font-family:DM Mono,monospace;font-size:.76rem">'
+         + '<td><div class="syc-wrap"><input type="text" class="syc-compte syc-champ" data-rubrique="' + escH(l) + '" data-type="' + type + '" value="'
+         + escH(gSycebnl.comptes[l] || "") + '" placeholder="' + (type === "R" ? "7\u2026" : "6\u2026") + ' ou un mot"'
+         + ' autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="text"'
+         + ' onfocus="_sycOuvrir(this)" oninput="_majLibelleCompte(this);_sycOuvrir(this)"'
+         + ' onkeydown="_sycClavier(this,event)" onblur="_sycBlur(this)"'
+         + ' style="width:100%;padding:5px 7px;border:1.5px solid var(--border);border-radius:6px;font-family:DM Mono,monospace;font-size:.76rem">'
+         + '<span class="syc-chev" onmousedown="event.preventDefault()" onclick="_sycChevron(this)">\u25be</span></div>'
          + '<div class="syc-lib" style="font-size:.66rem;color:var(--muted);margin-top:2px">'
          + escH(SYCEBNL_COMPTES[gSycebnl.comptes[l]] || "") + '</div></td></tr>';
     });
@@ -6553,11 +6611,7 @@ function _carteSycebnl() {
   }
   h += tableau("Ressources (recettes)", rub.recettes, "R");
   h += tableau("Emplois (dépenses)", rub.depenses, "D");
-  h += '<datalist id="syc-plan">';
-  Object.keys(SYCEBNL_COMPTES).sort().forEach(function(n){
-    h += '<option value="' + n + '">' + escH(n + ' — ' + SYCEBNL_COMPTES[n]) + '</option>';
-  });
-  h += '</datalist>';
+  h += '<div id="syc-etat"></div>';
   h += '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
      + '<button class="btn btn-sm btn-o" onclick="proposerSycebnl()">Proposer une correspondance</button>'
      + '<button class="btn btn-sm btn-p" onclick="enregistrerSycebnl()">Enregistrer la correspondance</button>'
@@ -6568,8 +6622,252 @@ function _carteSycebnl() {
 // Affiche l'intitulé officiel sous le champ, pour vérifier d'un coup d'œil
 // qu'on a saisi le compte qu'on croit.
 function _majLibelleCompte(input) {
-  var d = input.parentNode.querySelector(".syc-lib");
+  var p = input.parentNode;
+  if (p && p.className === "syc-wrap") p = p.parentNode;
+  var d = p && p.querySelector ? p.querySelector(".syc-lib") : null;
   if (d) d.textContent = SYCEBNL_COMPTES[(input.value || "").trim()] || "";
+}
+
+// ══ SELECTEUR DE COMPTES SYCEBNL ═══════════════════════════════════════════
+// Le <datalist> natif n'affiche pas les intitules de facon fiable sur Android :
+// on rend la liste soi-meme. Taper un chiffre montre les comptes du plan qui
+// commencent par ce chiffre, taper des lettres cherche dans l'intitule. La
+// selection est appliquee et memorisee aussitot : elle devient le compte par
+// defaut de la rubrique jusqu'a modification.
+var _sycPop = null, _sycChamp = null, _sycIdx = -1, _sycTimer = null;
+
+function _sycNorm(s) {
+  s = (s == null ? "" : String(s)).toLowerCase();
+  try { s = s.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); } catch (e) {}
+  return s;
+}
+
+// type R = ressources (classe 7), D = emplois (classe 6), T = tresorerie (classe 5).
+// Sans saisie on montre d'emblee la classe pertinente : le comptable n'a pas a
+// deviner par quoi commencer.
+function _sycRecherche(q, type) {
+  var noms = Object.keys(SYCEBNL_COMPTES), res = [], i, n;
+  q = (q || "").trim();
+  var tok = "";
+  if (!q) {
+    var classes = type === "T" ? ["5"] : type === "R" ? ["7", "8"] : ["6", "8"];
+    for (i = 0; i < noms.length; i++) {
+      if (classes.indexOf(noms[i].charAt(0)) >= 0) res.push(noms[i]);
+    }
+  } else {
+    var toks = _sycNorm(q).split(/\s+/);
+    tok = toks[0] || "";
+    for (i = 0; i < noms.length; i++) {
+      n = noms[i];
+      var lib = _sycNorm(SYCEBNL_COMPTES[n]), ok = true;
+      for (var t = 0; t < toks.length; t++) {
+        var k = toks[t];
+        if (!k) continue;
+        if (n.indexOf(k) >= 0 || lib.indexOf(k) >= 0) continue;
+        ok = false; break;
+      }
+      if (ok) res.push(n);
+    }
+  }
+  var rang = {};
+  for (i = 0; i < res.length; i++) rang[res[i]] = _sycRang(res[i], tok, type);
+  res.sort(function(a, b) {
+    return rang[a] !== rang[b] ? rang[a] - rang[b] : (a < b ? -1 : a > b ? 1 : 0);
+  });
+  return res;
+}
+
+// Ordre d'affichage : d'abord le numero qui commence par la saisie, puis
+// l'intitule qui commence par elle, puis le reste. Les comptes de regroupement
+// (deux chiffres) ne se mouvementent pas : ils passent derriere les comptes
+// detailles, sauf si le comptable les a saisis exactement.
+function _sycRang(n, tok, type) {
+  var r = 2;
+  if (tok) {
+    if (n.indexOf(tok) === 0) r = 0;
+    else if (_sycNorm(SYCEBNL_COMPTES[n]).indexOf(tok) === 0) r = 1;
+  } else if (type === "T") {
+    // Pour la tresorerie d'une paroisse, la caisse puis la banque avant les
+    // titres de placement : c'est l'ordre dans lequel on les cherche.
+    var pref = ["57", "52", "53", "56", "58", "54", "55", "51", "50"];
+    var k = pref.indexOf(n.substring(0, 2));
+    r = k < 0 ? pref.length : k;
+  }
+  if (n.length <= 2 && n !== tok) r += 20;
+  return r;
+}
+
+function _sycRegroupement(n) { return String(n).length <= 2; }
+
+function _sycPanneau() {
+  if (_sycPop) return _sycPop;
+  var p = document.createElement("div");
+  p.className = "syc-pop";
+  p.id = "syc-pop";
+  p.setAttribute("role", "listbox");
+  // Empeche le champ de perdre le focus avant que le clic ne soit traite.
+  p.addEventListener("mousedown", function(e) { e.preventDefault(); });
+  p.addEventListener("click", function(e) {
+    var it = e.target;
+    while (it && it !== p && !(it.className && String(it.className).indexOf("syc-opt") >= 0)) it = it.parentNode;
+    if (it && it !== p) _sycChoisir(it.getAttribute("data-n"));
+  });
+  document.body.appendChild(p);
+  window.addEventListener("scroll", _sycPlacer, true);
+  window.addEventListener("resize", _sycPlacer);
+  _sycPop = p;
+  return p;
+}
+
+function _sycPlacer() {
+  if (!_sycPop || !_sycChamp || _sycPop.style.display !== "block") return;
+  var r = _sycChamp.getBoundingClientRect();
+  var larg = Math.max(240, Math.min(r.width, window.innerWidth - 16));
+  var basDispo = window.innerHeight - r.bottom - 8, hautDispo = r.top - 8;
+  var versLeHaut = basDispo < 170 && hautDispo > basDispo;
+  _sycPop.style.width = larg + "px";
+  _sycPop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - larg - 8)) + "px";
+  _sycPop.style.maxHeight = Math.max(110, Math.min(270, versLeHaut ? hautDispo : basDispo)) + "px";
+  if (versLeHaut) {
+    _sycPop.style.top = "auto";
+    _sycPop.style.bottom = (window.innerHeight - r.top + 4) + "px";
+  } else {
+    _sycPop.style.bottom = "auto";
+    _sycPop.style.top = (r.bottom + 4) + "px";
+  }
+}
+
+function _sycOuvrir(input) {
+  if (!input) return;
+  _sycChamp = input;
+  _sycIdx = -1;
+  var p = _sycPanneau();
+  var type = input.getAttribute("data-type") || "T";
+  var saisie = (input.value || "").trim();
+  var liste = _sycRecherche(saisie, type);
+  // La proposition liee a la rubrique est remontee en tete de liste.
+  var rub = input.getAttribute("data-rubrique");
+  var prop = rub ? SYCEBNL_PROPOSITIONS[rub] : "";
+  if (prop && SYCEBNL_COMPTES[prop]) {
+    var k = liste.indexOf(prop);
+    if (k > 0) { liste.splice(k, 1); liste.unshift(prop); }
+    else if (k < 0 && !saisie) liste.unshift(prop);
+  }
+  liste = liste.slice(0, 80);
+  if (!liste.length) {
+    p.innerHTML = '<div class="syc-vide">Aucun compte du plan SYCEBNL ne correspond \u00e0 \u00ab\u00a0' + escH(saisie)
+      + '\u00a0\u00bb. Vous pouvez saisir le num\u00e9ro \u00e0 la main s\'il figure dans votre plan.</div>';
+  } else {
+    var h = "";
+    for (var i = 0; i < liste.length; i++) {
+      h += '<div class="syc-opt" role="option" data-n="' + escH(liste[i]) + '"><b>' + escH(liste[i])
+         + (_sycRegroupement(liste[i]) ? ' <em class="syc-rg">regroupement</em>' : '')
+         + '</b><span>' + escH(SYCEBNL_COMPTES[liste[i]] || "") + '</span></div>';
+    }
+    p.innerHTML = h;
+  }
+  p.style.display = "block";
+  p.scrollTop = 0;
+  _sycPlacer();
+}
+
+function _sycFermer() {
+  if (_sycPop) _sycPop.style.display = "none";
+  _sycChamp = null;
+  _sycIdx = -1;
+}
+
+function _sycChevron(span) {
+  var w = span.parentNode, i = w ? w.querySelector(".syc-champ") : null;
+  if (!i) return;
+  if (_sycChamp === i && _sycPop && _sycPop.style.display === "block") { _sycFermer(); return; }
+  try { i.focus(); } catch (e) {}
+  _sycOuvrir(i);
+}
+
+function _sycChoisir(n) {
+  var inp = _sycChamp;
+  if (!inp || !n) return;
+  inp.value = n;
+  _majLibelleCompte(inp);
+  _sycFermer();
+  _sycMemoriser();
+  try { inp.blur(); } catch (e) {}
+}
+
+// Le champ suivant peut avoir deja ouvert son propre panneau : on ne ferme que
+// si le panneau appartient toujours au champ qui vient de perdre le focus.
+function _sycBlur(input) {
+  setTimeout(function() { if (_sycChamp === input) _sycFermer(); }, 160);
+  _sycMemoriser();
+}
+
+function _sycClavier(input, e) {
+  var ouvert = _sycPop && _sycPop.style.display === "block" && _sycChamp === input;
+  if (!ouvert) {
+    if (e.key === "ArrowDown") { e.preventDefault(); _sycOuvrir(input); }
+    return;
+  }
+  var opts = _sycPop.querySelectorAll(".syc-opt");
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    if (!opts.length) return;
+    _sycIdx += (e.key === "ArrowDown" ? 1 : -1);
+    if (_sycIdx < 0) _sycIdx = opts.length - 1;
+    if (_sycIdx >= opts.length) _sycIdx = 0;
+    for (var i = 0; i < opts.length; i++) {
+      if (i === _sycIdx) opts[i].className = "syc-opt on"; else opts[i].className = "syc-opt";
+    }
+    if (opts[_sycIdx].scrollIntoView) opts[_sycIdx].scrollIntoView({ block: "nearest" });
+  } else if (e.key === "Enter") {
+    if (_sycIdx >= 0 && opts[_sycIdx]) { e.preventDefault(); _sycChoisir(opts[_sycIdx].getAttribute("data-n")); }
+    else _sycFermer();
+  } else if (e.key === "Escape") {
+    _sycFermer();
+  }
+}
+
+// Lecture des champs affiches. Ne renvoie rien si la carte n'est pas a l'ecran :
+// on n'ecrase jamais la correspondance enregistree avec un formulaire absent.
+function _sycebnlCollecte() {
+  var champs = document.querySelectorAll(".syc-compte");
+  if (!champs.length) return null;
+  var comptes = {};
+  for (var i = 0; i < champs.length; i++) {
+    var v = (champs[i].value || "").trim();
+    if (v) comptes[champs[i].getAttribute("data-rubrique")] = v;
+  }
+  return {
+    comptes: comptes,
+    tresCDF: ((document.getElementById("syc-tres-cdf") || {}).value || "").trim(),
+    tresUSD: ((document.getElementById("syc-tres-usd") || {}).value || "").trim()
+  };
+}
+
+// Memorise sans attendre le bouton : le compte choisi devient le defaut de la
+// rubrique. Ecriture locale immediate, Firestore apres 1,5 s d'inactivite.
+function _sycMemoriser() {
+  var c = _sycebnlCollecte();
+  if (!c) return;
+  if (JSON.stringify(c) === JSON.stringify(gSycebnl)) return;
+  gSycebnl = c;
+  try { localStorage.setItem("ecc_sycebnl", JSON.stringify(gSycebnl)); } catch (e) {}
+  var n = Object.keys(c.comptes).length;
+  _sycEtat(n + " rubrique(s) m\u00e9moris\u00e9e(s) sur cet appareil\u2026");
+  if (!gCurrentUser || gCurrentUser.role !== "admin") return;
+  if (!IS_CONFIGURED || !gDb) { _sycEtat(n + " rubrique(s) m\u00e9moris\u00e9e(s) sur cet appareil."); return; }
+  if (_sycTimer) clearTimeout(_sycTimer);
+  _sycTimer = setTimeout(function() {
+    _sycTimer = null;
+    gDb.collection("config").doc("sycebnl").set(gSycebnl, { merge: false })
+      .then(function() { _sycEtat(n + " rubrique(s) enregistr\u00e9e(s) et synchronis\u00e9e(s)."); })
+      .catch(function() { _sycEtat("M\u00e9moris\u00e9 sur cet appareil, pas encore synchronis\u00e9. Utilisez le bouton Enregistrer."); });
+  }, 1500);
+}
+
+function _sycEtat(txt) {
+  var d = document.getElementById("syc-etat");
+  if (d) d.textContent = txt || "";
 }
 
 // Pré-remplit les champs VIDES avec les propositions. N'écrase jamais une
@@ -6584,22 +6882,18 @@ function proposerSycebnl() {
   var tc = document.getElementById("syc-tres-cdf"), tu = document.getElementById("syc-tres-usd");
   if (tc && !tc.value.trim()) { tc.value = "571"; n++; }   // Caisse en monnaie nationale
   if (tu && !tu.value.trim()) { tu.value = "572"; n++; }   // Caisse en devises
+  if (tc && tc.value.trim()) _majLibelleCompte(tc);
+  if (tu && tu.value.trim()) _majLibelleCompte(tu);
   showToast(n + " proposition(s) insérée(s). Vérifiez chaque ligne, puis enregistrez.", n ? "ok" : "warn");
 }
 
 function enregistrerSycebnl() {
   if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.", "err"); return; }
-  var comptes = {};
-  var champs = document.querySelectorAll(".syc-compte");
-  for (var i = 0; i < champs.length; i++) {
-    var v = (champs[i].value || "").trim();
-    if (v) comptes[champs[i].getAttribute("data-rubrique")] = v;
-  }
-  gSycebnl = {
-    comptes: comptes,
-    tresCDF: ((document.getElementById("syc-tres-cdf") || {}).value || "").trim(),
-    tresUSD: ((document.getElementById("syc-tres-usd") || {}).value || "").trim()
-  };
+  var c = _sycebnlCollecte();
+  if (!c) { showToast("Formulaire de correspondance introuvable.", "err"); return; }
+  if (_sycTimer) { clearTimeout(_sycTimer); _sycTimer = null; }
+  var comptes = c.comptes;
+  gSycebnl = c;
   try { localStorage.setItem("ecc_sycebnl", JSON.stringify(gSycebnl)); } catch(e) {}
   var fini = function() {
     showToast(Object.keys(comptes).length + " rubrique(s) enregistrée(s).", "ok");
