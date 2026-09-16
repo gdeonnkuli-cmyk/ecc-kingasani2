@@ -804,6 +804,37 @@ input:focus, select:focus, textarea:focus{
 </style>
 
 <style id="ui-v3">
+/* ── Barème des cotisations : empilement sur écran étroit ──────────────────
+   Six colonnes, dont quatre montants, ne tiennent pas sur 390 px. Plutôt
+   qu'un défilement latéral qui cache la moitié du tableau, chaque période
+   devient un bloc dont les cellules portent leur propre étiquette.
+
+   Les display portent !important : la feuille principale force
+   « #admin-body-mod table tr { display: table-row } », et un sélecteur d'ID
+   l'emporte sur toute classe, quelle que soit la place du bloc. */
+@media (max-width: 560px) {
+  .bar-table { min-width: 0 !important; }
+  .bar-table thead { display: none !important; }
+  .bar-table tbody tr {
+    display: grid !important; grid-template-columns: 1fr 1fr; gap: 7px 9px;
+    padding: 10px 2px; border-bottom: 1px solid var(--border);
+  }
+  .bar-table tbody td { display: block !important; border: none; padding: 0; min-width: 0; }
+  .bar-table tbody td::before {
+    content: attr(data-lbl); display: block;
+    font-size: .6rem; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 3px;
+  }
+  /* La période occupe la première colonne et le bouton de retrait la seconde,
+     chacun dans sa cellule de grille. Sortir le bouton du flux en position
+     absolue le faisait recouvrir le champ de date. */
+  /* order remet la cellule d'action juste apres la periode, sans toucher a
+     l'ordre du DOM : l'en-tete du tableau, lui, la garde en derniere colonne. */
+  .bar-table tbody td { order: 3; }
+  .bar-table tbody td.bar-periode { order: 1; }
+  .bar-table tbody td.bar-actions { order: 2; align-self: end; justify-self: end; padding-bottom: 3px; }
+  .bar-table tbody td.bar-actions::before { content: none; }
+}
 /* =====================================================================
    ECC KINGASANI 2 — DESIGN SYSTEM v3  (couche de surcharge, non destructive)
    Objectif : environnement plus lisible, plus moderne, plus attractif.
@@ -8544,19 +8575,7 @@ function renderAdmin(){
   html+="</div>";
   html+="</div>";
 
-  // == MONTANTS DES COTISATIONS SPÉCIALES ==
-  var specM = {};
-  try { specM = JSON.parse(localStorage.getItem("ecc_cotis_spec_montant")||"{}"); } catch(e){}
-  html+="<div class='sec-lbl'>Montants des cotisations annuelles</div>";
-  html+="<div style='background:#f7fafd;border-radius:9px;border:1px solid #c5d8ed;padding:12px;margin-bottom:12px'>";
-  html+="<div style='font-size:.73rem;color:#6b88a4;margin-bottom:10px'>Ces cotisations s'ajoutent aux 12 mois et sont dues une fois par an (comptées dans les arriérés).</div>";
-  html+="<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px'>";
-  html+="<div class='fg'><label>District (FC)</label><input type='number' id='cotis-spec-D' value='"+(specM.D!=null?specM.D:COTIS_MENSUELLE)+"' min='0'></div>";
-  html+="<div class='fg'><label>Sec. Régional (FC)</label><input type='number' id='cotis-spec-R' value='"+(specM.R!=null?specM.R:COTIS_MENSUELLE)+"' min='0'></div>";
-  html+="<div class='fg'><label>Sec. Général (FC)</label><input type='number' id='cotis-spec-G' value='"+(specM.G!=null?specM.G:COTIS_MENSUELLE)+"' min='0'></div>";
-  html+="</div>";
-  html+="<button class='btn btn-g btn-sm' style='margin-top:10px' onclick='saveCotisSpecMontants()'>Enregistrer les montants</button>";
-  html+="</div>";
+  html += _carteBareme();
 
   html+="<div class='sec-lbl'>Comptes Utilisateurs</div>";
   html+="<table class='comptes-table' style='width:100%;border-collapse:collapse;font-size:.79rem;margin-top:5px;margin-bottom:12px'>";
@@ -9292,29 +9311,127 @@ function saveAppTitles() {
   showToast("Titres mis a jour !", "ok");
 }
 
-function saveCotisSpecMontants() {
-  var obj = {
-    D: parseFloat((document.getElementById("cotis-spec-D")||{}).value)||0,
-    R: parseFloat((document.getElementById("cotis-spec-R")||{}).value)||0,
-    G: parseFloat((document.getElementById("cotis-spec-G")||{}).value)||0
-  };
-  try { localStorage.setItem("ecc_cotis_spec_montant", JSON.stringify(obj)); } catch(e){}
-  // Synchroniser vers Firebase (config partagée entre appareils)
-  if(IS_CONFIGURED && gDb){
-    gDb.collection("config").doc("cotisations").set({
-      special: obj,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      updatedBy: gCurrentUser ? gCurrentUser.email : ""
-    }, {merge:true}).then(function(){
-      showToast("Montants enregistrés et synchronisés !", "ok");
-    }).catch(function(){ showToast("Montants enregistrés (local).", "ok"); });
-  } else {
-    showToast("Montants enregistrés !", "ok");
+// ══ CARTE DU BARÈME DES COTISATIONS ════════════════════════════════════════
+// Une ligne par décision de l'assemblée. La distinction qui compte, et que la
+// carte énonce : ajouter une période laisse le passé intact, modifier une
+// ligne existante le réécrit.
+function _carteBareme() {
+  var h = "<div class='sec-lbl'>Barème des cotisations</div>";
+  h += "<div style='background:#f7fafd;border-radius:9px;border:1px solid #c5d8ed;padding:12px;margin-bottom:12px'>";
+  h += "<div style='font-size:.73rem;color:#6b88a4;margin-bottom:10px;line-height:1.5'>"
+     + "Chaque ligne s'applique à partir du mois indiqué, jusqu'à la ligne suivante. "
+     + "<strong>Pour relever le tarif, ajoutez une période</strong> : les mois antérieurs gardent le leur, "
+     + "et les arriérés déjà calculés ne bougent pas. Modifier une ligne existante réécrit au contraire "
+     + "tous les mois qu'elle couvre — à réserver à la correction d'une saisie."
+     + "</div>";
+  h += "<div style='overflow-x:auto'><table class='cotis-table bar-table' style='min-width:520px'><thead><tr>"
+     + "<th style='width:110px'>À partir de</th><th>Mensuelle</th><th>District</th><th>Sec. Régional</th><th>Sec. Général</th><th style='width:38px'></th>"
+     + "</tr></thead><tbody id='bar-corps'>";
+  (gBareme.length ? gBareme : BAREME_DEFAUT).forEach(function(l, i) { h += _ligneBareme(l, i); });
+  h += "</tbody></table></div>";
+  h += "<div style='display:flex;gap:8px;margin-top:10px;flex-wrap:wrap'>"
+     + "<button class='btn btn-sm btn-o' onclick='ajouterPeriodeBareme()'>Ajouter une période</button>"
+     + "<button class='btn btn-g btn-sm' onclick='enregistrerBareme()'>Enregistrer le barème</button></div>";
+  h += "<div style='font-size:.7rem;color:#6b88a4;margin-top:8px'>"
+     + "Les cotisations annuelles (District, Régional, Général) s'ajoutent aux 12 mois et ne sont exigibles "
+     + "qu'au 31 décembre : c'est le barème de décembre de l'année concernée qui les tarife.</div>";
+  h += "</div>";
+  return h;
+}
+
+// data-lbl porte l'en-tete de colonne sur chaque cellule : sous 560 px la
+// table s'empile en blocs etiquetes, faute de quoi seules deux colonnes sur
+// six tiennent a l'ecran d'un telephone.
+function _ligneBareme(l, i) {
+  function ch(cle, lbl, val) {
+    return "<td data-lbl='" + lbl + "'><input type='number' min='0' class='bar-champ' data-cle='" + cle + "' data-i='" + i
+         + "' value='" + (val != null ? val : "") + "' style='width:100%;padding:4px 6px;border:1.5px solid var(--border);border-radius:6px;font-family:DM Mono,monospace;font-size:.76rem'></td>";
   }
-  // Rafraîchir les affichages dépendants
-  if(typeof renderMembers==="function") renderMembers();
-  if(typeof renderGrid==="function") renderGrid();
-  if(typeof renderArrieres==="function") renderArrieres();
+  var t = "<tr data-ligne='" + i + "'>";
+  t += "<td data-lbl='\u00c0 partir de' class='bar-periode'><input type='month' class='bar-champ' data-cle='depuis' data-i='" + i + "' value='" + escHtml(l.depuis || "")
+     + "' style='width:100%;padding:4px 6px;border:1.5px solid var(--border);border-radius:6px;font-size:.76rem'></td>";
+  t += ch("mensuel", "Mensuelle", l.mensuel) + ch("D", "District", l.D)
+     + ch("R", "Sec. R\u00e9gional", l.R) + ch("G", "Sec. G\u00e9n\u00e9ral", l.G);
+  t += "<td class='bar-actions' style='text-align:center'>" + (i === 0 ? "<span style='color:var(--muted)' title='Période initiale'>\u2014</span>"
+     : "<button class='btn btn-sm btn-d' style='padding:2px 7px' onclick='supprimerPeriodeBareme(" + i + ")'>\u00d7</button>") + "</td>";
+  // La première période ne se supprime pas : sans elle, aucun mois n'aurait
+  // de tarif et tous les arriérés tomberaient à zéro.
+  return t + "</tr>";
+}
+
+// Lit ce qui est à l'écran, sans normaliser : la saisie en cours peut être
+// incomplète, et l'écraser pendant la frappe serait insupportable.
+function _baremeSaisi() {
+  var champs = document.querySelectorAll(".bar-champ");
+  if (!champs.length) return null;
+  var lignes = [];
+  for (var i = 0; i < champs.length; i++) {
+    var idx = parseInt(champs[i].getAttribute("data-i"), 10);
+    if (!lignes[idx]) lignes[idx] = {};
+    var v = (champs[i].value || "").trim();
+    lignes[idx][champs[i].getAttribute("data-cle")] = v === "" ? null : v;
+  }
+  return lignes.filter(function(l){ return !!l; });
+}
+
+function ajouterPeriodeBareme() {
+  var l = _baremeSaisi() || gBareme.slice();
+  var dernier = l[l.length - 1] || BAREME_DEFAUT[0];
+  // Proposer le mois suivant la dernière période, et reconduire ses montants :
+  // une nouvelle période part presque toujours de l'ancienne.
+  var d = String(dernier.depuis || "2026-01").split("-");
+  var an = parseInt(d[0], 10) || 2026, mo = (parseInt(d[1], 10) || 1) + 1;
+  if (mo > 12) { mo = 1; an++; }
+  l.push({ depuis: _ymCle(an, mo), mensuel: dernier.mensuel, D: dernier.D, R: dernier.R, G: dernier.G });
+  gBareme = _normaliserBareme(l);
+  renderAdmin();
+}
+
+function supprimerPeriodeBareme(i) {
+  var l = _baremeSaisi() || gBareme.slice();
+  if (i <= 0 || i >= l.length) return;
+  var cible = l[i];
+  showModal("Supprimer la période du " + (cible.depuis || "?") + " ?",
+    "Les mois qu'elle couvre repasseront au tarif de la période précédente, "
+    + "et les arriérés correspondants seront recalculés.",
+    function() {
+      closeModal();
+      l.splice(i, 1);
+      gBareme = _normaliserBareme(l);
+      renderAdmin();
+      showToast("Période supprimée. Enregistrez pour confirmer.", "warn");
+    });
+}
+
+function enregistrerBareme() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.", "err"); return; }
+  var saisi = _baremeSaisi();
+  if (!saisi) { showToast("Formulaire du barème introuvable.", "err"); return; }
+  var brut = saisi.length, propre = _normaliserBareme(saisi);
+  if (!propre.length) { showToast("Indiquez au moins une période, avec son mois de prise d'effet.", "err"); return; }
+  var rejetees = brut - propre.length;
+
+  gBareme = propre;
+  try { localStorage.setItem("ecc_bareme_cotis", JSON.stringify(gBareme)); } catch(e){}
+  var fini = function(msg, t) {
+    showToast(msg + (rejetees ? " " + rejetees + " ligne(s) sans mois valide ignorée(s)." : ""), t || "ok");
+    if (typeof logAudit === "function") {
+      logAudit("CONFIG", "Membres", "Barème des cotisations : " + propre.length + " période(s), "
+        + propre.map(function(l){ return l.depuis + " = " + l.mensuel + " FC"; }).join(" ; "));
+    }
+    renderAdmin();
+    if (typeof renderMembers === "function") renderMembers();
+    if (typeof renderGrid === "function") renderGrid();
+    if (typeof renderArrieres === "function") renderArrieres();
+  };
+  if (!IS_CONFIGURED || !gDb) { fini("Barème enregistré sur cet appareil."); return; }
+  gDb.collection("config").doc("cotisations").set({
+    bareme: gBareme,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedBy: gCurrentUser ? gCurrentUser.email : ""
+  }, { merge: true })
+    .then(function(){ fini("Barème enregistré et synchronisé."); })
+    .catch(function(){ fini("Barème enregistré sur cet appareil, pas encore synchronisé.", "warn"); });
 }
 
 function applyTitlesToHeader(title, sub) {
@@ -9898,30 +10015,127 @@ function showToast(msg,type){
 // ECC KINGASANI 2 - GESTION DES MEMBRES - ES5
 // ================================================
 
-var COTIS_MENSUELLE = 1000;
 var MOIS_LABELS = ["","Janv","Fevr","Mars","Avr","Mai","Juin","Juil","Aout","Sept","Oct","Nov","Dec"];
 
-// Cotisations annuelles spéciales (en plus des 12 mois) — montants configurables dans Admin
+// Cotisations annuelles spéciales (en plus des 12 mois)
 var COTIS_SPECIALES = [
   {key:"D", label:"District",     short:"Dist."},
   {key:"R", label:"Sec. Regional",short:"Reg."},
   {key:"G", label:"Sec. General", short:"Gen."}
 ];
-// Montants par défaut (modifiables via Admin, stockés dans localStorage + Firebase config)
-function getCotisSpecMontant(key) {
-  try {
-    var saved = localStorage.getItem("ecc_cotis_spec_montant");
-    if(saved) {
-      var obj = JSON.parse(saved);
-      if(obj && obj[key] != null) return parseFloat(obj[key]) || 0;
-    }
-  } catch(e){}
-  return COTIS_MENSUELLE; // défaut = montant mensuel
+
+// ══ BARÈME HISTORISÉ DES COTISATIONS ═══════════════════════════════════════
+// Le montant mensuel était la constante COTIS_MENSUELLE = 1000, écrite en dur.
+// Le jour où l'assemblée relève la cotisation, changer ce chiffre ne relève pas
+// le tarif : il réécrit le passé. Les arriérés de janvier, déjà calculés,
+// déjà communiqués, déjà peut-être payés, se retrouvent recalculés au nouveau
+// tarif. La dette d'un membre changerait sans qu'aucune décision ne la vise.
+//
+// Le montant devient donc un barème daté : une ligne par décision, valable du
+// mois indiqué jusqu'à la ligne suivante. Relever le tarif consiste à AJOUTER
+// une période — les mois antérieurs gardent le leur. Modifier une ligne
+// existante reste possible, pour corriger une saisie, et c'est alors une
+// réécriture assumée, que la carte d'administration annonce comme telle.
+var BAREME_DEFAUT = [{ depuis: "2026-01", mensuel: 1000, D: 1000, R: 1000, G: 1000 }];
+var gBareme = BAREME_DEFAUT.slice();
+
+// "2026-3" → "2026-03", pour que la comparaison de chaînes soit chronologique.
+function _ymCle(annee, mois) {
+  var m = parseInt(mois, 10) || 1;
+  return String(annee) + "-" + (m < 10 ? "0" : "") + m;
 }
-function getCotisMontant(moisKey) {
-  // Retourne le montant attendu pour un mois (chiffre) ou une cotisation spéciale (D/R/G)
-  if(moisKey==="D"||moisKey==="R"||moisKey==="G") return getCotisSpecMontant(moisKey);
-  return COTIS_MENSUELLE;
+
+// Ligne en vigueur à un mois donné : la dernière dont la date de prise d'effet
+// ne dépasse pas ce mois. Un mois antérieur à toute décision prend la première
+// ligne connue, faute de mieux — le nier reviendrait à facturer zéro.
+function _baremeA(ym) {
+  var l = (gBareme && gBareme.length) ? gBareme : BAREME_DEFAUT, choisi = null;
+  for (var i = 0; i < l.length; i++) if (String(l[i].depuis || "") <= ym) choisi = l[i];
+  return choisi || l[0];
+}
+
+// Les cotisations annuelles ne sont exigibles qu'au 31 décembre (voir
+// getSpecDue) : c'est donc le barème de décembre qui les tarife.
+function getCotisSpecMontant(key, annee) {
+  var an = parseInt(annee, 10) || currentYear();
+  var b = _baremeA(_ymCle(an, 12));
+  var v = b[key];
+  return (v != null && v !== "") ? (parseFloat(v) || 0) : (parseFloat(b.mensuel) || 0);
+}
+
+// Montant attendu pour un mois (1-12) d'une année, ou pour une cotisation
+// spéciale (D/R/G). Sans argument, le tarif du mois en cours.
+function getCotisMontant(moisKey, annee) {
+  var an = parseInt(annee, 10) || currentYear();
+  if (moisKey === "D" || moisKey === "R" || moisKey === "G") return getCotisSpecMontant(moisKey, an);
+  var mo = parseInt(moisKey, 10);
+  if (isNaN(mo) || mo < 1 || mo > 12) {
+    var now = new Date();
+    an = now.getFullYear(); mo = now.getMonth() + 1;
+  }
+  return parseFloat(_baremeA(_ymCle(an, mo)).mensuel) || 0;
+}
+
+// Tri chronologique et nettoyage : une ligne sans date de prise d'effet n'est
+// pas exploitable, deux lignes au même mois se contrediraient.
+function _normaliserBareme(liste) {
+  var vu = {}, out = [];
+  (liste || []).forEach(function(l) {
+    var d = String((l && l.depuis) || "").trim();
+    if (!/^\d{4}-\d{2}$/.test(d) || vu[d]) return;
+    vu[d] = true;
+    out.push({ depuis: d,
+               mensuel: parseFloat(l.mensuel) || 0,
+               D: l.D != null ? (parseFloat(l.D) || 0) : null,
+               R: l.R != null ? (parseFloat(l.R) || 0) : null,
+               G: l.G != null ? (parseFloat(l.G) || 0) : null });
+  });
+  out.sort(function(a, b){ return a.depuis < b.depuis ? -1 : (a.depuis > b.depuis ? 1 : 0); });
+  return out;
+}
+
+// Charge le barème : appareil d'abord, Firestore ensuite. Le document
+// config/cotisations existait déjà mais n'était jamais relu — les montants des
+// cotisations annuelles étaient écrits en base et ignorés par tout autre
+// appareil. Il est repris ici, barème absent compris : les anciens montants
+// D/R/G deviennent la première période.
+function chargerBareme(cb) {
+  try {
+    var l = JSON.parse(localStorage.getItem("ecc_bareme_cotis") || "null");
+    if (l && l.length) gBareme = _normaliserBareme(l);
+  } catch(e) {}
+  if (!gBareme.length) gBareme = _migrerAncienBareme(null);
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(); return; }
+  gDb.collection("config").doc("cotisations").get()
+    .then(function(doc) {
+      var d = (doc.exists && doc.data()) || null;
+      if (d) {
+        var dist = _normaliserBareme(d.bareme);
+        // Un barème distant vide face à un appareil qui en porte un n'est pas
+        // une mise à jour : on garde le local plutôt que d'effacer.
+        if (dist.length) {
+          gBareme = dist;
+          try { localStorage.setItem("ecc_bareme_cotis", JSON.stringify(gBareme)); } catch(e) {}
+        } else if (d.special && !localStorage.getItem("ecc_bareme_cotis")) {
+          gBareme = _migrerAncienBareme(d.special);
+        }
+      }
+      if (cb) cb();
+    })
+    .catch(function() { if (cb) cb(); });
+}
+
+// Reprise de l'ancien réglage : montant mensuel historique 1000 FC, montants
+// annuels tels qu'ils étaient enregistrés, prise d'effet au démarrage du
+// système (janvier 2026, cf. getMonthsDue).
+function _migrerAncienBareme(special) {
+  var sp = special;
+  if (!sp) { try { sp = JSON.parse(localStorage.getItem("ecc_cotis_spec_montant") || "null"); } catch(e) { sp = null; } }
+  var l = { depuis: "2026-01", mensuel: 1000,
+            D: sp && sp.D != null ? parseFloat(sp.D) || 0 : 1000,
+            R: sp && sp.R != null ? parseFloat(sp.R) || 0 : 1000,
+            G: sp && sp.G != null ? parseFloat(sp.G) || 0 : 1000 };
+  return [l];
 }
 
 // Libellé d'une période (mois 01-12 ou spéciale D/R/G)
@@ -9937,8 +10151,9 @@ function moisLabel(key) {
 // Quand on change le type de cotisation, pré-remplir le montant attendu
 function onPayMoisChange() {
   var mois = (document.getElementById("pay-mois")||{}).value;
+  var annee = (document.getElementById("pay-annee")||{}).value;
   var montantEl = document.getElementById("pay-montant");
-  if(montantEl) montantEl.value = getCotisMontant(mois);
+  if(montantEl) montantEl.value = getCotisMontant(mois, annee);
 }
 var COLORS = ["#1f6fad","#27ae60","#e67e22","#8e44ad","#c0392b","#16a085","#2c3e50","#d35400","#1abc9c","#e74c3c"];
 
@@ -10172,11 +10387,19 @@ function getMemberCotisations(memberId, annee) {
   return result;
 }
 
+// Compte des mois dus. La liste elle-même est produite par _moisDusListe :
+// tarifer des arriérés exige de savoir DE QUELS mois il s'agit, et non
+// seulement combien, dès lors que le tarif peut changer en cours d'année.
 function getMonthsDue(membre, annee) {
+  return _moisDusListe(membre, annee).length;
+}
+
+// Mois dus pour l'année, du plus ancien au plus récent.
+function _moisDusListe(membre, annee) {
   // Mois dus, comptés à partir de 2026 (année de démarrage du système)
   var yr = parseInt(annee) || currentYear();
   // Le système ne compte aucune cotisation avant 2026
-  if (yr < 2026) return 0;
+  if (yr < 2026) return [];
   var now = new Date();
   var startMonth = 1;
 
@@ -10185,7 +10408,7 @@ function getMonthsDue(membre, annee) {
     var adh = new Date(membre.adhesion);
     var adhYear = adh.getFullYear();
     // Adhésion postérieure à l'année comptée → rien dû cette année-là
-    if (adhYear > yr) return 0;
+    if (adhYear > yr) return [];
     // Adhésion pendant l'année comptée → démarrer au mois d'adhésion
     if (adhYear === yr) startMonth = adh.getMonth() + 1;
     // Adhésion avant 2026 mais année comptée = 2026 → on démarre quand même en janvier 2026
@@ -10200,12 +10423,30 @@ function getMonthsDue(membre, annee) {
     var so = new Date(membre.sortieDate);
     if (!isNaN(so.getTime())) {
       var soYear = so.getFullYear();
-      if (soYear < yr) return 0;
+      if (soYear < yr) return [];
       if (soYear === yr) endMonth = Math.min(endMonth, so.getMonth() + 1);
     }
   }
 
-  return Math.max(0, endMonth - startMonth + 1);
+  var liste = [];
+  for (var mo = startMonth; mo <= endMonth; mo++) liste.push(mo);
+  return liste;
+}
+
+// Les nb mois impayés les plus anciens parmi les mois dus. On s'aligne
+// délibérément sur le compte d'arriérés existant (mois dus moins mois payés)
+// plutôt que de le redéfinir : un mois réglé d'avance, hors de la plage due,
+// continue donc de réduire la dette, exactement comme avant. Seul le tarif
+// appliqué change — celui de chaque mois, au lieu d'un forfait unique.
+function _moisImpayes(membre, annee, nb) {
+  var dus = _moisDusListe(membre, annee), payes = {}, i;
+  for (i = 0; i < DB.cotisations.length; i++) {
+    var c = DB.cotisations[i];
+    if (c.membreId === membre.id && c.annee === String(annee) && isMonthKey(c.mois)) payes[parseInt(c.mois, 10)] = true;
+  }
+  var reste = [];
+  for (i = 0; i < dus.length && reste.length < nb; i++) if (!payes[dus[i]]) reste.push(dus[i]);
+  return reste;
 }
 
 function getMonthsPaid(memberId, annee) {
@@ -10285,7 +10526,10 @@ function getMontantDu(membre, annee) {
   var moisDus = getMonthsDue(membre, annee);
   var moisPaid = getMonthsPaid(membre.id, annee);
   var arrMois = Math.max(0, moisDus - moisPaid);
-  var montant = arrMois * COTIS_MENSUELLE;
+  // Chaque mois impayé est tarifé au barème de SON mois : un relèvement voté
+  // en juillet ne réévalue pas les arriérés de janvier.
+  var montant = 0;
+  _moisImpayes(membre, annee, arrMois).forEach(function(mo){ montant += getCotisMontant(mo, annee); });
   // Spéciales non payées
   var paidKeys = {};
   for (var i=0;i<DB.cotisations.length;i++){
@@ -10294,7 +10538,7 @@ function getMontantDu(membre, annee) {
   }
   if(getSpecDue(membre, annee)>0){
     for(var s=0;s<COTIS_SPECIALES.length;s++){
-      if(!paidKeys[COTIS_SPECIALES[s].key]) montant += getCotisSpecMontant(COTIS_SPECIALES[s].key);
+      if(!paidKeys[COTIS_SPECIALES[s].key]) montant += getCotisSpecMontant(COTIS_SPECIALES[s].key, annee);
     }
   }
   return montant;
@@ -10376,7 +10620,7 @@ function renderDashboardM() {
     var m=DB.membres[ai];
     if (m.activite==="actif") {
       var arr=getArrears(m,yr);
-      if (arr>0) arrMembers.push({m:m,arr:arr,due:arr*COTIS_MENSUELLE});
+      if (arr>0) arrMembers.push({m:m,arr:arr,due:getMontantDu(m,yr)});
     }
   }
   arrMembers.sort(function(a,b){return b.arr-a.arr;});
@@ -11390,7 +11634,7 @@ function enregistrerPaiement() {
   var membreId=document.getElementById("pay-membre").value;
   var mois=document.getElementById("pay-mois").value;
   var annee=document.getElementById("pay-annee").value;
-  var montant=parseFloat(document.getElementById("pay-montant").value)||COTIS_MENSUELLE;
+  var montant=parseFloat(document.getElementById("pay-montant").value)||getCotisMontant(mois, annee);
   var note=document.getElementById("pay-note").value;
 
   if(!membreId){showToast("Selectionnez un membre.","err");return;}
@@ -11595,7 +11839,7 @@ function renderArrieres() {
         if(!lastCotis||c.mois>lastCotis.mois) lastCotis=c;
       }
     }
-    rows.push({m:m, arr:arr, due:arr*COTIS_MENSUELLE, lastCotis:lastCotis,
+    rows.push({m:m, arr:arr, due:getMontantDu(m,annee), lastCotis:lastCotis,
       paid:getMonthsPaid(m.id,annee), total:getMonthsDue(m,annee)});
   }
   rows.sort(function(a,b){return b.arr-a.arr;});
@@ -11800,7 +12044,7 @@ function exportArrieres() {
     var arr=getArrears(m,yr);
     if(arr<=0) continue;
     lines.push([m.prenom+" "+m.nom,m.numero||"",statusLabel(m),
-      getMonthsPaid(m.id,yr),getMonthsDue(m,yr),arr,arr*COTIS_MENSUELLE].join(";"));
+      getMonthsPaid(m.id,yr),getMonthsDue(m,yr),arr,getMontantDu(m,yr)].join(";"));
   }
   downloadCSV(lines.join("\n"),"ECC_Arrieres.csv");
 }
@@ -11997,7 +12241,7 @@ var members = DB.membres.map(function(m) {
       moisPayes: paid,
       moisDus: getMonthsDue(m, yr),
       arrieres: arr,
-      totalDu: arr * COTIS_MENSUELLE,
+      totalDu: getMontantDu(m, yr),
       notes: m.notes || ""
     };
   });
@@ -12204,6 +12448,7 @@ function launchApp() {
   // car onAuthStateChanged peut lancer l'application par un autre chemin.
   chargerClotures();
   chargerSycebnl();
+  chargerBareme();
   logConnexion(); // Enregistrer la visite/connexion pour l'historique admin
   document.getElementById("li-btn").textContent = "Se connecter";
   document.getElementById("unm").textContent = gCurrentUser.nom;
@@ -17443,7 +17688,7 @@ function getRealiseMois(ym, key) {
     }
   } else if(key==="membres"){
     var mo=parseInt(ym.split("-")[1]), an=parseInt(ym.split("-")[0]);
-    var cotUn=(typeof getCotisMontant==="function")?getCotisMontant():0;
+    var cotUn=(typeof getCotisMontant==="function")?getCotisMontant(mo,an):0;
     var mbs=DB||[];
     for(var i=0;i<mbs.length;i++){
       var paid=(mbs[i].cotisations&&mbs[i].cotisations[an])||[];
@@ -17998,9 +18243,9 @@ function doRapportConsolide(type, periode) {
 
   // 7. MEMBRES (cotisations)
   var membTotal=0; var membDetails=[];
-  var cotUn=(typeof getCotisMontant==='function')?getCotisMontant():0;
   moisList.forEach(function(ym){
     var mo=parseInt(ym.split('-')[1]), an=parseInt(ym.split('-')[0]);
+    var cotUn=(typeof getCotisMontant==='function')?getCotisMontant(mo,an):0;
     var encaisse=0;
     ((DB&&DB.membres)||[]).forEach(function(m){
       var paid=(m.cotisations&&m.cotisations[an])||[];
@@ -18742,8 +18987,8 @@ function buildRapportHTML(type, periode) {
   var projTot=0; ((PROJDB&&PROJDB.projets)||[]).forEach(function(p){ (p.sublignes||[]).forEach(function(l){ if(inP(l.date)) projTot+=(parseFloat(l.cdf)||0)+(parseFloat(l.usd)||0)*(l.taux||t); }); });
   var semRec=0,semDep=0; ((SEMDB&&SEMDB.sessions)||[]).forEach(function(s){ if(!inP(s.date))return; (s.recettes||[]).forEach(function(x){semRec+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;}); (s.depenses||[]).forEach(function(x){semDep+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;}); });
   var ecoRec=0,ecoDep=0; ((ECODB&&ECODB.sessions)||[]).forEach(function(s){ if(!inP(s.date))return; (s.recettes||[]).forEach(function(x){ecoRec+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;}); (s.depenses||[]).forEach(function(x){ecoDep+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;}); });
-  var membTot=0; var cotUn=(typeof getCotisMontant==='function')?getCotisMontant():0;
-  moisList.forEach(function(ym){ var mo=parseInt(ym.split('-')[1]),an=parseInt(ym.split('-')[0]); ((DB&&DB.membres)||[]).forEach(function(mb){ var paid=(mb.cotisations&&mb.cotisations[an])||[]; if(paid.indexOf(mo)>=0) membTot+=cotUn; }); });
+  var membTot=0;
+  moisList.forEach(function(ym){ var mo=parseInt(ym.split('-')[1]),an=parseInt(ym.split('-')[0]); var cotUn=(typeof getCotisMontant==='function')?getCotisMontant(mo,an):0; ((DB&&DB.membres)||[]).forEach(function(mb){ var paid=(mb.cotisations&&mb.cotisations[an])||[]; if(paid.indexOf(mo)>=0) membTot+=cotUn; }); });
 
   var totRec = finRec+loyTot+semRec+ecoRec+membTot;
   var totDep = finDep+socTot+projTot+semDep+ecoDep;
