@@ -1589,6 +1589,28 @@ body.dark-mode .syc-pop .syc-opt .syc-rg{color:#e8c97e;background:rgba(232,201,1
 body.dark-mode .syc-pop .syc-opt b{color:#e8c97e}
 body.dark-mode .syc-pop .syc-opt{border-bottom-color:#22374a}
 body.dark-mode .syc-pop .syc-opt.on,body.dark-mode .syc-pop .syc-opt:active{background:#1f3a52}
+.rap-table td{vertical-align:top}
+.rap-table tr.rap-ok td:last-child{color:#14663f;font-weight:700}
+.rap-table tr.rap-warn td:last-child{color:#8a5a00;font-weight:700}
+.rap-table tr.rap-ko td:last-child{color:#9b2020;font-weight:700}
+.rap-table tr.rap-detail td{background:var(--v3-surface-2,#f8fafd);padding-top:2px}
+body.dark-mode .rap-table tr.rap-ok td:last-child{color:#8fe0b4}
+body.dark-mode .rap-table tr.rap-warn td:last-child{color:#ffd27a}
+body.dark-mode .rap-table tr.rap-ko td:last-child{color:#ffb3b3}
+body.dark-mode .rap-table tr.rap-detail td{background:#16293a}
+@media (max-width:640px){
+  .rap-table,.rap-table tbody,.rap-table tr,.rap-table td{
+    display:block!important;width:100%!important;white-space:normal!important;overflow:visible!important;}
+  .rap-table thead{display:none!important}
+  .rap-table tr{border:1px solid var(--v3-line);border-radius:var(--v3-r-md);
+    background:var(--v3-surface-2);padding:9px 12px;margin-bottom:7px;}
+  .rap-table td{border:none!important;padding:2px 0!important}
+  .rap-table td:nth-child(2):before{content:"Encaissé : ";color:var(--v3-muted);font-size:.72rem}
+  .rap-table td:nth-child(3):before{content:"Porté : ";color:var(--v3-muted);font-size:.72rem}
+  .rap-table td:nth-child(4):before{content:"Écart : ";color:var(--v3-muted);font-size:.72rem}
+  .rap-table tr.rap-detail{background:transparent;border:none;padding:0 0 7px 12px;margin-top:-5px}
+  body.dark-mode .rap-table tr{background:#16293a}
+}
 .ctrl-piece{
   border:1px solid var(--v3-line,#c5d8ed);border-left-width:4px;border-radius:var(--v3-r-md,10px);
   padding:9px 12px;margin-bottom:7px;background:var(--v3-surface-2,#f8fafd);
@@ -6890,6 +6912,169 @@ function _analyserPieces() {
   return { annees: res, sansNum: sansNum };
 }
 
+// ══ RAPPROCHEMENT COTISATIONS ↔ RECETTES ═══════════════════════════════════
+// Deux sources parlent du même argent : le registre des membres, qui sait ce
+// qui a été encaissé, et les cultes, qui portent ce qui a été comptabilisé en
+// recette. Elles doivent dire la même chose. Ce contrôle les confronte mois
+// par mois et n'en corrige aucune : il montre où regarder.
+function _rapprochementCotis() {
+  var parMois = {};
+  function mois(ym) {
+    if (!parMois[ym]) parMois[ym] = { portes: [], porte: 0, encaisse: 0, nbEnc: 0 };
+    return parMois[ym];
+  }
+
+  // Ce que les cultes ont porté en recette.
+  (gHistCache || []).forEach(function(h) {
+    var d = (h.meta && h.meta.date) || "";
+    var ym = d.substring(0, 7);
+    if (!/^[0-9]{4}-[0-9]{2}$/.test(ym)) return;
+    var mt = 0;
+    ["cf", "cl"].forEach(function(k) {
+      (h[k] || []).forEach(function(r) {
+        if (r && r.l && _estLigneCotisMembres(r.l)) mt += parseFloat(String(r.cdf).replace(",", ".")) || 0;
+      });
+    });
+    if (mt <= 0) return;
+    var m = mois(ym);
+    m.portes.push({ date: d, piece: (h.meta && h.meta.piece) || "", montant: mt });
+    m.porte += mt;
+  });
+
+  // Ce que le registre des membres dit avoir encaissé.
+  ((DB && DB.cotisations) || []).forEach(function(c) {
+    var ym = String(c.dateEnr || "").substring(0, 7);
+    if (!/^[0-9]{4}-[0-9]{2}$/.test(ym)) return;
+    var m = mois(ym);
+    m.encaisse += parseFloat(c.montant) || 0;
+    m.nbEnc++;
+  });
+
+  var lignes = Object.keys(parMois).sort().map(function(ym) {
+    var m = parMois[ym];
+    var maxi = 0;
+    m.portes.forEach(function(x) { if (x.montant > maxi) maxi = x.montant; });
+    return {
+      ym: ym, porte: m.porte, encaisse: m.encaisse, nbEnc: m.nbEnc,
+      nbCultes: m.portes.length, portes: m.portes,
+      ecart: m.porte - m.encaisse,
+      // L'ancien calcul reportait le cumul du mois dans chaque culte : le plus
+      // gros montant du mois valait donc le total, et tout ce qui s'y ajoute
+      // est du double comptage. Estimation, pas certitude.
+      surplus: m.portes.length > 1 ? m.porte - maxi : 0
+    };
+  });
+
+  var attente = 0, nbAttente = 0;
+  ((DB && DB.cotisations) || []).forEach(function(c) {
+    if (!c.injecteCulte) { attente += parseFloat(c.montant) || 0; nbAttente++; }
+  });
+
+  return { lignes: lignes, attente: attente, nbAttente: nbAttente };
+}
+
+function _carteRapprochementCotis() {
+  var r = _rapprochementCotis();
+  var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F501} Rapprochement cotisations \u2194 recettes</div>';
+
+  if (!r.lignes.length) {
+    return h + '<p style="font-size:.76rem;color:var(--muted)">Aucune cotisation encaiss\u00e9e ni port\u00e9e en recette dans les donn\u00e9es charg\u00e9es.</p>';
+  }
+
+  h += '<p style="font-size:.74rem;color:var(--muted);margin-bottom:9px;line-height:1.5">'
+     + 'Compare, mois par mois, ce que le registre des membres dit avoir encaiss\u00e9 et ce que les cultes ont port\u00e9 '
+     + 'en recette sous la rubrique \u00ab Cotisation Cartes de Membre \u00bb. Porte sur les cultes charg\u00e9s en cache.</p>';
+
+  var totalSurplus = 0, moisAlerte = 0;
+  r.lignes.forEach(function(l) { totalSurplus += l.surplus; if (l.surplus > 0 || Math.abs(l.ecart) >= 1) moisAlerte++; });
+
+  if (totalSurplus > 0) {
+    h += '<div class="ctrl-piece ko" style="border-left-color:#c0392b">'
+       + '<div class="cp-tete"><strong>Double comptage probable : ' + fmt(totalSurplus) + ' FC</strong></div>'
+       + '<div class="cp-l cp-e">Jusqu\'\u00e0 la correction du 15 septembre 2026, la recette de cotisations report\u00e9e dans un culte valait '
+       + 'le cumul du mois entier, et non les seuls encaissements du jour. Deux cultes dans le m\u00eame mois comptaient donc '
+       + 'deux fois le m\u00eame argent. Le montant ci-dessus est une <em>estimation</em> du surplus \u2014 v\u00e9rifiez les mois signal\u00e9s '
+       + 'ci-dessous avant de corriger quoi que ce soit.</div></div>';
+  }
+
+  if (r.nbAttente) {
+    h += '<div class="ctrl-piece ko"><div class="cp-tete"><strong>' + r.nbAttente
+       + ' cotisation(s) encaiss\u00e9e(s) non port\u00e9e(s) en recette \u2014 ' + fmt(r.attente) + ' FC</strong></div>'
+       + '<div class="cp-l cp-w">Cet argent est en caisse mais n\'appara\u00eet dans aucun culte. Il sera propos\u00e9 \u00e0 la prochaine saisie.</div></div>';
+  }
+
+  h += '<table class="cotis-table rap-table"><thead><tr><th>Mois</th><th>Encaiss\u00e9</th><th>Port\u00e9</th><th>\u00c9cart</th></tr></thead><tbody>';
+  r.lignes.forEach(function(l) {
+    var cls = l.surplus > 0 ? "rap-ko" : (Math.abs(l.ecart) >= 1 ? "rap-warn" : "rap-ok");
+    h += '<tr class="' + cls + '"><td><strong>' + escH(_labelMois(l.ym)) + '</strong>'
+       + '<div style="font-size:.66rem;color:var(--muted)">' + l.nbEnc + ' encaissement(s) \u00b7 '
+       + l.nbCultes + ' culte(s) avec la rubrique</div></td>'
+       + '<td>' + fmt(l.encaisse) + '</td>'
+       + '<td>' + fmt(l.porte) + '</td>'
+       + '<td><strong>' + (l.ecart > 0 ? "+" : "") + fmt(l.ecart) + '</strong>'
+       + (l.surplus > 0 ? '<div style="font-size:.66rem;color:#9b2020">dont ~' + fmt(l.surplus) + ' de doublon</div>' : '')
+       + '</td></tr>';
+    if (l.nbCultes > 1) {
+      h += '<tr class="rap-detail"><td colspan="4"><div style="font-size:.68rem;color:var(--muted);line-height:1.6">';
+      l.portes.forEach(function(x) {
+        h += '\u2022 ' + escH(x.date) + (x.piece ? ' (' + escH(x.piece) + ')' : '') + ' : ' + fmt(x.montant) + ' FC<br>';
+      });
+      h += '</div></td></tr>';
+    }
+  });
+  h += '</tbody></table>';
+
+  h += '<p style="font-size:.7rem;color:var(--muted);margin-top:8px;line-height:1.5">'
+     + 'Un \u00e9cart n\'est pas toujours une erreur : une cotisation encaiss\u00e9e en fin de mois entre en recette au culte suivant, '
+     + 'donc parfois le mois d\'apr\u00e8s. Ce qui doit alerter, c\'est un mois o\u00f9 la rubrique appara\u00eet sur plusieurs cultes.</p>';
+
+  h += '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
+     + '<button class="btn btn-sm btn-g" onclick="exporterRapprochementCotis()">Exporter le d\u00e9tail</button></div>';
+  return h;
+}
+
+function exporterRapprochementCotis() {
+  if (typeof XLSX === "undefined") { showToast("SheetJS non chargé. Vérifiez votre connexion.", "err"); return; }
+  var r = _rapprochementCotis();
+  if (!r.lignes.length) { showToast("Rien à exporter.", "err"); return; }
+
+  var synth = [["Mois", "Encaissements (nb)", "Encaissé (FC)", "Cultes portant la rubrique", "Porté en recette (FC)", "Écart (FC)", "Doublon estimé (FC)"]];
+  r.lignes.forEach(function(l) {
+    synth.push([l.ym, l.nbEnc, Math.round(l.encaisse), l.nbCultes, Math.round(l.porte),
+                Math.round(l.ecart), Math.round(l.surplus)]);
+  });
+
+  var det = [["Mois", "Date du culte", "Pièce", "Montant porté (FC)"]];
+  r.lignes.forEach(function(l) {
+    l.portes.forEach(function(x) { det.push([l.ym, x.date, x.piece || "s/n", Math.round(x.montant)]); });
+  });
+
+  var enc = [["Date d'encaissement", "Membre", "Période couverte", "Montant (FC)", "Porté sur la pièce"]];
+  ((DB && DB.cotisations) || []).slice().sort(function(a, b) {
+    return String(a.dateEnr || "").localeCompare(String(b.dateEnr || ""));
+  }).forEach(function(c) {
+    var m = findMembre(c.membreId);
+    enc.push([c.dateEnr || "", m ? (m.nom + " " + m.prenom) : c.membreId,
+              moisLabel(c.mois) + " " + (c.annee || ""), parseFloat(c.montant) || 0,
+              c.injecteCulte || "— non porté —"]);
+  });
+
+  var wb = XLSX.utils.book_new();
+  var ws1 = XLSX.utils.aoa_to_sheet(synth);
+  ws1["!cols"] = [{wch:10},{wch:18},{wch:16},{wch:26},{wch:20},{wch:14},{wch:18}];
+  XLSX.utils.book_append_sheet(wb, ws1, "Synthèse");
+  var ws2 = XLSX.utils.aoa_to_sheet(det);
+  ws2["!cols"] = [{wch:10},{wch:14},{wch:12},{wch:20}];
+  XLSX.utils.book_append_sheet(wb, ws2, "Cultes");
+  var ws3 = XLSX.utils.aoa_to_sheet(enc);
+  ws3["!cols"] = [{wch:20},{wch:28},{wch:20},{wch:14},{wch:20}];
+  XLSX.utils.book_append_sheet(wb, ws3, "Encaissements");
+
+  XLSX.writeFile(wb, "Rapprochement_cotisations_" + getTodayStr().replace(/-/g, "") + ".xlsx");
+  showToast("Rapprochement exporté : " + r.lignes.length + " mois.", "ok");
+  if (typeof logAudit === "function") logAudit("EXPORT", "Membres", "Rapprochement cotisations ↔ recettes");
+}
+
 function _carteControlePieces() {
   var a = _analyserPieces();
   var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F5C2}\uFE0F Contr\u00f4le de s\u00e9quence des pi\u00e8ces</div>';
@@ -7765,6 +7950,7 @@ function renderAdmin(){
   html += "<div id='audit-zone'></div>";
 
   html += _carteClotures();
+  html += _carteRapprochementCotis();
   html += _carteControlePieces();
   html += _carteSycebnl();
   var ab=document.getElementById("admin-body-mod");if(ab)ab.innerHTML=html;
