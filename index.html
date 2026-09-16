@@ -7387,9 +7387,33 @@ function migrerAssistances() {
     });
 }
 
+// Un rapprochement lu sur des données partielles ne signale aucun écart, ce
+// qui se lit comme un feu vert. Les deux sources sont donc annoncées avant
+// tout chiffre : combien de cultes en cache, d'où ils viennent, combien de
+// cotisations au registre. Un côté vide invalide la comparaison, et il faut
+// le dire plutôt que de laisser conclure.
+function _provenanceRapprochement() {
+  var nbCultes = (gHistCache || []).length;
+  var nbCotis = ((DB && DB.cotisations) || []).length;
+  var src = gHistSource || {};
+  var mode = src.mode === "firebase" ? "Firestore" : "sauvegarde locale";
+  var bloquant = !nbCultes || !nbCotis || src.mode !== "firebase" || src.erreur;
+
+  var h = '<div class="ctrl-piece ' + (bloquant ? "ko" : "ok") + '" style="margin-bottom:9px">'
+        + '<div class="cp-tete"><strong>' + (bloquant ? "Donn\u00e9es incompl\u00e8tes \u2014 r\u00e9sultat non concluant" : "Sources charg\u00e9es") + '</strong></div>'
+        + '<div class="cp-l">' + nbCultes + ' culte(s) en cache (' + mode + ')\u00a0\u00b7\u00a0'
+        + nbCotis + ' cotisation(s) au registre.</div>';
+  if (src.erreur) h += '<div class="cp-l cp-e">Lecture de l\'historique : ' + escH(String(src.erreur)) + '.</div>';
+  if (!nbCultes) h += '<div class="cp-l cp-e">Aucun culte charg\u00e9 : tout appara\u00eetra comme non port\u00e9 en recette. Ouvrez Finances \u2192 Historique, puis revenez.</div>';
+  if (!nbCotis) h += '<div class="cp-l cp-e">Aucune cotisation charg\u00e9e : tout appara\u00eetra comme port\u00e9 en trop. Ouvrez Membres, puis revenez.</div>';
+  if (nbCultes && nbCotis && src.mode !== "firebase") h += '<div class="cp-l cp-w">Les cultes viennent de la sauvegarde locale de cet appareil, qui peut \u00eatre en retard sur la base.</div>';
+  return h + '</div>';
+}
+
 function _carteRapprochementCotis() {
   var r = _rapprochementCotis();
   var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F501} Rapprochement cotisations \u2194 recettes</div>';
+  h += _provenanceRapprochement();
 
   if (!r.lignes.length) {
     return h + '<p style="font-size:.76rem;color:var(--muted)">Aucune cotisation encaiss\u00e9e ni port\u00e9e en recette dans les donn\u00e9es charg\u00e9es.</p>';
