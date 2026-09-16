@@ -7677,6 +7677,9 @@ function _sycEtat(txt) {
 var SYCEBNL_REGLES = [
   // ── Ressources ───────────────────────────────────────────────────────────
   { m: ["dime", "dimes", "zakat"],                       c: "7044", t: "R" },
+  // Arbitré le 16/09/2026 : l'action de grâce est un denier du culte, non une
+  // célébration au sens du 7045.
+  { m: ["action de grace", "actions de grace"],          c: "7043", t: "R" },
   { m: ["quete", "quetes"],                              c: "7044", t: "R" },
   { m: ["carte de membre", "cartes de membre", "carte membre", "cartes membre"], c: "701", t: "R" },
   { m: ["cotisation", "cotis"],                          c: "701",  t: "R" },
@@ -7712,7 +7715,11 @@ var SYCEBNL_REGLES = [
   { m: ["formation", "seminaire", "recyclage"],          c: "633",  t: "D" },
   { m: ["impot", "taxe", "patente"],                     c: "641",  t: "D" },
   { m: ["publication", "impression", "imprime", "photocopie"], c: "6275", t: "D" },
-  { m: ["protocole", "reception", "accueil"],            c: "6383", t: "D" },
+  // Arbitré le 16/09/2026 : la collation est une charge de réception, non une
+  // rémunération. Les quatre correspondances exactes héritées — « Pasteur
+  // Titulaire Collation » et assimilées — pointent encore vers 663 et gardent
+  // la priorité : elles ne sont pas modifiées sans décision explicite.
+  { m: ["collation", "protocole", "reception", "accueil"], c: "6383", t: "D" },
   { m: ["assistance", "secours", "aide sociale", "social"], c: "652", t: "D" },
   // Ce qu'une paroisse reverse à son district, sa région ou sa communauté.
   { m: ["quote-part", "quote part", "qp ", "district", "regional", "general", "communaute"], c: "6351", t: "D" },
