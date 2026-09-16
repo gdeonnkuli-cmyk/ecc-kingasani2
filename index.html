@@ -7659,19 +7659,164 @@ function _sycEtat(txt) {
 
 // Pré-remplit les champs VIDES avec les propositions. N'écrase jamais une
 // saisie existante : le comptable reste maître de ce qu'il a déjà arbitré.
-function proposerSycebnl() {
-  var champs = document.querySelectorAll(".syc-compte"), n = 0;
+// ══ PROPOSITION PAR MOTS-CLÉS ══════════════════════════════════════════════
+// Les libellés saisis dans les cultes se comptent par centaines et varient
+// d'une semaine à l'autre : « Collecte Transport / Chorale Femme », « Cotis.
+// Loyer Pasteurs »… Les apparier un à un est hors de portée, mais leur sens
+// tient presque toujours dans un mot.
+//
+// Deux principes : une règle ne s'applique qu'au sens où la rubrique est
+// mouvementée — « transport » en recette est une collecte affectée, en
+// dépense un déplacement payé — et un compte proposé est toujours vérifié
+// contre le plan officiel avant d'être inséré. Les rubriques dont
+// l'imputation dépend d'un arbitrage du comptable n'ont volontairement pas
+// de règle : mieux vaut un champ vide qu'un compte plausible et faux.
+//
+// t : "R" ressources, "D" emplois. Les règles sont lues dans l'ordre, la
+// première qui répond l'emporte — donc du plus spécifique au plus général.
+var SYCEBNL_REGLES = [
+  // ── Ressources ───────────────────────────────────────────────────────────
+  { m: ["dime", "dimes", "zakat"],                       c: "7044", t: "R" },
+  { m: ["quete", "quetes"],                              c: "7044", t: "R" },
+  { m: ["carte de membre", "cartes de membre", "carte membre", "cartes membre"], c: "701", t: "R" },
+  { m: ["cotisation", "cotis"],                          c: "701",  t: "R" },
+  { m: ["offrande", "offertoire", "denier"],             c: "7043", t: "R" },
+  { m: ["mariage", "bapteme", "dedicace", "celebration", "funerailles"], c: "7045", t: "R" },
+  { m: ["legs"],                                         c: "7042", t: "R" },
+  { m: ["mecenat"],                                      c: "7046", t: "R" },
+  { m: ["parrainage"],                                   c: "7047", t: "R" },
+  { m: ["manifestation", "concert", "kermesse", "gala"], c: "706",  t: "R" },
+  { m: ["subvention"],                                   c: "718",  t: "R" },
+  { m: ["interet", "interets"],                          c: "771",  t: "R" },
+  { m: ["vente", "ventes"],                              c: "7051", t: "R" },
+  // Une collecte ou une enveloppe affectée est une libéralité : compte de la
+  // générosité, et non le compte de la charge qu'elle financera. Il en va de
+  // même de ce que remontent les cellules de maison.
+  { m: ["collecte", "enveloppe", "don", "dons", "cellule", "cellules"], c: "7048", t: "R" },
+
+  // ── Emplois ──────────────────────────────────────────────────────────────
+  { m: ["regideso", "eau"],                              c: "6051", t: "D" },
+  { m: ["snel", "electricite", "courant", "electrique"], c: "6052", t: "D" },
+  { m: ["loyer", "location", "bail"],                    c: "6222", t: "D" },
+  { m: ["salaire", "appointement", "remuneration", "prime", "gratification"], c: "6611", t: "D" },
+  { m: ["indemnite", "forfaitaire"],                     c: "663",  t: "D" },
+  { m: ["orateur", "moderateur", "predicateur", "honoraire"], c: "6327", t: "D" },
+  { m: ["transport", "deplacement", "taxi", "voyage"],   c: "614",  t: "D" },
+  { m: ["carburant", "essence", "mazout", "combustible"], c: "6042", t: "D" },
+  { m: ["entretien", "reparation", "maintenance"],       c: "624",  t: "D" },
+  { m: ["construction", "travaux", "materiaux", "ciment", "brique"], c: "6058", t: "D" },
+  { m: ["telephone", "communication", "internet", "credit telephonique"], c: "628", t: "D" },
+  { m: ["fourniture", "papeterie", "bureau"],            c: "6047", t: "D" },
+  { m: ["assurance"],                                    c: "625",  t: "D" },
+  { m: ["frais bancaire", "banque"],                     c: "631",  t: "D" },
+  { m: ["formation", "seminaire", "recyclage"],          c: "633",  t: "D" },
+  { m: ["impot", "taxe", "patente"],                     c: "641",  t: "D" },
+  { m: ["publication", "impression", "imprime", "photocopie"], c: "6275", t: "D" },
+  { m: ["protocole", "reception", "accueil"],            c: "6383", t: "D" },
+  { m: ["assistance", "secours", "aide sociale", "social"], c: "652", t: "D" },
+  // Ce qu'une paroisse reverse à son district, sa région ou sa communauté.
+  { m: ["quote-part", "quote part", "qp ", "district", "regional", "general", "communaute"], c: "6351", t: "D" },
+  { m: ["imprevu", "divers"],                            c: "658",  t: "D" }
+];
+
+function _compteParMotsCles(libelle, type) {
+  var l = _sycNorm(libelle);
+  if (!l) return "";
+  for (var i = 0; i < SYCEBNL_REGLES.length; i++) {
+    var r = SYCEBNL_REGLES[i];
+    if (r.t && r.t !== type) continue;
+    for (var j = 0; j < r.m.length; j++) {
+      if (l.indexOf(_sycNorm(r.m[j])) >= 0) {
+        // Un compte qui n'est pas dans le plan officiel n'est jamais inséré.
+        return SYCEBNL_COMPTES[r.c] ? r.c : "";
+      }
+    }
+  }
+  return "";
+}
+
+// Ce que la proposition donnerait, sans rien écrire : la correspondance exacte
+// d'abord, les mots-clés ensuite.
+function _apercuPropositions() {
+  var champs = document.querySelectorAll(".syc-compte");
+  var exact = [], motcle = [], vides = [];
   for (var i = 0; i < champs.length; i++) {
     if ((champs[i].value || "").trim()) continue;
-    var p = SYCEBNL_PROPOSITIONS[champs[i].getAttribute("data-rubrique")];
-    if (p) { champs[i].value = p; _majLibelleCompte(champs[i]); n++; }
+    var rub = champs[i].getAttribute("data-rubrique");
+    var type = champs[i].getAttribute("data-type") || "R";
+    var p = SYCEBNL_PROPOSITIONS[rub];
+    if (p && SYCEBNL_COMPTES[p]) { exact.push({ rub: rub, compte: p, champ: champs[i] }); continue; }
+    var k = _compteParMotsCles(rub, type);
+    if (k) motcle.push({ rub: rub, compte: k, champ: champs[i] });
+    else vides.push(rub);
   }
+  return { exact: exact, motcle: motcle, vides: vides };
+}
+
+function proposerSycebnl() {
+  var a = _apercuPropositions();
+  var total = a.exact.length + a.motcle.length;
+  var tc = document.getElementById("syc-tres-cdf"), tu = document.getElementById("syc-tres-usd");
+  var tres = (tc && !tc.value.trim() ? 1 : 0) + (tu && !tu.value.trim() ? 1 : 0);
+
+  if (!total && !tres) {
+    showModal("Rien à proposer",
+      a.vides.length
+        ? a.vides.length + " rubrique(s) restent sans compte, et aucune règle ne permet de les deviner. Saisissez-les à la main : le sélecteur cherche aussi par mot de l'intitulé."
+        : "Toutes les rubriques ont déjà un compte.",
+      function(){ closeModal(); });
+    return;
+  }
+
+  // Regroupement par compte : on vérifie une imputation, pas deux cents lignes.
+  var parCompte = {};
+  a.exact.concat(a.motcle).forEach(function(x) {
+    if (!parCompte[x.compte]) parCompte[x.compte] = [];
+    parCompte[x.compte].push(x.rub);
+  });
+
+  var h = "<div style='font-size:.82rem;line-height:1.55'>";
+  h += "<p style='margin:0 0 10px'>" + total + " rubrique(s) recevraient un compte, "
+     + "dont <strong>" + a.exact.length + "</strong> par correspondance exacte et <strong>"
+     + a.motcle.length + "</strong> déduites d'un mot de l'intitulé. "
+     + "Les champs déjà renseignés ne sont pas touchés.</p>";
+  h += "<div style='max-height:44vh;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--border);border-radius:8px;padding:8px 10px'>";
+  Object.keys(parCompte).sort().forEach(function(c) {
+    h += "<div style='margin-bottom:9px'><div style='font-weight:700;font-size:.78rem'>"
+       + "<span style='font-family:DM Mono,monospace'>" + escH(c) + "</span> — " + escH(SYCEBNL_COMPTES[c] || "")
+       + " <span style='color:var(--muted);font-weight:400'>(" + parCompte[c].length + ")</span></div>"
+       + "<div style='font-size:.7rem;color:var(--muted);line-height:1.5'>"
+       + escH(parCompte[c].slice(0, 6).join(" · ")) + (parCompte[c].length > 6 ? " · …" : "")
+       + "</div></div>";
+  });
+  h += "</div>";
+  if (tres) h += "<p style='margin:10px 0 0;font-size:.76rem'>Trésorerie : 571 Caisse en monnaie nationale, 572 Caisse en devises.</p>";
+  if (a.vides.length) {
+    h += "<p style='margin:10px 0 0;font-size:.76rem;color:#8a5a00'><strong>" + a.vides.length
+       + " rubrique(s) resteraient sans compte</strong> — aucune règle ne permet de les deviner, ou leur imputation demande votre arbitrage. Elles sont à saisir à la main.</p>";
+  }
+  h += "<p style='margin:10px 0 0;font-size:.74rem;color:var(--muted)'>Une proposition n'est pas une décision : vérifiez chaque ligne avant d'enregistrer.</p>";
+  h += "</div>";
+
+  showModalHTML("Proposer une correspondance", h, function(){
+    _appliquerPropositions();
+  }, "Insérer ces propositions");
+}
+
+function _appliquerPropositions() {
+  var a = _apercuPropositions(), n = 0;
+  a.exact.concat(a.motcle).forEach(function(x) {
+    x.champ.value = x.compte; _majLibelleCompte(x.champ); n++;
+  });
   var tc = document.getElementById("syc-tres-cdf"), tu = document.getElementById("syc-tres-usd");
   if (tc && !tc.value.trim()) { tc.value = "571"; n++; }   // Caisse en monnaie nationale
   if (tu && !tu.value.trim()) { tu.value = "572"; n++; }   // Caisse en devises
   if (tc && tc.value.trim()) _majLibelleCompte(tc);
   if (tu && tu.value.trim()) _majLibelleCompte(tu);
-  showToast(n + " proposition(s) insérée(s). Vérifiez chaque ligne, puis enregistrez.", n ? "ok" : "warn");
+  if (typeof _sycMemoriser === "function") _sycMemoriser();
+  showToast(n + " proposition(s) insérée(s)"
+    + (a.vides.length ? ", " + a.vides.length + " rubrique(s) restent à saisir" : "")
+    + ". Vérifiez chaque ligne, puis enregistrez.", n ? "ok" : "warn");
 }
 
 function enregistrerSycebnl() {
