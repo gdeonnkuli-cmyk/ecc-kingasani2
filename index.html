@@ -7029,8 +7029,167 @@ function _carteRapprochementCotis() {
      + 'donc parfois le mois d\'apr\u00e8s. Ce qui doit alerter, c\'est un mois o\u00f9 la rubrique appara\u00eet sur plusieurs cultes.</p>';
 
   h += '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">'
-     + '<button class="btn btn-sm btn-g" onclick="exporterRapprochementCotis()">Exporter le d\u00e9tail</button></div>';
+     + '<button class="btn btn-sm btn-g" onclick="exporterRapprochementCotis()">Exporter le d\u00e9tail</button>'
+     + '<button class="btn btn-sm btn-o" onclick="ouvrirRecalculCotis()">Recalculer les lignes</button></div>';
   return h;
+}
+
+// ══ RECALCUL DES LIGNES DE COTISATION ══════════════════════════════════════
+// Valeur correcte pour un culte donné : les cotisations encaissées depuis le
+// culte précédent, exclu, jusqu'à celui-ci, inclus. C'est la règle du circuit
+// actuel, appliquée rétroactivement à partir des dates d'encaissement, qui
+// sont la seule trace fiable qui reste des cultes d'avant la correction.
+function _montantCotisAttendu(dateCulte, datePrecedent) {
+  var t = 0;
+  ((DB && DB.cotisations) || []).forEach(function(c) {
+    var d = String(c.dateEnr || "");
+    if (!d || d > dateCulte) return;
+    if (datePrecedent && d <= datePrecedent) return;
+    t += parseFloat(c.montant) || 0;
+  });
+  return t;
+}
+
+// Cultes portant la rubrique avec un montant qui ne correspond pas aux
+// encaissements de leur période. Un culte dont le mois est clôturé est écarté :
+// rouvrir le mois est une décision, pas un effet de bord d'une correction.
+function _cultesARecalculer() {
+  var hist = (gHistCache || []).slice().sort(function(a, b) {
+    return (((a.meta && a.meta.date) || "")).localeCompare(((b.meta && b.meta.date) || ""));
+  });
+  var res = [];
+  for (var i = 0; i < hist.length; i++) {
+    var h = hist[i];
+    var d = (h.meta && h.meta.date) || "";
+    if (!d) continue;
+    var actuel = 0, trouve = false;
+    ["cf", "cl"].forEach(function(k) {
+      (h[k] || []).forEach(function(r) {
+        if (r && r.l && _estLigneCotisMembres(r.l)) {
+          trouve = true;
+          actuel += parseFloat(String(r.cdf).replace(",", ".")) || 0;
+        }
+      });
+    });
+    if (!trouve) continue;
+    var dPrec = i > 0 ? ((hist[i-1].meta && hist[i-1].meta.date) || "") : "";
+    var attendu = _montantCotisAttendu(d, dPrec);
+    if (Math.abs(actuel - attendu) < 1) continue;
+    res.push({
+      id: h.id || "", date: d, piece: (h.meta && h.meta.piece) || "",
+      actuel: actuel, attendu: attendu, ecart: actuel - attendu,
+      depuis: dPrec, cloture: (typeof estMoisCloture === "function") && estMoisCloture(d)
+    });
+  }
+  return res;
+}
+
+function ouvrirRecalculCotis() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.", "err"); return; }
+  var liste = _cultesARecalculer();
+  if (!liste.length) {
+    showModal("Rien à recalculer",
+      "Chaque culte portant la rubrique « Cotisation Cartes de Membre » affiche déjà le montant des cotisations encaissées sur sa période.",
+      function(){ closeModal(); });
+    return;
+  }
+
+  var h = "<div style='font-size:.82rem;line-height:1.55'>";
+  h += "<p style='margin:0 0 10px'>Pour chaque culte, le montant recalculé correspond aux cotisations encaissées "
+     + "depuis le culte précédent jusqu'à celui-ci. Décochez ce que vous ne voulez pas toucher.</p>";
+  h += "<div style='background:#fff7ed;border-left:3px solid #e67e22;border-radius:6px;padding:9px 11px;margin-bottom:10px;color:#9a3412;font-size:.76rem'>"
+     + "<strong>Avant de corriger :</strong> modifier la recette d'un culte change son solde net et son solde final. "
+     + "Le solde reporté des cultes suivants ne suivra pas automatiquement — la validation vous le signalera, "
+     + "et c'est à vous de décider si vous le reprenez. Sortez une sauvegarde d'abord.</div>";
+
+  var nCloture = 0;
+  for (var i = 0; i < liste.length; i++) {
+    var l = liste[i];
+    if (l.cloture) { nCloture++; continue; }
+    h += "<label style='display:flex;gap:9px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer'>"
+       + "<input type='checkbox' class='rec-cot' data-id='" + escH(l.id) + "' checked style='width:auto;margin-top:3px'>"
+       + "<span><strong>" + escH(l.date) + "</strong>" + (l.piece ? " <span style='font-family:DM Mono,monospace;font-size:.72rem;color:var(--muted)'>" + escH(l.piece) + "</span>" : "")
+       + "<br><span style='font-size:.76rem'>" + fmt(l.actuel) + " FC \u2192 <strong>" + fmt(l.attendu) + " FC</strong>"
+       + " <span style='color:" + (l.ecart > 0 ? "#9b2020" : "#8a5a00") + ";font-weight:700'>(" + (l.ecart > 0 ? "\u2212" : "+") + fmt(Math.abs(l.ecart)) + ")</span></span>"
+       + "<br><span style='font-size:.68rem;color:var(--muted)'>encaissements " + (l.depuis ? "du " + escH(l.depuis) + " (exclu) " : "") + "au " + escH(l.date) + "</span></span></label>";
+  }
+  if (nCloture) {
+    h += "<div style='margin-top:10px;font-size:.74rem;color:#8a5a00'><strong>" + nCloture
+       + " culte(s) écarté(s)</strong> : leur mois est clôturé. Rouvrez-le dans Administration si vous voulez les corriger.</div>";
+  }
+  h += "</div>";
+
+  if (liste.length === nCloture) {
+    showModal("Tous les cultes concernés sont clôturés",
+      liste.length + " culte(s) portent un montant à corriger, mais leur mois est clôturé. Rouvrez le mois dans Administration pour pouvoir les reprendre.",
+      function(){ closeModal(); });
+    return;
+  }
+
+  showModalHTML("Recalculer les lignes de cotisation", h, function(){
+    _appliquerRecalculCotis(liste);
+  }, "Appliquer aux cultes cochés");
+}
+
+function _appliquerRecalculCotis(liste) {
+  var coches = {};
+  var boxes = document.querySelectorAll(".rec-cot");
+  for (var i = 0; i < boxes.length; i++) {
+    if (boxes[i].checked) coches[boxes[i].getAttribute("data-id")] = true;
+  }
+  var aFaire = liste.filter(function(l){ return coches[l.id] && !l.cloture; });
+  if (!aFaire.length) { showToast("Aucun culte coché.", "warn"); return; }
+  if (!IS_CONFIGURED || !gDb) { showToast("Firebase requis pour corriger un culte enregistré.", "err"); return; }
+
+  var faits = 0, echecs = 0, restants = aFaire.length;
+  showToast("Correction de " + restants + " culte(s)\u2026", "ok");
+
+  aFaire.forEach(function(l) {
+    var h = null;
+    for (var i = 0; i < (gHistCache || []).length; i++) {
+      if (gHistCache[i] && gHistCache[i].id === l.id) { h = gHistCache[i]; break; }
+    }
+    if (!h) { echecs++; if (--restants === 0) _finRecalcul(faits, echecs); return; }
+
+    // La ligne est réécrite là où elle se trouve ; les doublons éventuels de la
+    // même rubrique sont ramenés à zéro plutôt que supprimés, pour ne pas
+    // décaler les autres lignes de la pièce.
+    var premier = true;
+    ["cf", "cl"].forEach(function(k) {
+      (h[k] || []).forEach(function(r) {
+        if (!r || !r.l || !_estLigneCotisMembres(r.l)) return;
+        if (premier) { r.cdf = String(Math.round(l.attendu)); premier = false; }
+        else r.cdf = "0";
+        r.n = ((r.n ? r.n + " · " : "") + "recalculé le " + getTodayStr()).substring(0, 120);
+      });
+    });
+
+    // Les totaux du culte suivent la ligne corrigée.
+    var rCDF = 0, rUSD = 0, dCDF = 0, dUSD = 0;
+    ["cf","cl"].forEach(function(k){ (h[k]||[]).forEach(function(r){
+      rCDF += parseFloat(String(r.cdf).replace(",","."))||0; rUSD += parseFloat(String(r.usd).replace(",","."))||0; }); });
+    ["cm","fr","co","ot"].forEach(function(k){ (h[k]||[]).forEach(function(r){
+      dCDF += parseFloat(String(r.cdf).replace(",","."))||0; dUSD += parseFloat(String(r.usd).replace(",","."))||0; }); });
+    h.sums = { rCDF: rCDF, rUSD: rUSD, dCDF: dCDF, dUSD: dUSD, nCDF: rCDF - dCDF, nUSD: rUSD - dUSD };
+
+    var maj = { cf: h.cf || [], cl: h.cl || [], sums: h.sums };
+    gDb.collection("historique").doc(l.id).set(maj, { merge: true })
+      .then(function(){ faits++; })
+      .catch(function(){ echecs++; })
+      .then(function(){ if (--restants === 0) _finRecalcul(faits, echecs); });
+
+    if (typeof logAudit === "function") {
+      logAudit("CORRECTION", "Finances", "Cotisations du culte " + l.date
+        + (l.piece ? " (" + l.piece + ")" : "") + " : " + Math.round(l.actuel) + " → " + Math.round(l.attendu) + " FC");
+    }
+  });
+}
+
+function _finRecalcul(faits, echecs) {
+  showToast(faits + " culte(s) corrigé(s)" + (echecs ? ", " + echecs + " en échec" : "")
+    + ". Vérifiez les soldes reportés des cultes suivants.", echecs ? "warn" : "ok");
+  if (typeof renderHistory === "function") renderHistory();
+  if (typeof renderAdmin === "function") renderAdmin();
 }
 
 function exporterRapprochementCotis() {
