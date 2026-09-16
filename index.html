@@ -12273,17 +12273,52 @@ function saveAssistance() {
 
 function doSaveAssistance(id, nom, isNew) {
   var type=document.getElementById("assist-type").value;
+  var cdf=parseFloat(document.getElementById("assist-cdf").value)||0;
+  var usd=parseFloat(document.getElementById("assist-usd").value)||0;
+
+  // Une assistance ne se décaisse pas à l'envers : un montant négatif gonfle
+  // le solde social au lieu de le réduire.
+  if(cdf<0||usd<0){ showToast("Le montant d'une assistance ne peut pas être négatif.","err"); return; }
+
+  var ancien=null;
+  if(!isNew){
+    for(var k=0;k<SOCDB.assistances.length;k++) if(SOCDB.assistances[k].id===id){ ancien=SOCDB.assistances[k]; break; }
+  }
+
   var obj={
     id:id, nom:nom, type:type,
-    cdf:parseFloat(document.getElementById("assist-cdf").value)||0,
-    usd:parseFloat(document.getElementById("assist-usd").value)||0,
+    cdf:cdf, usd:usd,
     date:document.getElementById("assist-date").value,
     note:document.getElementById("assist-note").value,
     statut:"attente",
-    dateEnr:getTodayStr(),
-    parEmail: gCurrentUser ? gCurrentUser.email : "",
-    parNom: gCurrentUser ? gCurrentUser.nom : ""
+    dateEnr:(ancien&&ancien.dateEnr)||getTodayStr(),
+    parEmail: (ancien&&ancien.parEmail)||(gCurrentUser ? gCurrentUser.email : ""),
+    parNom: (ancien&&ancien.parNom)||(gCurrentUser ? gCurrentUser.nom : "")
   };
+
+  // Modifier une assistance déjà validée effaçait son statut et le nom du
+  // validateur, sans laisser de trace : le montant décaissé pouvait changer
+  // après coup et la validation disparaissait. Le statut est désormais
+  // conservé, et seul un changement de montant — ce qui touche au décaissement
+  // — remet la demande en attente, en le disant et en gardant l'historique.
+  var montantChange=false;
+  if(ancien){
+    obj.statut=ancien.statut||"attente";
+    if(ancien.valideBy) obj.valideBy=ancien.valideBy;
+    if(ancien.valideAt) obj.valideAt=ancien.valideAt;
+    if(ancien.rejetePar) obj.rejetePar=ancien.rejetePar;
+    if(ancien.rejeteAt) obj.rejeteAt=ancien.rejeteAt;
+    montantChange = (parseFloat(ancien.cdf)||0)!==cdf || (parseFloat(ancien.usd)||0)!==usd;
+    obj.modifiePar = gCurrentUser ? gCurrentUser.nom : "";
+    obj.modifieAt = getTodayStr();
+    if(montantChange && ancien.statut==="valide"){
+      obj.montantAvant = { cdf: parseFloat(ancien.cdf)||0, usd: parseFloat(ancien.usd)||0,
+                           valideBy: ancien.valideBy||"", valideAt: ancien.valideAt||"" };
+      obj.statut="attente";
+      delete obj.valideBy; delete obj.valideAt;
+    }
+  }
+
   if(isNew) {
     SOCDB.assistances.push(obj);
   } else {
@@ -12293,9 +12328,22 @@ function doSaveAssistance(id, nom, isNew) {
   closeAssistModal();
   renderDepSocial();
   recalcS();
-  showToast("Demande enregistree ! En attente de validation.","ok");
-  pushNotif("❤️","Demande d assistance",""+obj.nom+" — "+(SOC_TYPE_LABELS[obj.type]||obj.type),"social");
-  notifyAdmin("❤️","Demande d'assistance",obj.nom+" — "+(SOC_TYPE_LABELS[obj.type]||obj.type),"social");
+  if(typeof logAudit==="function"){
+    logAudit(isNew?"CREATION":"MODIFICATION","Social",
+      "Assistance "+obj.nom+" — "+(SOC_TYPE_LABELS[obj.type]||obj.type)+" : "+fmt(cdf)+" FC"
+      +(obj.montantAvant?" (était "+fmt(obj.montantAvant.cdf)+" FC, validée par "+obj.montantAvant.valideBy+" — repassée en attente)":""));
+  }
+  if(obj.montantAvant){
+    showToast("Montant modifié après validation : la demande repasse en attente d'une nouvelle validation.","warn");
+  } else if(isNew){
+    showToast("Demande enregistree ! En attente de validation.","ok");
+  } else {
+    showToast("Demande mise a jour.","ok");
+  }
+  if(isNew){
+    pushNotif("❤️","Demande d assistance",""+obj.nom+" — "+(SOC_TYPE_LABELS[obj.type]||obj.type),"social");
+    notifyAdmin("❤️","Demande d'assistance",obj.nom+" — "+(SOC_TYPE_LABELS[obj.type]||obj.type),"social");
+  }
 }
 
 function validerAssistance(id) {
@@ -12319,21 +12367,55 @@ function validerAssistance(id) {
 
 function rejeterAssistance(id) {
   if(gCurrentUser&&gCurrentUser.role!=="admin"){showToast("Action reservee a l administrateur.","err");return;}
-  for(var i=0;i<SOCDB.assistances.length;i++) {
-    if(SOCDB.assistances[i].id===id){SOCDB.assistances[i].statut="rejete";break;}
-  }
+  // Un rejet se justifie autant qu'une validation : sans le nom de celui qui
+  // refuse ni la date, la décision n'est pas opposable au demandeur.
+  var cible=null;
+  for(var i=0;i<SOCDB.assistances.length;i++) if(SOCDB.assistances[i].id===id){ cible=SOCDB.assistances[i]; break; }
+  if(!cible){ showToast("Demande introuvable.","err"); return; }
+  cible.statut="rejete";
+  cible.rejetePar=gCurrentUser?gCurrentUser.nom:"";
+  cible.rejeteAt=getTodayStr();
+  delete cible.valideBy; delete cible.valideAt;
   saveSocDB(SOCDB);
   renderDepSocial();
   recalcS();
+  if(typeof logAudit==="function") logAudit("REJET","Social","Assistance "+cible.nom+" — "+fmt(parseFloat(cible.cdf)||0)+" FC rejetée");
+  if(cible.parEmail && typeof notifyUser==="function"){
+    notifyUser(cible.parEmail,"❌","Assistance rejetée","Votre demande pour "+cible.nom+" a été rejetée.","social");
+  }
   showToast("Demande rejetee.","warn");
 }
 
 function supprimerAssistance(id) {
-  SOCDB.assistances=SOCDB.assistances.filter(function(a){return a.id!==id;});
-  saveSocDB(SOCDB);
-  renderDepSocial();
-  recalcS();
-  showToast("Supprime.","");
+  // La validation et le rejet étaient réservés à l'administrateur, mais pas la
+  // suppression : n'importe quel compte pouvait effacer une assistance validée
+  // d'un clic, sans confirmation et sans trace.
+  if(!gCurrentUser || gCurrentUser.role!=="admin"){ showToast("Suppression reservee a l administrateur.","err"); return; }
+  var cible=null;
+  for(var i=0;i<SOCDB.assistances.length;i++) if(SOCDB.assistances[i].id===id){ cible=SOCDB.assistances[i]; break; }
+  if(!cible){ showToast("Demande introuvable.","err"); return; }
+
+  var msg="Bénéficiaire : "+(cible.nom||"?")+"\nType : "+(SOC_TYPE_LABELS[cible.type]||cible.type||"?")
+    +"\nMontant : "+fmt(parseFloat(cible.cdf)||0)+" FC"+((parseFloat(cible.usd)||0)?" et "+fmt(cible.usd)+" USD":"");
+  if(cible.statut==="valide"){
+    msg+="\n\nCette assistance est VALIDÉE"+(cible.valideBy?" par "+cible.valideBy:"")
+       +(cible.valideAt?" le "+cible.valideAt:"")+". La supprimer retire son montant du budget social "
+       +"sans laisser de pièce : préférez le rejet, qui conserve la décision et son auteur.";
+  }
+  msg+="\n\nCette action est irréversible.";
+
+  showModal("Supprimer cette assistance ?", msg, function(){
+    closeModal();
+    SOCDB.assistances=SOCDB.assistances.filter(function(a){return a.id!==id;});
+    saveSocDB(SOCDB);
+    renderDepSocial();
+    recalcS();
+    if(typeof logAudit==="function"){
+      logAudit("SUPPRESSION","Social","Assistance "+(cible.nom||"?")+" — "
+        +fmt(parseFloat(cible.cdf)||0)+" FC ("+(cible.statut||"?")+") supprimée");
+    }
+    showToast("Assistance supprimée.","warn");
+  });
 }
 
 function renderDepSocial() {
