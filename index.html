@@ -7100,6 +7100,11 @@ function migrerMembres() {
         if (--restants > 0) return;
         if (!erreurs.length) {
           gMbrParDoc = true;
+          // Marqueur explicite : c'est lui, et non la seule présence de
+          // documents, qui fera lire les collections aux autres appareils.
+          gDb.collection("membres_db").doc("main")
+            .set({ docsActifs: true, docsActifsLe: getTodayStr() }, { merge: true })
+            .catch(function(){ gMbrParDoc = false; showToast("Bascule faite, mais le marqueur n'a pas pu être écrit. Relancez.", "err"); });
           if (typeof logAudit === "function") {
             logAudit("MIGRATION", "Membres", mbr.length + " membre(s) et " + cot.length
               + " cotisation(s) bascul\u00e9(e)s en documents s\u00e9par\u00e9s");
@@ -7167,7 +7172,12 @@ function migrerAssistances() {
           .catch(function(e){ echecs++; if (!premiereErreur) premiereErreur = e.message || ""; })
           .then(function(){
             if (--restants > 0) return;
-            if (faits) gSocParDoc = true;
+            if (faits && !echecs) {
+              gSocParDoc = true;
+              gDb.collection("social_db").doc("main")
+                .set({ docsActifs: true, docsActifsLe: getTodayStr() }, { merge: true })
+                .catch(function(){ gSocParDoc = false; showToast("Bascule faite, mais le marqueur n'a pas pu être écrit. Relancez.", "err"); });
+            }
             if (typeof logAudit === "function") {
               logAudit("MIGRATION", "Social", faits + " assistance(s) bascul\u00e9e(s) en documents s\u00e9par\u00e9s"
                 + (echecs ? ", " + echecs + " en \u00e9chec" : ""));
@@ -9847,7 +9857,11 @@ function _supprimerCotisationDoc(id, cb) {
 function chargerMembresCotisations(cb) {
   if (!IS_CONFIGURED || !gDb) { if (cb) cb(null); return; }
   var res = { membres: null, cotisations: null }, restants = 2;
-  function fini(){ if (--restants === 0) { if (res.membres || res.cotisations) gMbrParDoc = true; if (cb) cb(res); } }
+  // La présence de documents ne suffit PAS à déclarer la bascule faite : une
+  // migration interrompue en laisserait une partie, et lire cette collection
+  // partielle ferait disparaître le reste de l'écran. Seul le marqueur posé à
+  // la fin d'une bascule complète fait foi — il est lu dans membres_db/main.
+  function fini(){ if (--restants === 0) { if (cb) cb(res); } }
   gDb.collection(MBR_COLL).get().then(function(snap){
     if (snap && !snap.empty) { res.membres = []; snap.forEach(function(d){ var o = d.data()||{}; o.id = d.id; res.membres.push(o); }); }
   }).catch(function(){}).then(fini);
@@ -9899,12 +9913,37 @@ function loadDBFromFirebase(callback) {
         nextId: data.nextId || 1,
         maxNumero: data.maxNumero || 0
       };
-      // Les documents séparés font foi dès qu'il en existe ; les tableaux de
-      // l'ancien document ne servent plus que de repli.
+      // Les documents séparés ne font foi que si la bascule a été menée à son
+      // terme, ce que dit le marqueur docsActifs.
+      gMbrParDoc = (data.docsActifs === true);
+      if (!gMbrParDoc) {
+        try { localStorage.setItem("ecc_membres_db", JSON.stringify(db)); } catch(e) {}
+        if(callback) callback(db);
+        return;
+      }
       chargerMembresCotisations(function(res){
+        var perte = "";
         if (res) {
-          if (res.membres) db.membres = res.membres;
-          if (res.cotisations) db.cotisations = res.cotisations;
+          // Filet : si la collection contient moins d'entrées que l'archive, on
+          // ne remplace rien et on le dit. Mieux vaut un écran figé sur des
+          // données complètes qu'un écran à jour amputé.
+          if (res.membres && db.membres.length && res.membres.length < db.membres.length) {
+            perte = res.membres.length + " membre(s) dans la nouvelle collection contre "
+                  + db.membres.length + " dans l'archive";
+          } else if (res.cotisations && db.cotisations.length && res.cotisations.length < db.cotisations.length) {
+            perte = res.cotisations.length + " cotisation(s) dans la nouvelle collection contre "
+                  + db.cotisations.length + " dans l'archive";
+          }
+          if (!perte) {
+            if (res.membres) db.membres = res.membres;
+            if (res.cotisations) db.cotisations = res.cotisations;
+          }
+        }
+        if (perte) {
+          gMbrParDoc = false;
+          if (typeof showToast === "function") {
+            showToast("Bascule incomplète détectée (" + perte + "). Les données d'archive restent utilisées — relancez la bascule.", "err");
+          }
         }
         try { localStorage.setItem("ecc_membres_db", JSON.stringify(db)); } catch(e) {}
         if(callback) callback(db);
@@ -12238,14 +12277,13 @@ function chargerAssistances(cb) {
   if (!IS_CONFIGURED || !gDb) { if (cb) cb(null); return; }
   gDb.collection(SOC_COLL).get()
     .then(function(snap){
-      if (!snap || snap.empty) { gSocParDoc = false; if (cb) cb(null); return; }
+      if (!snap || snap.empty) { if (cb) cb(null); return; }
       var arr = [];
       snap.forEach(function(d){
         var o = d.data() || {};
         o.id = d.id;
         arr.push(o);
       });
-      gSocParDoc = true;
       if (cb) cb(arr);
     })
     .catch(function(){ if (cb) cb(null); });
@@ -12286,10 +12324,24 @@ function loadSocDBFromFirebase(callback) {
         nextId: data.nextId || 1,
         recettes: []
       };
-      // Les documents séparés font foi dès qu'il en existe ; le tableau de
-      // l'ancien document ne sert plus que de repli.
+      // Comme pour les membres : seul le marqueur d'une bascule menée à son
+      // terme fait lire la collection.
+      gSocParDoc = (data.docsActifs === true);
+      if (!gSocParDoc) {
+        try { localStorage.setItem("ecc_social_db", JSON.stringify(db)); } catch(e) {}
+        if(callback) callback(db);
+        return;
+      }
       chargerAssistances(function(arr){
-        if (arr) db.assistances = arr;
+        if (arr && db.assistances.length && arr.length < db.assistances.length) {
+          gSocParDoc = false;
+          if (typeof showToast === "function") {
+            showToast("Bascule sociale incomplète (" + arr.length + " contre " + db.assistances.length
+              + " dans l'archive). Les données d'archive restent utilisées — relancez la bascule.", "err");
+          }
+        } else if (arr) {
+          db.assistances = arr;
+        }
         try { localStorage.setItem("ecc_social_db", JSON.stringify(db)); } catch(e) {}
         if(callback) callback(db);
       });
