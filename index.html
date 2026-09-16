@@ -10111,11 +10111,16 @@ function printFiche() {
   // Grille des cotisations annuelles spéciales
   var grilleSpec = "";
   var specDueP = getSpecApplicable(m, yr);
+  // Les cotisations annuelles ne sont exigibles qu'au 31 décembre : sur
+  // l'exercice en cours, un impayé n'en est pas un. Le rouge est réservé aux
+  // années révolues, sinon la fiche accuse un membre qui n'a rien à se reprocher.
+  var specExigibles = getSpecDue(m, yr) > 0;
   for(var sp=0;sp<COTIS_SPECIALES.length;sp++){
     var spK = COTIS_SPECIALES[sp].key;
     var spPaid = cotisMap[yr+"_"+spK]!=null;
-    var spBg = spPaid?"#15803d":"#c0392b";
-    grilleSpec += "<div style='background:"+spBg+";color:#fff;border-radius:5px;padding:6px 4px;text-align:center;font-size:9px;font-weight:700'>"+COTIS_SPECIALES[sp].label+"</div>";
+    var spBg = spPaid ? "#15803d" : (specExigibles ? "#c0392b" : "#eef4fb");
+    var spFc = (spPaid || specExigibles) ? "#fff" : "#9ca3af";
+    grilleSpec += "<div style='background:"+spBg+";color:"+spFc+";border-radius:5px;padding:6px 4px;text-align:center;font-size:9px;font-weight:700'>"+COTIS_SPECIALES[sp].label+"</div>";
   }
 
   var infos = [
@@ -10784,7 +10789,7 @@ function doPrintMembres(fStatut, fSexe, fAdhesion, fCotis, fActivite, fTri) {
     if(fStatut   && (m.statut||'communiant') !== fStatut) return false;
     if(fSexe     && (m.sexe||'') !== fSexe) return false;
     if(fActivite && (m.activite||'actif') !== fActivite) return false;
-    if(fAdhesion && String(m.dateAdhesion||'').substring(0,4) !== fAdhesion) return false;
+    if(fAdhesion && String(m.adhesion||'').substring(0,4) !== fAdhesion) return false;
     if(fCotis){
       var arr = getArrears(m, yr);
       if(fCotis==='jour'    && arr > 0) return false;
@@ -10794,7 +10799,7 @@ function doPrintMembres(fStatut, fSexe, fAdhesion, fCotis, fActivite, fTri) {
   });
   membres.sort(function(a,b){
     if(fTri==='numero')   return (a.numero||'').localeCompare(b.numero||'','fr',{numeric:true});
-    if(fTri==='adhesion') return (a.dateAdhesion||'').localeCompare(b.dateAdhesion||'');
+    if(fTri==='adhesion') return (a.adhesion||'').localeCompare(b.adhesion||'');
     if(fTri==='cotis')    return getArrears(b,yr)-getArrears(a,yr);
     return ((a.nom||'')+' '+(a.prenom||'')).localeCompare((b.nom||'')+' '+(b.prenom||''),'fr',{sensitivity:'base'});
   });
@@ -10825,7 +10830,7 @@ function doPrintMembres(fStatut, fSexe, fAdhesion, fCotis, fActivite, fTri) {
     rows+='<td style="padding:5px 7px;text-align:center;font-size:10px">'+(m.sexe==='M'?'H':'F')+'</td>';
     rows+='<td style="padding:5px 7px;text-align:center;font-size:10px">'+escH(m.statut||'communiant')+'</td>';
     rows+='<td style="padding:5px 7px;text-align:center;font-size:10px">'+escH(m.activite||'actif')+'</td>';
-    rows+='<td style="padding:5px 7px;text-align:center;font-size:10px">'+escH(String(m.dateAdhesion||'').substring(0,4)||'-')+'</td>';
+    rows+='<td style="padding:5px 7px;text-align:center;font-size:10px">'+escH(String(m.adhesion||'').substring(0,4)||'-')+'</td>';
     rows+='<td style="padding:5px 7px;text-align:center;font-size:10px">'+escH(m.tel||'-')+'</td>';
     rows+='<td style="padding:5px 7px;text-align:center;font-size:10px">'+paid+'/'+due+'</td>';
     rows+='<td style="padding:5px 7px;text-align:center;font-size:10px">'+cStr+'</td>';
@@ -16446,8 +16451,8 @@ function exportGlobalXLS() {
   addSheet('Finances',['Date','Responsable','Eff.CF','Eff.CL','Recettes FC','Depenses FC','Solde FC','Taux'],hRows);
 
   // 2. MEMBRES
-  addSheet('Membres',['N°','Nom','Prénom','Sexe','Naissance','Téléphone','Adresse','Eglise origine','Statut','Adhésion'],
-    ((DB&&DB.membres)||[]).map(function(mb){ return [mb.numero||'',mb.nom||'',mb.prenom||'',mb.sexe||'',mb.dateNaissance||'',mb.telephone||'',mb.adresse||'',mb.egliseOrigine||'',mb.statut||'',mb.dateAdhesion||'']; }));
+  addSheet('Membres',['N°','Nom','Prénom','Sexe','Naissance','Téléphone','Adresse','Département','Statut','Adhésion'],
+    ((DB&&DB.membres)||[]).map(function(mb){ return [mb.numero||'',mb.nom||'',mb.prenom||'',mb.sexe||'',mb.naissance||'',mb.tel||'',mb.adresse||'',mb.dept||'',mb.statut||'',mb.adhesion||'']; }));
 
   // 3. SOCIAL
   addSheet('Social',['Date','Bénéficiaire','Type','Montant FC','Montant USD','Statut','Validé par','Date décision','Note'],
@@ -16573,7 +16578,7 @@ function buildCSVText() {
 
   section('MEMBRES',
     ['N°','Nom','Prénom','Sexe','Naissance','Téléphone','Adresse','Statut','Adhésion'],
-    ((DB&&DB.membres)||[]).map(function(mb){ return [mb.numero||'',mb.nom||'',mb.prenom||'',mb.sexe||'',mb.dateNaissance||'',mb.telephone||'',mb.adresse||'',mb.statut||'',mb.dateAdhesion||'']; }));
+    ((DB&&DB.membres)||[]).map(function(mb){ return [mb.numero||'',mb.nom||'',mb.prenom||'',mb.sexe||'',mb.naissance||'',mb.tel||'',mb.adresse||'',mb.statut||'',mb.adhesion||'']; }));
 
   section('SOCIAL ASSISTANCES',
     ['Date','Bénéficiaire','Type','Montant FC','Statut','Validé par'],
@@ -20842,11 +20847,16 @@ function buildFicheHTML(m, options) {
 
   var grilleSpec = "";
   var specDueP = getSpecApplicable(m, yr);
+  // Les cotisations annuelles ne sont exigibles qu'au 31 décembre : sur
+  // l'exercice en cours, un impayé n'en est pas un. Le rouge est réservé aux
+  // années révolues, sinon la fiche accuse un membre qui n'a rien à se reprocher.
+  var specExigibles = getSpecDue(m, yr) > 0;
   for(var sp=0;sp<COTIS_SPECIALES.length;sp++){
     var spK = COTIS_SPECIALES[sp].key;
     var spPaid = cotisMap[yr+"_"+spK]!=null;
-    var spBg = spPaid?"#15803d":"#c0392b";
-    grilleSpec += "<div style='background:"+spBg+";color:#fff;border-radius:5px;padding:6px 4px;text-align:center;font-size:9px;font-weight:700'>"+COTIS_SPECIALES[sp].label+"</div>";
+    var spBg = spPaid ? "#15803d" : (specExigibles ? "#c0392b" : "#eef4fb");
+    var spFc = (spPaid || specExigibles) ? "#fff" : "#9ca3af";
+    grilleSpec += "<div style='background:"+spBg+";color:"+spFc+";border-radius:5px;padding:6px 4px;text-align:center;font-size:9px;font-weight:700'>"+COTIS_SPECIALES[sp].label+"</div>";
   }
 
   var infos = [
@@ -20880,7 +20890,10 @@ function buildFicheHTML(m, options) {
   h += "<div style='font-size:9px;color:#9ca3af;margin-bottom:8px'>Vert = payé · Rouge = dû non payé · Gris = pas encore dû</div>";
   if(specDueP > 0){
     h += "<h2>Cotisations annuelles</h2>";
-    h += "<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-bottom:10px'>"+grilleSpec+"</div>";
+    h += "<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-bottom:4px'>"+grilleSpec+"</div>";
+    h += "<div style='font-size:9px;color:#9ca3af;margin-bottom:8px'>"
+      + (specExigibles ? "Vert = payé · Rouge = dû non payé" : "Vert = payé · Gris = exigible au 31 décembre " + yr)
+      + "</div>";
   }
   h += "<div class='fiche-stats'>";
   h += "<div class='fiche-stat'><div style='font-size:9px;color:#6b88a4;font-weight:700'>PAYÉS</div><div style='font-family:monospace;font-size:16px;font-weight:800;color:#15803d'>"+paid+"</div></div>";
@@ -20912,64 +20925,179 @@ function extraireNumMembre(numero) {
 }
 
 // Ouvrir le modal de sélection de plage
+// Départements proposés au filtre : ceux réellement portés par des fiches,
+// plutôt qu'une liste figée qui offrirait des cases toujours vides.
+function _deptsUtilises() {
+  var v = {};
+  ((DB && DB.membres) || []).forEach(function(m){ if (m.dept) v[m.dept] = true; });
+  return Object.keys(v).sort();
+}
+
 function ouvrirImpressionPlage() {
+  var yr = currentYear();
   var html = "<div style='font-size:.85rem'>";
-  html += "<div style='color:var(--muted);font-size:.78rem;margin-bottom:12px'>Imprimez les fiches individuelles de plusieurs membres à la suite, en indiquant une plage de numéros (ex : de KG-0001 à KG-0050).</div>";
+  html += "<div style='color:var(--muted);font-size:.78rem;margin-bottom:12px;line-height:1.45'>Imprime les fiches individuelles à la suite, une par page. Tous les filtres sont facultatifs : laissés vides, ils ne restreignent rien.</div>";
+
+  html += "<div class='sec-lbl'>Cotisations</div>";
   html += "<div class='form-grid'>";
+  html += "<div class='fg'><label>Situation</label><select id='plage-cotis' onchange='_majSeuilArr()'>"
+       +  "<option value=''>Toutes situations</option>"
+       +  "<option value='jour'>À jour</option>"
+       +  "<option value='retard'>En retard</option></select></div>";
+  html += "<div class='fg'><label>Exercice</label><select id='plage-annee'>";
+  for (var y = yr; y >= yr - 5; y--) html += "<option value='" + y + "'" + (y === yr ? " selected" : "") + ">" + y + "</option>";
+  html += "</select></div>";
+  html += "</div>";
+  // .fg est en flex : hors d'une form-grid, le libellé se placerait à côté du
+  // champ au lieu de le surmonter.
+  html += "<div id='plage-seuil-box' style='display:none'><div class='form-grid'>"
+       +  "<div class='fg'><label>Arriérés d'au moins</label>"
+       +  "<select id='plage-seuil'><option value='1'>1 mois</option><option value='2'>2 mois</option>"
+       +  "<option value='3'>3 mois</option><option value='6'>6 mois</option><option value='12'>12 mois</option></select></div>"
+       +  "</div><div style='font-size:.66rem;color:var(--muted);margin:-4px 0 4px'>Pour ne sortir que les relances qui en valent la peine.</div></div>";
+
+  html += "<div class='sec-lbl' style='margin-top:12px'>Sélection</div>";
+  html += "<div class='form-grid'>";
+  html += "<div class='fg'><label>Activité</label><select id='plage-activite'>"
+       +  "<option value='actif' selected>Actifs</option><option value='inactif'>Inactifs</option>"
+       +  "<option value=''>Tous</option></select></div>";
+  html += "<div class='fg'><label>Statut</label><select id='plage-statut'>"
+       +  "<option value=''>Tous</option><option value='communiant'>Communiant</option>"
+       +  "<option value='catechumene'>Catéchumène</option><option value='excommunie'>Excommunié</option></select></div>";
+  html += "<div class='fg'><label>Sexe</label><select id='plage-sexe'>"
+       +  "<option value=''>Tous</option><option value='M'>Hommes</option><option value='F'>Femmes</option></select></div>";
+  var depts = _deptsUtilises();
+  html += "<div class='fg'><label>Département</label><select id='plage-dept'><option value=''>Tous</option>";
+  for (var di = 0; di < depts.length; di++) html += "<option value='" + escH(depts[di]) + "'>" + escH(depts[di]) + "</option>";
+  html += "</select></div>";
   html += "<div class='fg'><label>Numéro de début</label><input type='text' id='plage-debut' placeholder='Ex: KG-0001' style='text-transform:uppercase'></div>";
   html += "<div class='fg'><label>Numéro de fin</label><input type='text' id='plage-fin' placeholder='Ex: KG-0050' style='text-transform:uppercase'></div>";
-  html += "</div>";
-  html += "<div style='margin-top:10px'>";
-  html += "<label style='display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--muted);cursor:pointer'>";
-  html += "<input type='checkbox' id='plage-actifs-only' checked style='width:auto'> Membres actifs uniquement";
-  html += "</label>";
-  html += "<label style='display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--muted);cursor:pointer;margin-top:6px'>";
-  html += "<input type='checkbox' id='plage-no-qr' style='width:auto'> Sans QR code (impression plus rapide)";
-  html += "</label>";
-  html += "</div>";
-  html += "<div id='plage-apercu' style='margin-top:12px;font-size:.75rem;color:var(--muted)'></div>";
+  html += "<div class='fg'><label>Trier par</label><select id='plage-tri'>"
+       +  "<option value='numero'>Numéro</option><option value='nom'>Nom</option>"
+       +  "<option value='arrieres'>Arriérés décroissants</option></select></div>";
   html += "</div>";
 
-  showModalHTML("🖨️ Impression par plage de numéros", html, function(){
+  html += "<label style='display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--muted);cursor:pointer;margin-top:10px'>";
+  html += "<input type='checkbox' id='plage-no-qr' style='width:auto'> Sans QR code (impression plus rapide)";
+  html += "</label>";
+  html += "<div id='plage-apercu' style='margin-top:12px;font-size:.75rem;color:var(--muted);line-height:1.5'></div>";
+  html += "</div>";
+
+  showModalHTML("🖨️ Impression des fiches membres", html, function(){
     lancerImpressionPlage();
   }, "Imprimer les fiches");
 
-  // Aperçu dynamique du nombre de membres concernés
+  // Aperçu dynamique : le comptable voit ce qu'il va sortir avant de lancer
+  // une impression de plusieurs dizaines de pages.
   setTimeout(function(){
-    var d = document.getElementById("plage-debut");
-    var f = document.getElementById("plage-fin");
-    var ao = document.getElementById("plage-actifs-only");
-    function updateApercu(){
-      var res = getMembresDansPlage();
-      var ap = document.getElementById("plage-apercu");
-      if(ap) ap.textContent = res.length+" membre(s) correspondant à cette plage.";
+    var ids = ["plage-debut","plage-fin","plage-cotis","plage-annee","plage-seuil",
+               "plage-activite","plage-statut","plage-sexe","plage-dept","plage-tri"];
+    for (var i = 0; i < ids.length; i++) {
+      var el = document.getElementById(ids[i]);
+      if (el) { el.addEventListener("input", _majApercuPlage); el.addEventListener("change", _majApercuPlage); }
     }
-    if(d) d.addEventListener("input", updateApercu);
-    if(f) f.addEventListener("input", updateApercu);
-    if(ao) ao.addEventListener("change", updateApercu);
+    _majSeuilArr();
+    _majApercuPlage();
   }, 100);
 }
 
-function getMembresDansPlage() {
-  var debutStr = (document.getElementById("plage-debut")||{}).value||"";
-  var finStr = (document.getElementById("plage-fin")||{}).value||"";
-  var actifsOnly = (document.getElementById("plage-actifs-only")||{}).checked;
-  var numDebut = extraireNumMembre(debutStr);
-  var numFin = extraireNumMembre(finStr);
-  if(numDebut<0 || numFin<0) return [];
+function _majSeuilArr() {
+  var c = document.getElementById("plage-cotis"), b = document.getElementById("plage-seuil-box");
+  if (b) b.style.display = (c && c.value === "retard") ? "block" : "none";
+  _majApercuPlage();
+}
 
-  var lo = Math.min(numDebut, numFin), hi = Math.max(numDebut, numFin);
-  return (DB.membres||[]).filter(function(m){
+function _majApercuPlage() {
+  var ap = document.getElementById("plage-apercu");
+  if (!ap) return;
+  var res = getMembresDansPlage();
+  if (!res.length) {
+    ap.innerHTML = "<span style='color:#c0392b;font-weight:700'>Aucun membre ne correspond.</span> Élargissez les filtres.";
+    return;
+  }
+  var yr = parseInt((document.getElementById("plage-annee") || {}).value, 10) || currentYear();
+  var jour = 0, retard = 0, mois = 0, du = 0;
+  res.forEach(function(m) {
+    var a = getArrears(m, yr);
+    if (a > 0) { retard++; mois += a; du += getMontantDu(m, yr); } else jour++;
+  });
+  ap.innerHTML = "<strong>" + res.length + " fiche(s)</strong> à imprimer, une par page."
+    + "<br>" + jour + " à jour · " + retard + " en retard"
+    + (retard ? " (" + mois + " mois cumulés, " + fmt(du) + " FC dus)" : "");
+}
+
+// Critères lus une fois, pour que l'aperçu, l'impression et l'en-tête du
+// document parlent exactement de la même sélection.
+function _critImpressionFiches() {
+  function v(id) { var e = document.getElementById(id); return e ? (e.value || "") : ""; }
+  return {
+    debut: v("plage-debut"), fin: v("plage-fin"),
+    cotis: v("plage-cotis"), seuil: parseInt(v("plage-seuil"), 10) || 1,
+    annee: parseInt(v("plage-annee"), 10) || currentYear(),
+    activite: document.getElementById("plage-activite") ? v("plage-activite") : "actif",
+    statut: v("plage-statut"), sexe: v("plage-sexe"), dept: v("plage-dept"),
+    tri: v("plage-tri") || "numero"
+  };
+}
+
+function getMembresDansPlage() {
+  var c = _critImpressionFiches();
+
+  // La plage est facultative : vide des deux côtés, elle ne restreint rien.
+  // Renseignée d'un seul côté, elle borne de ce côté-là seulement.
+  var nd = c.debut ? extraireNumMembre(c.debut) : -1;
+  var nf = c.fin ? extraireNumMembre(c.fin) : -1;
+  var lo = -Infinity, hi = Infinity;
+  if (nd >= 0 && nf >= 0) { lo = Math.min(nd, nf); hi = Math.max(nd, nf); }
+  else if (nd >= 0) lo = nd;
+  else if (nf >= 0) hi = nf;
+
+  var res = (DB.membres || []).filter(function(m) {
     var n = extraireNumMembre(m.numero);
-    if(n<lo || n>hi) return false;
-    if(actifsOnly && (m.activite||"actif")!=="actif") return false;
+    if (n < lo || n > hi) return false;
+    if (c.activite && (m.activite || "actif") !== c.activite) return false;
+    if (c.statut && (m.statut || "communiant") !== c.statut) return false;
+    if (c.sexe && (m.sexe || "") !== c.sexe) return false;
+    if (c.dept && (m.dept || "") !== c.dept) return false;
+    if (c.cotis) {
+      var a = getArrears(m, c.annee);
+      if (c.cotis === "jour" && a > 0) return false;
+      if (c.cotis === "retard" && a < c.seuil) return false;
+    }
     return true;
-  }).sort(function(a,b){ return extraireNumMembre(a.numero)-extraireNumMembre(b.numero); });
+  });
+
+  res.sort(function(a, b) {
+    if (c.tri === "nom") {
+      return ((a.nom||"")+" "+(a.prenom||"")).localeCompare((b.nom||"")+" "+(b.prenom||""), "fr", {sensitivity:"base"});
+    }
+    if (c.tri === "arrieres") {
+      var d = getArrears(b, c.annee) - getArrears(a, c.annee);
+      if (d) return d;
+    }
+    return extraireNumMembre(a.numero) - extraireNumMembre(b.numero);
+  });
+  return res;
+}
+
+// Rappel des filtres en tête du document : une liasse de fiches qui circule
+// doit dire de quelle sélection elle sort, sinon elle n'est pas vérifiable.
+function _libelleFiltresFiches(c) {
+  var f = [];
+  if (c.cotis === "jour") f.push("à jour de cotisation");
+  if (c.cotis === "retard") f.push("en retard d'au moins " + c.seuil + " mois");
+  if (c.activite === "actif") f.push("actifs"); else if (c.activite === "inactif") f.push("inactifs");
+  if (c.statut) f.push(c.statut);
+  if (c.sexe) f.push(c.sexe === "M" ? "hommes" : "femmes");
+  if (c.dept) f.push("département " + c.dept);
+  if (c.debut || c.fin) f.push("numéros " + (c.debut || "début") + " → " + (c.fin || "fin"));
+  return (f.length ? f.join(", ") : "tous les membres") + " — exercice " + c.annee;
 }
 
 function lancerImpressionPlage() {
+  var crit = _critImpressionFiches();
   var membres = getMembresDansPlage();
-  if(membres.length===0){ showToast("Aucun membre dans cette plage.","err"); return; }
+  if(membres.length===0){ showToast("Aucun membre ne correspond à ces filtres.","err"); return; }
   var noQr = (document.getElementById("plage-no-qr")||{}).checked;
   closeModal();
   showToast("Génération de "+membres.length+" fiche(s)...","ok");
@@ -20977,7 +21105,7 @@ function lancerImpressionPlage() {
   var win = window.open("","_blank","width=800,height=900");
   if(!win){ showToast("Autorisez les pop-ups.","err"); return; }
 
-  win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Fiches membres — Impression par plage</title>");
+  win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Fiches membres — "+escH(_libelleFiltresFiches(crit))+"</title>");
   if(!noQr) win.document.write("<script src='https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js'><\/script>");
   win.document.write("<style>"+getPrintCSS());
   win.document.write(".fiche-grille{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin:8px 0}");
@@ -20985,6 +21113,34 @@ function lancerImpressionPlage() {
   win.document.write(".fiche-stat{background:#eef4fb;border-radius:7px;padding:9px;text-align:center}");
   win.document.write(".qr-zone{display:flex;align-items:center;gap:14px;margin-top:14px;padding:10px 14px;border:2px dashed #27ae60;border-radius:8px;background:#f0faf4}");
   win.document.write("</style></head><body>");
+
+  // Récapitulatif de tête : ce qu'on a demandé, et ce que ça donne.
+  var nJour = 0, nRet = 0, nMois = 0, nDu = 0;
+  membres.forEach(function(m){
+    var a = getArrears(m, crit.annee);
+    if (a > 0) { nRet++; nMois += a; nDu += getMontantDu(m, crit.annee); } else nJour++;
+  });
+  win.document.write("<div style='page-break-after:always'>");
+  win.document.write(buildPrintHeader("Fiches individuelles des membres"));
+  win.document.write("<div style='font-size:12px;margin:10px 0 14px;line-height:1.6'>"
+    + "<strong>Sélection :</strong> " + escH(_libelleFiltresFiches(crit)) + "<br>"
+    + "<strong>" + membres.length + " fiche(s)</strong> — " + nJour + " à jour, " + nRet + " en retard"
+    + (nRet ? " (" + nMois + " mois cumulés, " + fmt(nDu) + " FC dus)" : "") + "</div>");
+  var tbl = "<table style='width:100%;border-collapse:collapse;font-size:10px'>"
+    + "<tr><th style='background:#1a3a5c;color:#fff;padding:5px 7px'>N°</th>"
+    + "<th style='background:#1a3a5c;color:#fff;padding:5px 7px'>Nom</th>"
+    + "<th style='background:#1a3a5c;color:#fff;padding:5px 7px'>Arriérés</th>"
+    + "<th style='background:#1a3a5c;color:#fff;padding:5px 7px'>Montant dû</th></tr>";
+  membres.forEach(function(m, i){
+    var a = getArrears(m, crit.annee);
+    tbl += "<tr style='background:" + (i % 2 ? "#f8fafd" : "#fff") + "'>"
+      + "<td style='padding:4px 7px;text-align:center'>" + escH(m.numero||"-") + "</td>"
+      + "<td style='padding:4px 7px'>" + escH((m.nom||"")+" "+(m.prenom||"")) + "</td>"
+      + "<td style='padding:4px 7px;text-align:center;color:" + (a>0?"#b91c1c":"#15803d") + ";font-weight:700'>"
+      + (a>0 ? a+" mois" : "À jour") + "</td>"
+      + "<td style='padding:4px 7px;text-align:right'>" + (a>0 ? fmt(getMontantDu(m, crit.annee))+" FC" : "—") + "</td></tr>";
+  });
+  win.document.write(tbl + "</table></div>");
 
   membres.forEach(function(m, idx){
     win.document.write(buildFicheHTML(m, {pageBreak: idx<membres.length-1, noQr: noQr}));
