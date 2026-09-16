@@ -2427,6 +2427,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
             <option value="D">— District (annuel)</option>
             <option value="R">— Sec. Regional (annuel)</option>
             <option value="G">— Sec. General (annuel)</option>
+            <option value="C">— Carte de membre (a l adhesion)</option>
           </select>
         </div>
         <div class="fg">
@@ -4011,6 +4012,26 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
       <div class="fg"><label>Adresse / Quartier</label><input type="text" id="m-adresse" placeholder="Quartier, avenue..."></div>
       <div class="fg"><label>Date d adhesion</label><input type="date" id="m-adhesion"></div>
       <div class="fg"><label>Numero de membre</label><input type="text" id="m-numero" placeholder="Auto-genere" readonly style="background:#f0f8ff;color:var(--mid);font-family:DM Mono,monospace;font-weight:700;cursor:not-allowed"></div>
+    </div>
+
+    <div class="sec-lbl">Carte de membre</div>
+    <div id="m-bloc-carte" style="background:#f7fafd;border:1px solid #c5d8ed;border-radius:9px;padding:11px 12px;margin-bottom:12px">
+      <label style="display:flex;gap:9px;align-items:flex-start;cursor:pointer;margin:0">
+        <input type="checkbox" id="m-carte-oui" onchange="_majBlocCarte()" style="width:auto;margin-top:3px">
+        <span style="font-size:.8rem;font-weight:600">La carte a ete achetee</span>
+      </label>
+      <div style="font-size:.7rem;color:#6b88a4;margin:5px 0 0;line-height:1.45">
+        Enregistre l'achat comme une ligne du registre, au nom de ce membre. L'argent apparaitra
+        dans la recette du prochain culte, comme toute cotisation encaissee.
+      </div>
+      <div id="m-carte-champs" style="display:none;margin-top:9px">
+        <div class="form-grid">
+          <div class="fg"><label>Date d achat</label><input type="date" id="m-carte-date" onchange="_majMontantCarte()"></div>
+          <div class="fg"><label>Montant (FC)</label><input type="number" id="m-carte-montant" min="0"></div>
+        </div>
+        <div class="fg"><label>Note</label><input type="text" id="m-carte-note" placeholder="Numero de carte, remise..."></div>
+        <div id="m-carte-etat" style="font-size:.7rem;color:#6b88a4;margin-top:4px"></div>
+      </div>
     </div>
 
     <div class="sec-lbl">Statut ecclesial</div>
@@ -7452,6 +7473,149 @@ function _provenanceRapprochement() {
   return h + '</div>';
 }
 
+// ══ COUVERTURE DU REGISTRE ═════════════════════════════════════════════════
+// Le rapprochement dit qu'il manque de l'argent au registre. Il ne dit pas
+// à qui il manque. Cette carte répond à la seule question qui permette d'agir :
+// combien de mois-membres la caisse a-t-elle encaissés que personne ne
+// revendique, et quels membres n'ont aucune ligne à leur nom.
+//
+// Le raisonnement est volontairement simple et vérifiable à la main : la
+// recette de cotisations portée par les cultes, divisée par le tarif de chaque
+// mois, donne un nombre de mois-membres payés. Le registre en crédite un
+// certain nombre. L'écart est ce qui reste à attribuer.
+function _couvertureRegistre(annee) {
+  var an = parseInt(annee, 10) || currentYear();
+
+  // Ce que la caisse a encaissé sous la rubrique, mois par mois, converti en
+  // mois-membres au tarif de chaque mois.
+  var parMois = {}, porteTotal = 0, equivalent = 0;
+  (gHistCache || []).forEach(function(h) {
+    var d = (h.meta && h.meta.date) || "";
+    if (d.substring(0, 4) !== String(an)) return;
+    var mo = parseInt(d.substring(5, 7), 10);
+    var mt = 0;
+    ["cf", "cl"].forEach(function(k) {
+      (h[k] || []).forEach(function(r) {
+        if (r && r.l && _estLigneCotisMembres(r.l)) mt += parseFloat(String(r.cdf).replace(",", ".")) || 0;
+      });
+    });
+    if (mt <= 0) return;
+    parMois[mo] = (parMois[mo] || 0) + mt;
+    porteTotal += mt;
+  });
+  for (var mo in parMois) {
+    var tarif = getCotisMontant(parseInt(mo, 10), an);
+    if (tarif > 0) equivalent += parMois[mo] / tarif;
+  }
+
+  // Ce que le registre attribue à quelqu'un, pour les périodes de cette année.
+  var creditMois = 0, creditFC = 0, cartes = 0, carteFC = 0, specFC = 0;
+  var parMembre = {};
+  ((DB && DB.cotisations) || []).forEach(function(c) {
+    if (String(c.annee) !== String(an)) return;
+    var m = parseFloat(c.montant) || 0;
+    if (c.mois === COTIS_CARTE) { cartes++; carteFC += m; }
+    else if (_estSpeciale(c.mois)) { specFC += m; }
+    else if (isMonthKey(c.mois)) { creditMois++; creditFC += m; }
+    parMembre[c.membreId] = true;
+  });
+
+  // Les membres actifs sans aucune ligne pour l'année : c'est par eux que la
+  // reprise commence, pas par les chiffres.
+  var sansLigne = [], actifs = 0;
+  ((DB && DB.membres) || []).forEach(function(m) {
+    if (m.activite !== "actif") return;
+    actifs++;
+    if (!parMembre[m.id]) sansLigne.push(m);
+  });
+  sansLigne.sort(function(a, b){ return String(a.nom || "").localeCompare(String(b.nom || "")); });
+
+  return {
+    annee: an, porteTotal: porteTotal, equivalent: equivalent,
+    creditMois: creditMois, creditFC: creditFC,
+    cartes: cartes, carteFC: carteFC, specFC: specFC,
+    registreTotal: creditFC + carteFC + specFC,
+    manque: porteTotal - (creditFC + carteFC + specFC),
+    moisManquants: equivalent - creditMois,
+    actifs: actifs, sansLigne: sansLigne
+  };
+}
+
+function _carteCouverture() {
+  var exs = _exercicesDisponibles();
+  var an = _exerciceChoisi(exs);
+  var c = _couvertureRegistre(an);
+  var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F9FE} Couverture du registre</div>';
+  h += '<p style="font-size:.74rem;color:var(--muted);margin-bottom:9px;line-height:1.5">'
+     + 'Combien de mois-membres la caisse a encaiss\u00e9s, et combien le registre en attribue \u00e0 quelqu\'un. '
+     + 'L\'\u00e9cart n\'est pas de l\'argent perdu : c\'est de l\'argent dont on ignore le payeur.</p>';
+
+  if (!c.porteTotal && !c.registreTotal) {
+    return h + '<p style="font-size:.76rem;color:var(--muted)">Rien \u00e0 comparer pour ' + an + '.</p>';
+  }
+
+  h += '<table class="cotis-table rap-table"><tbody>'
+     + '<tr><td>Port\u00e9 en recette par les cultes</td><td style="text-align:right"><strong>' + fmt(c.porteTotal) + ' FC</strong></td></tr>'
+     + '<tr><td>\u2003soit, au bar\u00e8me de chaque mois</td><td style="text-align:right">' + Math.round(c.equivalent) + ' mois-membres</td></tr>'
+     + '<tr><td>Attribu\u00e9 par le registre</td><td style="text-align:right"><strong>' + fmt(c.registreTotal) + ' FC</strong></td></tr>'
+     + '<tr><td>\u2003dont cotisations mensuelles</td><td style="text-align:right">' + c.creditMois + ' mois \u00b7 ' + fmt(c.creditFC) + ' FC</td></tr>'
+     + '<tr><td>\u2003dont cartes de membre</td><td style="text-align:right">' + c.cartes + ' \u00b7 ' + fmt(c.carteFC) + ' FC</td></tr>'
+     + '<tr><td>\u2003dont cotisations annuelles</td><td style="text-align:right">' + fmt(c.specFC) + ' FC</td></tr>'
+     + '<tr class="' + (Math.abs(c.manque) < 1 ? "rap-ok" : "rap-ko") + '"><td><strong>Reste \u00e0 attribuer</strong></td>'
+     + '<td style="text-align:right"><strong>' + fmt(c.manque) + ' FC</strong>'
+     + (c.moisManquants >= 1 ? '<div style="font-size:.66rem;color:var(--muted)">\u2248 ' + Math.round(c.moisManquants) + ' mois-membres</div>' : '')
+     + '</td></tr></tbody></table>';
+
+  if (c.sansLigne.length) {
+    h += '<div class="ctrl-piece ko" style="margin-top:8px"><div class="cp-tete"><strong>'
+       + c.sansLigne.length + ' membre(s) actif(s) sur ' + c.actifs + ' sans aucune ligne en ' + an + '</strong></div>'
+       + '<div class="cp-l">Aucun mois, aucune carte, aucune annuelle \u00e0 leur nom. Soit ils n\'ont rien vers\u00e9, '
+       + 'soit leurs versements sont dans la caisse sans \u00eatre au registre \u2014 c\'est l\u00e0 que se loge l\'\u00e9cart ci-dessus.</div>'
+       + '<div class="cp-l" style="font-size:.7rem">' ;
+    c.sansLigne.slice(0, 25).forEach(function(m, i) {
+      h += (i ? ' \u00b7 ' : '') + escH((m.nom || "") + " " + (m.prenom || ""));
+    });
+    if (c.sansLigne.length > 25) h += ' \u2026 et ' + (c.sansLigne.length - 25) + ' autre(s)';
+    h += '</div></div>';
+  }
+
+  h += '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">'
+     + '<button class="btn btn-sm btn-g" onclick="exporterCouverture()">Exporter la liste \u00e0 reprendre</button></div>';
+  return h;
+}
+
+// Une liste de noms à travailler vaut mieux qu'un montant à contempler.
+function exporterCouverture() {
+  if (typeof XLSX === "undefined") { showToast("SheetJS non charg\u00e9. V\u00e9rifiez votre connexion.", "err"); return; }
+  var an = _exerciceChoisi(_exercicesDisponibles());
+  var c = _couvertureRegistre(an);
+
+  var synth = [["Couverture du registre", an],
+    ["Port\u00e9 en recette par les cultes (FC)", Math.round(c.porteTotal)],
+    ["\u00c9quivalent en mois-membres", Math.round(c.equivalent)],
+    ["Attribu\u00e9 par le registre (FC)", Math.round(c.registreTotal)],
+    ["  cotisations mensuelles (FC)", Math.round(c.creditFC)],
+    ["  cotisations mensuelles (nb de mois)", c.creditMois],
+    ["  cartes de membre (FC)", Math.round(c.carteFC)],
+    ["  cartes de membre (nb)", c.cartes],
+    ["  cotisations annuelles (FC)", Math.round(c.specFC)],
+    ["Reste \u00e0 attribuer (FC)", Math.round(c.manque)],
+    ["Membres actifs", c.actifs],
+    ["dont sans aucune ligne", c.sansLigne.length]];
+
+  var det = [["Nom", "Pr\u00e9nom", "Num\u00e9ro", "T\u00e9l\u00e9phone", "Adh\u00e9sion", "Mois dus " + an, "Montant d\u00fb (FC)"]];
+  c.sansLigne.forEach(function(m) {
+    det.push([m.nom || "", m.prenom || "", m.numero || "", m.tel || "", m.adhesion || "",
+              getMonthsDue(m, an), Math.round(getMontantDu(m, an))]);
+  });
+
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(synth), "Synth\u00e8se");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(det), "\u00c0 reprendre");
+  XLSX.writeFile(wb, "Couverture_registre_" + an + ".xlsx");
+  showToast(c.sansLigne.length + " membre(s) \u00e0 reprendre export\u00e9(s).", "ok");
+}
+
 function _carteRapprochementCotis() {
   var r = _rapprochementCotis();
   var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F501} Rapprochement cotisations \u2194 recettes</div>';
@@ -8820,6 +8984,7 @@ function renderAdmin(){
   html += _carteRolesServeur();
   html += _carteMigrationMembres();
   html += _carteMigrationSocial();
+  html += _carteCouverture();
   html += _carteRapprochementCotis();
   html += _carteControlePieces();
   html += _carteSycebnl();
@@ -9448,7 +9613,7 @@ function _carteBareme() {
      + "tous les mois qu'elle couvre — à réserver à la correction d'une saisie."
      + "</div>";
   h += "<div style='overflow-x:auto'><table class='cotis-table bar-table' style='min-width:520px'><thead><tr>"
-     + "<th style='width:110px'>À partir de</th><th>Mensuelle</th><th>District</th><th>Sec. Régional</th><th>Sec. Général</th><th style='width:38px'></th>"
+     + "<th style='width:110px'>À partir de</th><th>Mensuelle</th><th>Carte</th><th>District</th><th>Sec. Régional</th><th>Sec. Général</th><th style='width:38px'></th>"
      + "</tr></thead><tbody id='bar-corps'>";
   (gBareme.length ? gBareme : BAREME_DEFAUT).forEach(function(l, i) { h += _ligneBareme(l, i); });
   h += "</tbody></table></div>";
@@ -9457,7 +9622,8 @@ function _carteBareme() {
      + "<button class='btn btn-g btn-sm' onclick='enregistrerBareme()'>Enregistrer le barème</button></div>";
   h += "<div style='font-size:.7rem;color:#6b88a4;margin-top:8px'>"
      + "Les cotisations annuelles (District, Régional, Général) s'ajoutent aux 12 mois et ne sont exigibles "
-     + "qu'au 31 décembre : c'est le barème de décembre de l'année concernée qui les tarife.</div>";
+     + "qu'au 31 décembre : c'est le barème de décembre de l'année concernée qui les tarife. "
+     + "La carte de membre s'achète une fois, à l'adhésion : elle n'est jamais un arriéré, et son prix est celui du mois de l'achat.</div>";
   h += "</div>";
   return h;
 }
@@ -9473,7 +9639,8 @@ function _ligneBareme(l, i) {
   var t = "<tr data-ligne='" + i + "'>";
   t += "<td data-lbl='\u00c0 partir de' class='bar-periode'><input type='month' class='bar-champ' data-cle='depuis' data-i='" + i + "' value='" + escHtml(l.depuis || "")
      + "' style='width:100%;padding:4px 6px;border:1.5px solid var(--border);border-radius:6px;font-size:.76rem'></td>";
-  t += ch("mensuel", "Mensuelle", l.mensuel) + ch("D", "District", l.D)
+  t += ch("mensuel", "Mensuelle", l.mensuel) + ch("C", "Carte de membre", l.C)
+     + ch("D", "District", l.D)
      + ch("R", "Sec. R\u00e9gional", l.R) + ch("G", "Sec. G\u00e9n\u00e9ral", l.G);
   t += "<td class='bar-actions' style='text-align:center'>" + (i === 0 ? "<span style='color:var(--muted)' title='Période initiale'>\u2014</span>"
      : "<button class='btn btn-sm btn-d' style='padding:2px 7px' onclick='supprimerPeriodeBareme(" + i + ")'>\u00d7</button>") + "</td>";
@@ -9505,7 +9672,7 @@ function ajouterPeriodeBareme() {
   var d = String(dernier.depuis || "2026-01").split("-");
   var an = parseInt(d[0], 10) || 2026, mo = (parseInt(d[1], 10) || 1) + 1;
   if (mo > 12) { mo = 1; an++; }
-  l.push({ depuis: _ymCle(an, mo), mensuel: dernier.mensuel, D: dernier.D, R: dernier.R, G: dernier.G });
+  l.push({ depuis: _ymCle(an, mo), mensuel: dernier.mensuel, C: dernier.C, D: dernier.D, R: dernier.R, G: dernier.G });
   gBareme = _normaliserBareme(l);
   renderAdmin();
 }
@@ -10159,7 +10326,7 @@ var COTIS_SPECIALES = [
 // une période — les mois antérieurs gardent le leur. Modifier une ligne
 // existante reste possible, pour corriger une saisie, et c'est alors une
 // réécriture assumée, que la carte d'administration annonce comme telle.
-var BAREME_DEFAUT = [{ depuis: "2026-01", mensuel: 1000, D: 1000, R: 1000, G: 1000 }];
+var BAREME_DEFAUT = [{ depuis: "2026-01", mensuel: 1000, D: 1000, R: 1000, G: 1000, C: 1000 }];
 var gBareme = BAREME_DEFAUT.slice();
 
 // "2026-3" → "2026-03", pour que la comparaison de chaînes soit chronologique.
@@ -10177,6 +10344,29 @@ function _baremeA(ym) {
   return choisi || l[0];
 }
 
+// ══ CARTE DE MEMBRE ════════════════════════════════════════════════════════
+// La carte s'achète une fois, à l'adhésion. Ce n'est ni un mois ni une
+// cotisation annuelle : elle n'est jamais due, donc jamais un arriéré, et son
+// prix suit le barème du mois où elle est achetée.
+//
+// Elle était jusqu'ici invisible : l'argent des cartes entrait en caisse et
+// ressortait dans la rubrique « Cotisation Cartes de Membre » des cultes, sans
+// qu'aucune ligne du registre ne dise qui avait acheté quoi.
+var COTIS_CARTE = "C";
+
+function _estSpeciale(k) {
+  return k === "D" || k === "R" || k === "G";
+}
+
+// Prix de la carte au mois de l'achat. Sans date, le mois en cours.
+function getCarteMontant(dateAchat) {
+  var d = String(dateAchat || "");
+  var ym = /^[0-9]{4}-[0-9]{2}/.test(d) ? d.substring(0, 7) : null;
+  if (!ym) { var now = new Date(); ym = _ymCle(now.getFullYear(), now.getMonth() + 1); }
+  var b = _baremeA(ym);
+  return (b.C != null && b.C !== "") ? (parseFloat(b.C) || 0) : (parseFloat(b.mensuel) || 0);
+}
+
 // Les cotisations annuelles ne sont exigibles qu'au 31 décembre (voir
 // getSpecDue) : c'est donc le barème de décembre qui les tarife.
 function getCotisSpecMontant(key, annee) {
@@ -10190,7 +10380,8 @@ function getCotisSpecMontant(key, annee) {
 // spéciale (D/R/G). Sans argument, le tarif du mois en cours.
 function getCotisMontant(moisKey, annee) {
   var an = parseInt(annee, 10) || currentYear();
-  if (moisKey === "D" || moisKey === "R" || moisKey === "G") return getCotisSpecMontant(moisKey, an);
+  if (moisKey === COTIS_CARTE) return getCarteMontant(_ymCle(an, (new Date()).getMonth() + 1));
+  if (_estSpeciale(moisKey)) return getCotisSpecMontant(moisKey, an);
   var mo = parseInt(moisKey, 10);
   if (isNaN(mo) || mo < 1 || mo > 12) {
     var now = new Date();
@@ -10211,7 +10402,8 @@ function _normaliserBareme(liste) {
                mensuel: parseFloat(l.mensuel) || 0,
                D: l.D != null ? (parseFloat(l.D) || 0) : null,
                R: l.R != null ? (parseFloat(l.R) || 0) : null,
-               G: l.G != null ? (parseFloat(l.G) || 0) : null });
+               G: l.G != null ? (parseFloat(l.G) || 0) : null,
+               C: l.C != null ? (parseFloat(l.C) || 0) : null });
   });
   out.sort(function(a, b){ return a.depuis < b.depuis ? -1 : (a.depuis > b.depuis ? 1 : 0); });
   return out;
@@ -10257,18 +10449,50 @@ function _migrerAncienBareme(special) {
   var l = { depuis: "2026-01", mensuel: 1000,
             D: sp && sp.D != null ? parseFloat(sp.D) || 0 : 1000,
             R: sp && sp.R != null ? parseFloat(sp.R) || 0 : 1000,
-            G: sp && sp.G != null ? parseFloat(sp.G) || 0 : 1000 };
+            G: sp && sp.G != null ? parseFloat(sp.G) || 0 : 1000,
+            C: 1000 };
   return [l];
 }
 
 // Libellé d'une période (mois 01-12 ou spéciale D/R/G)
 function moisLabel(key) {
+  if(key===COTIS_CARTE) return "Carte de membre";
   if(key==="D") return "District";
   if(key==="R") return "Sec. Regional";
   if(key==="G") return "Sec. General";
   var n = parseInt(key);
   if(!isNaN(n) && n>=1 && n<=12) return MOIS_LABELS[n];
   return key || "-";
+}
+
+// ── Bloc « carte de membre » du formulaire d'adhésion ─────────────────────
+// Réservé à la création : sur une fiche existante, une carte s'enregistre par
+// le formulaire de cotisation, avec sa date d'encaissement propre. Rouvrir une
+// fiche ne doit pas pouvoir créer une deuxième carte par inadvertance.
+function _majBlocCarte() {
+  var c = document.getElementById("m-carte-oui");
+  var z = document.getElementById("m-carte-champs");
+  if (!c || !z) return;
+  z.style.display = c.checked ? "" : "none";
+  if (c.checked) {
+    var d = document.getElementById("m-carte-date");
+    var a = document.getElementById("m-adhesion");
+    if (d && !d.value) d.value = (a && a.value) || getTodayStr();
+    _majMontantCarte();
+  }
+}
+
+function _majMontantCarte() {
+  var d = document.getElementById("m-carte-date");
+  var m = document.getElementById("m-carte-montant");
+  var e = document.getElementById("m-carte-etat");
+  if (!m) return;
+  var prix = getCarteMontant(d ? d.value : "");
+  // Le montant reste modifiable : une remise, une carte offerte, un tarif
+  // décidé en séance. Le barème propose, le trésorier tranche.
+  if (!m.value || m.getAttribute("data-auto") !== "0") { m.value = prix; m.setAttribute("data-auto", "1"); }
+  m.onchange = function(){ m.setAttribute("data-auto", "0"); };
+  if (e) e.textContent = "Bar\u00e8me en vigueur \u00e0 cette date : " + fmt(prix) + " FC.";
 }
 
 // Quand on change le type de cotisation, pré-remplir le montant attendu
@@ -10624,11 +10848,14 @@ function getSpecApplicable(membre, annee) {
 }
 
 // Nombre de cotisations spéciales PAYÉES par le membre cette année
+// Ne comptent que les trois annuelles. La carte de membre partageait la
+// définition « tout ce qui n'est pas un mois » : l'acheter réduisait les
+// arriérés d'une cotisation annuelle jamais versée.
 function getSpecPaid(memberId, annee) {
   var count = 0;
   for (var i=0;i<DB.cotisations.length;i++) {
     var c=DB.cotisations[i];
-    if (c.membreId===memberId && c.annee===String(annee) && !isMonthKey(c.mois)) count++;
+    if (c.membreId===memberId && c.annee===String(annee) && _estSpeciale(c.mois)) count++;
   }
   return count;
 }
@@ -10657,7 +10884,7 @@ function getMontantDu(membre, annee) {
   var paidKeys = {};
   for (var i=0;i<DB.cotisations.length;i++){
     var c=DB.cotisations[i];
-    if(c.membreId===membre.id && c.annee===String(annee) && !isMonthKey(c.mois)) paidKeys[c.mois]=true;
+    if(c.membreId===membre.id && c.annee===String(annee) && _estSpeciale(c.mois)) paidKeys[c.mois]=true;
   }
   if(getSpecDue(membre, annee)>0){
     for(var s=0;s<COTIS_SPECIALES.length;s++){
@@ -10949,13 +11176,54 @@ function openAddMember() {
   var sd=document.getElementById("m-sortie-date"); if(sd) sd.value="";
   var sm=document.getElementById("m-sortie-motif"); if(sm) sm.value="";
   _majBlocSortie();
+  _reinitBlocCarte(true);
   document.getElementById("m-numero").value = "KG-"+pad4(_prochainNumeroMembre())+" (auto)";
   safeStyle("btn-delete-member","display","none");
   document.getElementById("modal-membre").className="modal-back open";
 }
 
+// Le bloc carte n'apparaît qu'à la création. Sur une fiche existante, il est
+// masqué et remplacé par l'état de la carte : rouvrir une fiche ne doit pas
+// permettre de créer une seconde carte sans s'en apercevoir.
+// Le formulaire de saisie est mémorisé au premier passage : le mode édition
+// remplace le contenu du bloc par l'état de la carte, et sans cette copie la
+// création suivante trouverait le bloc vidé de ses champs.
+var _carteFormHTML = null;
+
+function _reinitBlocCarte(creation, membre) {
+  var bloc = document.getElementById("m-bloc-carte");
+  if (!bloc) return;
+  if (_carteFormHTML === null) _carteFormHTML = bloc.innerHTML;
+
+  if (creation) {
+    bloc.innerHTML = _carteFormHTML;
+    var c = document.getElementById("m-carte-oui");
+    if (c) c.checked = false;
+    ["m-carte-date","m-carte-montant","m-carte-note"].forEach(function(id){
+      var e = document.getElementById(id); if (e) { e.value = ""; e.removeAttribute("data-auto"); }
+    });
+    var z = document.getElementById("m-carte-champs"); if (z) z.style.display = "none";
+    var etat = document.getElementById("m-carte-etat"); if (etat) etat.textContent = "";
+    return;
+  }
+
+  // Fiche existante : afficher ce que le registre sait déjà de la carte, plutôt
+  // qu'un formulaire qui laisserait croire qu'on peut en créer une seconde.
+  var achat = null;
+  ((DB && DB.cotisations) || []).forEach(function(k){
+    if (membre && k.membreId === membre.id && k.mois === COTIS_CARTE) achat = k;
+  });
+  bloc.innerHTML = achat
+    ? "<div style='font-size:.78rem;color:#14532d'><strong>Carte enregistr\u00e9e</strong> \u2014 "
+      + fmt(parseFloat(achat.montant) || 0) + " FC le " + escHtml(achat.dateEnr || "?")
+      + (achat.note ? " \u00b7 " + escHtml(achat.note) : "") + "</div>"
+    : "<div style='font-size:.78rem;color:#8a5a00'><strong>Aucune carte enregistr\u00e9e</strong> pour ce membre.<br>"
+      + "Pour l'ajouter, passez par l'onglet Cotisations, type \u00ab\u00a0Carte de membre\u00a0\u00bb.</div>";
+}
+
 function openEditMember(id) {
   var m=findMembre(id); if(!m) return;
+  _reinitBlocCarte(false, m);
   document.getElementById("modal-titre").textContent="Modifier le membre";
   document.getElementById("m-id").value=m.id;
   document.getElementById("m-nom").value=m.nom||"";
@@ -11334,13 +11602,39 @@ function saveMember() {
     }
   }
 
+  // L'achat de la carte devient une ligne du registre, au nom du membre. Elle
+  // n'est pas marquée injecteCulte : elle sera proposée à la prochaine saisie
+  // de culte, comme toute cotisation encaissée et pas encore portée.
+  var carteFaite = false;
+  if (isNew) {
+    var cOui = document.getElementById("m-carte-oui");
+    if (cOui && cOui.checked) {
+      var cd = ((document.getElementById("m-carte-date")||{}).value) || membre.adhesion || getTodayStr();
+      var cm = parseFloat((document.getElementById("m-carte-montant")||{}).value);
+      if (isNaN(cm) || cm < 0) cm = getCarteMontant(cd);
+      var ligne = {
+        id: "cot_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7),
+        membreId: membre.id, mois: COTIS_CARTE, annee: String(cd).substring(0, 4),
+        montant: cm, dateEnr: cd,
+        note: ((document.getElementById("m-carte-note")||{}).value) || "Carte de membre"
+      };
+      DB.cotisations.push(ligne);
+      if (typeof _ecrireCotisation === "function") _ecrireCotisation(ligne);
+      carteFaite = true;
+      if (typeof logAudit === "function") {
+        logAudit("COTISATION", "Membres", "Carte de membre \u2014 " + prenom + " " + nom + " \u2014 " + fmt(cm) + " FC le " + cd);
+      }
+    }
+  }
+
   _ecrireMembre(membre);
   saveDB(DB);
   syncFichePublique(membre);
   closeMemberModal();
   renderMembers();
   populateMemberSelects();
-  showToast(isNew?"Membre ajoute !":"Membre modifie !","ok");
+  if (carteFaite && typeof renderGrid === "function") renderGrid();
+  showToast(isNew ? ("Membre ajoute !" + (carteFaite ? " Carte enregistree." : "")) : "Membre modifie !","ok");
   if(isNew) pushNotif("👤","Nouveau membre",""+prenom+" "+nom+" enregistre","membres");
 }
 
