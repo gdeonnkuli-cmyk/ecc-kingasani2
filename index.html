@@ -7021,6 +7021,44 @@ function _analyserPieces() {
 // qui a été encaissé, et les cultes, qui portent ce qui a été comptabilisé en
 // recette. Elles doivent dire la même chose. Ce contrôle les confronte mois
 // par mois et n'en corrige aucune : il montre où regarder.
+// Séquence compatible avec un cumul courant : chaque culte au moins égal au
+// précédent. Un seul recul suffit à écarter l'hypothèse.
+function _cumulPlausible(portes) {
+  if (!portes || portes.length < 2) return false;
+  var l = portes.slice().sort(function(a, b){ return String(a.date).localeCompare(String(b.date)); });
+  for (var i = 1; i < l.length; i++) if (l[i].montant < l[i-1].montant) return false;
+  return true;
+}
+
+// La date d'enregistrement d'une cotisation n'est la date de l'encaissement
+// que si la saisie suit la caisse. Deux signes trahissent une saisie de
+// rattrapage, où elle n'est que la date du travail de bureau : des centaines
+// de lignes posées le même jour, et des périodes couvertes bien antérieures au
+// mois de saisie. Le recalcul, qui reconstitue les montants à partir de
+// dateEnr, n'a alors aucun fondement.
+function _saisieGroupee() {
+  var parJour = {}, total = 0, retro = 0, maxJour = 0, jourMax = "";
+  ((DB && DB.cotisations) || []).forEach(function(c) {
+    var d = String(c.dateEnr || ""); if (!d) return;
+    total++;
+    parJour[d] = (parJour[d] || 0) + 1;
+    if (parJour[d] > maxJour) { maxJour = parJour[d]; jourMax = d; }
+    var couv = String(c.annee || "") + "-" + (isMonthKey(c.mois) ? (parseInt(c.mois,10) < 10 ? "0" : "") + parseInt(c.mois,10) : "12");
+    if (couv < d.substring(0, 7)) retro++;
+  });
+  var nbJours = Object.keys(parJour).length;
+  var tauxRetro = total ? retro / total : 0;
+  return {
+    total: total, nbJours: nbJours, maxJour: maxJour, jourMax: jourMax,
+    parLigneParJour: nbJours ? total / nbJours : 0,
+    retro: retro, tauxRetro: tauxRetro,
+    // Un jour portant 15 lignes ou plus, ou une majorité de périodes
+    // antérieures au mois de saisie : la date d'enregistrement ne vaut pas
+    // date d'encaissement.
+    suspecte: total > 0 && (maxJour >= 15 || tauxRetro >= 0.5)
+  };
+}
+
 function _rapprochementCotis() {
   var parMois = {};
   function mois(ym) {
@@ -7062,10 +7100,14 @@ function _rapprochementCotis() {
       ym: ym, porte: m.porte, encaisse: m.encaisse, nbEnc: m.nbEnc,
       nbCultes: m.portes.length, portes: m.portes,
       ecart: m.porte - m.encaisse,
-      // L'ancien calcul reportait le cumul du mois dans chaque culte : le plus
-      // gros montant du mois valait donc le total, et tout ce qui s'y ajoute
-      // est du double comptage. Estimation, pas certitude.
-      surplus: m.portes.length > 1 ? m.porte - maxi : 0
+      // Le double comptage suppose que chaque culte portait le CUMUL du mois.
+      // Sous cette hypothèse les montants seraient non décroissants, puisque
+      // chacun contient le précédent. L'estimation n'est donc produite que si
+      // la séquence le confirme. Affirmer un doublon sur une séquence qui
+      // décroît, c'est désigner comme erreur une collecte simplement plus
+      // forte le premier dimanche du mois — et inviter à effacer du vrai.
+      cumul: _cumulPlausible(m.portes),
+      surplus: (m.portes.length > 1 && _cumulPlausible(m.portes)) ? m.porte - maxi : 0
     };
   });
 
@@ -7423,8 +7465,31 @@ function _carteRapprochementCotis() {
      + 'Compare, mois par mois, ce que le registre des membres dit avoir encaiss\u00e9 et ce que les cultes ont port\u00e9 '
      + 'en recette sous la rubrique \u00ab Cotisation Cartes de Membre \u00bb. Porte sur les cultes charg\u00e9s en cache.</p>';
 
-  var totalSurplus = 0, moisAlerte = 0;
-  r.lignes.forEach(function(l) { totalSurplus += l.surplus; if (l.surplus > 0 || Math.abs(l.ecart) >= 1) moisAlerte++; });
+  var totalSurplus = 0, moisAlerte = 0, moisMulti = 0;
+  r.lignes.forEach(function(l) {
+    totalSurplus += l.surplus;
+    if (l.nbCultes > 1) moisMulti++;
+    if (l.surplus > 0 || Math.abs(l.ecart) >= 1) moisAlerte++;
+  });
+
+  if (!totalSurplus && moisMulti) {
+    h += '<div class="ctrl-piece ok"><div class="cp-tete"><strong>Motif du double comptage non retrouv\u00e9</strong></div>'
+       + '<div class="cp-l">Sur les ' + moisMulti + ' mois \u00e0 plusieurs cultes, aucun ne pr\u00e9sente la progression '
+       + 'que laisserait un cumul report\u00e9 de culte en culte. Les montants d\u00e9croissent au fil du mois, '
+       + 'ce qui correspond \u00e0 une collecte concentr\u00e9e en d\u00e9but de mois, non \u00e0 une r\u00e9p\u00e9tition du total.</div>'
+       + '<div class="cp-l">Les \u00e9carts ci-dessous restent \u00e0 expliquer, mais ils ne viennent pas de l\u00e0.</div></div>';
+  }
+
+  var sg = _saisieGroupee();
+  if (sg.suspecte) {
+    h += '<div class="ctrl-piece ko"><div class="cp-tete"><strong>Les dates d\'enregistrement ne valent pas dates d\'encaissement</strong></div>'
+       + '<div class="cp-l cp-e">' + sg.total + ' cotisation(s) r\u00e9parties sur ' + sg.nbJours + ' date(s) seulement'
+       + (sg.maxJour >= 15 ? ', dont ' + sg.maxJour + ' le ' + escH(sg.jourMax) : '')
+       + '\u00a0\u00b7\u00a0' + Math.round(sg.tauxRetro * 100) + '\u00a0% couvrent une p\u00e9riode ant\u00e9rieure au mois de saisie. '
+       + 'C\'est le profil d\'une saisie de rattrapage : la date enregistr\u00e9e est celle du travail de bureau, pas celle de la caisse.</div>'
+       + '<div class="cp-l cp-e">Le recalcul reconstitue les montants \u00e0 partir de ces dates. Sur ces donn\u00e9es, il produirait '
+       + 'des chiffres faux. Ne l\'appliquez pas sans avoir lu l\'impact total qu\'il affiche.</div></div>';
+  }
 
   if (totalSurplus > 0) {
     h += '<div class="ctrl-piece ko" style="border-left-color:#c0392b">'
@@ -7532,9 +7597,43 @@ function ouvrirRecalculCotis() {
     return;
   }
 
+  // Impact global, avant tout détail : c'est le seul chiffre qui dit si la
+  // correction rapproche des comptes ou les démolit. Un recalcul qui efface
+  // les deux tiers de la recette de cotisations n'est pas une correction.
+  var avant = 0, apres = 0;
+  (gHistCache || []).forEach(function(hh) {
+    ["cf", "cl"].forEach(function(k) {
+      (hh[k] || []).forEach(function(rr) {
+        if (rr && rr.l && _estLigneCotisMembres(rr.l)) avant += parseFloat(String(rr.cdf).replace(",", ".")) || 0;
+      });
+    });
+  });
+  apres = avant;
+  liste.forEach(function(l) { if (!l.cloture) apres += (l.attendu - l.actuel); });
+  var sg = _saisieGroupee();
+  var perte = avant - apres;
+
   var h = "<div style='font-size:.82rem;line-height:1.55'>";
-  h += "<p style='margin:0 0 10px'>Pour chaque culte, le montant recalculé correspond aux cotisations encaissées "
-     + "depuis le culte précédent jusqu'à celui-ci. Décochez ce que vous ne voulez pas toucher.</p>";
+  h += "<div style='background:" + (sg.suspecte || perte > 0 ? "#fdf2f2;border-left:3px solid #c0392b;color:#7f1d1d" : "#f0f9f4;border-left:3px solid #1e7d52;color:#14532d")
+     + ";border-radius:6px;padding:10px 12px;margin-bottom:11px;font-size:.78rem'>"
+     + "<strong>Impact sur la recette de cotisations</strong><br>"
+     + fmt(avant) + " FC \u2192 <strong>" + fmt(apres) + " FC</strong> ("
+     + (apres >= avant ? "+" : "\u2212") + fmt(Math.abs(apres - avant)) + " FC sur "
+     + liste.filter(function(l){ return !l.cloture; }).length + " culte(s))</div>";
+
+  if (sg.suspecte) {
+    h += "<div style='background:#fdf2f2;border-left:3px solid #c0392b;border-radius:6px;padding:10px 12px;margin-bottom:11px;color:#7f1d1d;font-size:.77rem'>"
+       + "<strong>Le fondement du recalcul n'est pas r\u00e9uni.</strong> Les montants ci-dessous sont reconstitu\u00e9s \u00e0 partir des dates "
+       + "d'enregistrement des cotisations. Or " + sg.total + " cotisation(s) sont r\u00e9parties sur " + sg.nbJours + " date(s) seulement"
+       + (sg.maxJour >= 15 ? ", dont " + sg.maxJour + " le " + escH(sg.jourMax) : "")
+       + ", et " + Math.round(sg.tauxRetro * 100) + "\u00a0% couvrent une p\u00e9riode ant\u00e9rieure au mois de saisie : ces dates sont celles "
+       + "d'un rattrapage de bureau, pas d'un passage en caisse.<br><br>"
+       + "Les cases sont donc <strong>d\u00e9coch\u00e9es</strong>. Ne cochez qu'un culte dont vous savez, par la feuille de caisse, "
+       + "que le montant recalcul\u00e9 correspond bien \u00e0 ce qui a \u00e9t\u00e9 re\u00e7u ce jour-l\u00e0.</div>";
+  }
+
+  h += "<p style='margin:0 0 10px'>Pour chaque culte, le montant recalcul\u00e9 correspond aux cotisations encaiss\u00e9es "
+     + "depuis le culte pr\u00e9c\u00e9dent jusqu'\u00e0 celui-ci. " + (sg.suspecte ? "Cochez ce que vous voulez corriger." : "D\u00e9cochez ce que vous ne voulez pas toucher.") + "</p>";
   h += "<div style='background:#fff7ed;border-left:3px solid #e67e22;border-radius:6px;padding:9px 11px;margin-bottom:10px;color:#9a3412;font-size:.76rem'>"
      + "<strong>Avant de corriger :</strong> modifier la recette d'un culte change son solde net et son solde final. "
      + "Le solde reporté des cultes suivants ne suivra pas automatiquement — la validation vous le signalera, "
@@ -7545,7 +7644,7 @@ function ouvrirRecalculCotis() {
     var l = liste[i];
     if (l.cloture) { nCloture++; continue; }
     h += "<label style='display:flex;gap:9px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer'>"
-       + "<input type='checkbox' class='rec-cot' data-id='" + escH(l.id) + "' checked style='width:auto;margin-top:3px'>"
+       + "<input type='checkbox' class='rec-cot' data-id='" + escH(l.id) + "'" + (sg.suspecte ? "" : " checked") + " style='width:auto;margin-top:3px'>"
        + "<span><strong>" + escH(l.date) + "</strong>" + (l.piece ? " <span style='font-family:DM Mono,monospace;font-size:.72rem;color:var(--muted)'>" + escH(l.piece) + "</span>" : "")
        + "<br><span style='font-size:.76rem'>" + fmt(l.actuel) + " FC \u2192 <strong>" + fmt(l.attendu) + " FC</strong>"
        + " <span style='color:" + (l.ecart > 0 ? "#9b2020" : "#8a5a00") + ";font-weight:700'>(" + (l.ecart > 0 ? "\u2212" : "+") + fmt(Math.abs(l.ecart)) + ")</span></span>"
