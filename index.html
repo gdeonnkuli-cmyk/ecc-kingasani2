@@ -14108,15 +14108,20 @@ function captureSemState() {
 }
 
 function saveSessionSem() {
-  var session=captureSemState();
+  var session=_marquerSessionInjectee("sem", captureSemState());
   // check if same date session exists, update it
   var found=false;
   for(var i=0;i<SEMDB.sessions.length;i++){
     if(SEMDB.sessions[i].date===session.date&&SEMDB.sessions[i].titre===session.titre){
+      // captureSemState relit le formulaire, qui ne porte pas la marque
+      // d'injection : l'écraser ferait oublier que l'argent est déjà en culte,
+      // et autoriserait une seconde injection du même séminaire.
+      if(SEMDB.sessions[i].injecteFinances && !session.injecteFinances) session.injecteFinances=SEMDB.sessions[i].injecteFinances;
       SEMDB.sessions[i]=session; found=true; break;
     }
   }
   if(!found) SEMDB.sessions.unshift(session);
+  _avertirPlafondSessions(SEMDB.sessions.length, "s\u00e9minaire");
   if(SEMDB.sessions.length>52) SEMDB.sessions=SEMDB.sessions.slice(0,52);
   saveSemDB(SEMDB);
   renderHistSem();
@@ -14186,6 +14191,58 @@ function printHistSem() {
   win.document.close();
 }
 
+// ══ LIAISON AVEC LES FINANCES : CE QUI EST DÉJÀ PORTÉ EN CULTE ═════════════
+// Cinq modules alimentent les cultes : loyer, social, projets, séminaire et
+// ECODIM. Quatre marquaient leurs lignes injectées ; séminaire et ECODIM ne
+// marquaient rien, si bien qu'un second clic réinjectait le même argent sans
+// que rien ne le signale.
+//
+// Les rapports consolidés, eux, additionnaient le culte ET le module. Tout ce
+// qui avait été injecté comptait donc deux fois : une fois dans la recette du
+// culte, une fois dans la ligne de son module d'origine. Ces prédicats
+// donnent la règle unique — le culte fait foi, le module ne compte que ce
+// qu'il n'a pas encore transmis.
+function _sessionPortee(s) { return !!(s && s.injecteFinances); }
+
+// L'historique de chaque module est plafonné à 52 sessions, et la 53e fait
+// disparaître la plus ancienne sans un mot. À raison d'une session par
+// semaine, c'est une année d'archives perdue à l'insu de tous. Le plafond
+// reste — le changer demanderait de revoir le stockage — mais il s'annonce.
+function _avertirPlafondSessions(nb, quoi) {
+  if (nb <= 48) return;
+  if (nb > 52) {
+    showToast("Historique " + quoi + " plein (52) : la session la plus ancienne vient d'\u00eatre retir\u00e9e. Exportez avant d'en ajouter.", "err");
+  } else {
+    showToast("Historique " + quoi + " \u00e0 " + nb + "/52. Au-del\u00e0, les plus anciennes seront retir\u00e9es \u2014 pensez \u00e0 exporter.", "warn");
+  }
+}
+function _projLignePortee(l) { return !!(l && l.injecte); }
+
+// Sessions de séminaire / ECODIM déjà portées, pour l'avertissement de
+// double injection : l'identité d'une session est sa date et son titre.
+function _sessionDejaInjectee(liste, date, titre) {
+  var t = String(titre || "").trim();
+  for (var i = 0; i < (liste || []).length; i++) {
+    var x = liste[i];
+    if (x.date === date && String(x.titre || "").trim() === t && _sessionPortee(x)) return x;
+  }
+  return null;
+}
+
+// Marque posée à l'injection, reprise par la sauvegarde de la session : on
+// injecte depuis le formulaire, pas depuis l'historique, et la session peut
+// n'exister que plus tard.
+var gInjectionEnAttente = { sem: null, eco: null };
+
+function _marquerSessionInjectee(kind, session) {
+  var att = gInjectionEnAttente[kind];
+  if (att && att.date === session.date && String(att.titre || "").trim() === String(session.titre || "").trim()) {
+    session.injecteFinances = att.marque;
+    gInjectionEnAttente[kind] = null;
+  }
+  return session;
+}
+
 // Injecte les recettes/dépenses du séminaire en cours dans le module Finances (modifiable ensuite)
 function injectSemToFinances() {
   var rec = sumRowsSem("sem-rec-rows");
@@ -14196,8 +14253,14 @@ function injectSemToFinances() {
   }
   var titre = (document.getElementById("sem-titre")||{}).value || "Seminaire";
   var dateS = (document.getElementById("sem-date")||{}).value || getTodayStr();
-  showModal("Injecter dans Finances ?",
-    "Les recettes et depenses du seminaire seront ajoutees au formulaire Finances en cours. Vous pourrez les modifier avant d'enregistrer le culte.",
+  var deja = _sessionDejaInjectee((SEMDB && SEMDB.sessions) || [], dateS, titre);
+  showModal(deja ? "\u26a0\ufe0f D\u00e9j\u00e0 inject\u00e9 \u2014 injecter une seconde fois ?" : "Injecter dans Finances ?",
+    (deja
+      ? "Ce s\u00e9minaire a d\u00e9j\u00e0 \u00e9t\u00e9 port\u00e9 en recette le "
+        + ((deja.injecteFinances && deja.injecteFinances.date) || "?")
+        + ". Injecter de nouveau compterait le m\u00eame argent deux fois.\n\n"
+      : "")
+    + "Les recettes et depenses du seminaire seront ajoutees au formulaire Finances en cours. Vous pourrez les modifier avant d'enregistrer le culte.",
     function(){
       // Recette globale séminaire → ligne dans CL (recettes)
       if(rec.cdf>0 || rec.usd>0){
@@ -14206,6 +14269,19 @@ function injectSemToFinances() {
       // Dépense globale séminaire → ligne dans dep-ot (autres dépenses)
       if(dep.cdf>0 || dep.usd>0){
         addDep("dep-ot","Seminaire - "+titre+" ("+dateS+")", "Sem", dep.cdf, dep.usd, "Injecte depuis Seminaire");
+      }
+      // La marque suit la session : elle sera posée dessus à la sauvegarde,
+      // ou tout de suite si la session existe déjà dans l'historique.
+      var marque = { date: getTodayStr(), par: (gCurrentUser && gCurrentUser.email) || "",
+                     recCDF: rec.cdf, recUSD: rec.usd, depCDF: dep.cdf, depUSD: dep.usd };
+      gInjectionEnAttente.sem = { date: dateS, titre: titre, marque: marque };
+      var maj = false;
+      ((SEMDB && SEMDB.sessions) || []).forEach(function(x){
+        if (x.date === dateS && String(x.titre||"").trim() === String(titre).trim()) { x.injecteFinances = marque; maj = true; }
+      });
+      if (maj) { saveSemDB(SEMDB); gInjectionEnAttente.sem = null; }
+      if (typeof logAudit === "function") {
+        logAudit("INJECTION", "S\u00e9minaire", titre + " du " + dateS + " \u2014 recettes " + fmt(rec.cdf) + " FC, d\u00e9penses " + fmt(dep.cdf) + " FC");
       }
       recalc();
       dirty();
@@ -14505,15 +14581,17 @@ function captureEcoState() {
 }
 
 function saveSessionEco() {
-  var session=captureEcoState();
+  var session=_marquerSessionInjectee("eco", captureEcoState());
   // check if same date session exists, update it
   var found=false;
   for(var i=0;i<ECODB.sessions.length;i++){
     if(ECODB.sessions[i].date===session.date&&ECODB.sessions[i].titre===session.titre){
+      if(ECODB.sessions[i].injecteFinances && !session.injecteFinances) session.injecteFinances=ECODB.sessions[i].injecteFinances;
       ECODB.sessions[i]=session; found=true; break;
     }
   }
   if(!found) ECODB.sessions.unshift(session);
+  _avertirPlafondSessions(ECODB.sessions.length, "ECODIM");
   if(ECODB.sessions.length>52) ECODB.sessions=ECODB.sessions.slice(0,52);
   saveEcoDB(ECODB);
   renderHistEco();
@@ -14586,7 +14664,7 @@ function printHistEco() {
   win.document.close();
 }
 
-// Injecte les recettes/dépenses du séminaire en cours dans le module Finances (modifiable ensuite)
+// Injecte les recettes/dépenses de l'ECODIM en cours dans le module Finances (modifiable ensuite)
 function injectEcoToFinances() {
   var rec = sumRowsEco("eco-rec-rows");
   var dep = sumRowsEco("eco-dep-rows");
@@ -14596,16 +14674,35 @@ function injectEcoToFinances() {
   }
   var titre = (document.getElementById("eco-titre")||{}).value || "ECODIM";
   var dateS = (document.getElementById("eco-date")||{}).value || getTodayStr();
-  showModal("Injecter dans Finances ?",
-    "Les recettes et depenses du ecodim seront ajoutees au formulaire Finances en cours. Vous pourrez les modifier avant d'enregistrer le culte.",
+  var deja = _sessionDejaInjectee((ECODB && ECODB.sessions) || [], dateS, titre);
+  showModal(deja ? "\u26a0\ufe0f D\u00e9j\u00e0 inject\u00e9 \u2014 injecter une seconde fois ?" : "Injecter dans Finances ?",
+    (deja
+      ? "Cet ECODIM a d\u00e9j\u00e0 \u00e9t\u00e9 port\u00e9 en recette le "
+        + ((deja.injecteFinances && deja.injecteFinances.date) || "?")
+        + ". Injecter de nouveau compterait le m\u00eame argent deux fois.\n\n"
+      : "")
+    + "Les recettes et depenses du ecodim seront ajoutees au formulaire Finances en cours. Vous pourrez les modifier avant d'enregistrer le culte.",
     function(){
-      // Recette globale séminaire → ligne dans CL (recettes)
+      // Recette globale ECODIM → ligne dans CL (recettes)
       if(rec.cdf>0 || rec.usd>0){
         addRec("cl","CL","ECODIM - "+titre+" ("+dateS+")", rec.cdf, rec.usd, "Injecte depuis ECODIM");
       }
-      // Dépense globale séminaire → ligne dans dep-ot (autres dépenses)
+      // Dépense globale ECODIM → ligne dans dep-ot (autres dépenses).
+      // La catégorie portait "Sem" par copie du séminaire : les dépenses de
+      // l'école du dimanche sortaient donc classées en séminaire.
       if(dep.cdf>0 || dep.usd>0){
-        addDep("dep-ot","ECODIM - "+titre+" ("+dateS+")", "Sem", dep.cdf, dep.usd, "Injecte depuis ECODIM");
+        addDep("dep-ot","ECODIM - "+titre+" ("+dateS+")", "Eco", dep.cdf, dep.usd, "Injecte depuis ECODIM");
+      }
+      var marqueE = { date: getTodayStr(), par: (gCurrentUser && gCurrentUser.email) || "",
+                      recCDF: rec.cdf, recUSD: rec.usd, depCDF: dep.cdf, depUSD: dep.usd };
+      gInjectionEnAttente.eco = { date: dateS, titre: titre, marque: marqueE };
+      var majE = false;
+      ((ECODB && ECODB.sessions) || []).forEach(function(x){
+        if (x.date === dateS && String(x.titre||"").trim() === String(titre).trim()) { x.injecteFinances = marqueE; majE = true; }
+      });
+      if (majE) { saveEcoDB(ECODB); gInjectionEnAttente.eco = null; }
+      if (typeof logAudit === "function") {
+        logAudit("INJECTION", "ECODIM", titre + " du " + dateS + " \u2014 recettes " + fmt(rec.cdf) + " FC, d\u00e9penses " + fmt(dep.cdf) + " FC");
       }
       recalc();
       dirty();
@@ -18612,14 +18709,15 @@ function doRapportConsolide(type, periode) {
   ((LOYDB&&LOYDB.versements)||[]).forEach(function(v){
     if(!inPeriode(v.date)) return;
     var montant=(parseFloat(v.cdf)||0)+(parseFloat(v.usd)||0)*t;
-    loyTotal+=montant;
-    loyLignes.push({date:v.date,contrib:v.contribNom||'',montant:montant});
+    if(!v.injectedFinances) loyTotal+=montant;
+    loyLignes.push({date:v.date,contrib:(v.contribNom||'')+(v.injectedFinances?' [port\u00e9 en culte]':''),montant:montant,porte:!!v.injectedFinances});
   });
 
   // 3. SOCIAL (assistances validées)
   var socTotal=0; var socLignes=[];
   ((SOCDB&&SOCDB.assistances)||[]).forEach(function(a){
     if(a.statut!=='valide') return;
+    if(a.injectedFinances) return;   // déjà dans la dépense du culte
     if(!inPeriode(a.dateEnr||a.date)) return;
     var montant=(parseFloat(a.cdf)||0)+(parseFloat(a.usd)||0)*t;
     socTotal+=montant;
@@ -18627,12 +18725,15 @@ function doRapportConsolide(type, periode) {
   });
 
   // 4. PROJETS (sublignes)
+  // Une ligne déjà injectée figure dans la dépense du culte : la recompter ici
+  // doublerait le montant. Elle reste listée, marquée comme portée.
   var projTotal=0; var projLignes=[];
   ((PROJDB&&PROJDB.projets)||[]).forEach(function(p){
     (p.sublignes||[]).forEach(function(l){
       if(!inPeriode(l.date)) return;
-      projTotal+=parseFloat(l.cdf)||0;
-      projLignes.push({date:l.date||'',projet:p.titre||p.nom||'',type:l.type||'',lib:l.lib||'',montant:parseFloat(l.cdf)||0});
+      var porte=_projLignePortee(l);
+      if(!porte) projTotal+=parseFloat(l.cdf)||0;
+      projLignes.push({date:l.date||'',projet:p.titre||p.nom||'',type:l.type||'',lib:(l.lib||'')+(porte?' [port\u00e9 en culte]':''),montant:parseFloat(l.cdf)||0,porte:porte});
     });
   });
 
@@ -18643,8 +18744,9 @@ function doRapportConsolide(type, periode) {
     var r=0,d=0;
     (s.recettes||[]).forEach(function(x){r+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;});
     (s.depenses||[]).forEach(function(x){d+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;});
-    semRec+=r; semDep+=d;
-    semSessions.push({date:s.date,titre:s.titre||'Séminaire',rec:Math.round(r),dep:Math.round(d)});
+    var porteS=_sessionPortee(s);
+    if(!porteS){ semRec+=r; semDep+=d; }
+    semSessions.push({date:s.date,titre:(s.titre||'Séminaire')+(porteS?' [porté en culte]':''),rec:Math.round(r),dep:Math.round(d),porte:porteS});
   });
 
   // 6. ECODIM
@@ -18654,19 +18756,23 @@ function doRapportConsolide(type, periode) {
     var r=0,d=0;
     (s.recettes||[]).forEach(function(x){r+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;});
     (s.depenses||[]).forEach(function(x){d+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;});
-    ecoRec+=r; ecoDep+=d;
-    ecoSessions.push({date:s.date,rec:Math.round(r),dep:Math.round(d),enfants:(s.filles||0)+(s.garcons||0)});
+    var porteE=_sessionPortee(s);
+    if(!porteE){ ecoRec+=r; ecoDep+=d; }
+    ecoSessions.push({date:s.date,rec:Math.round(r),dep:Math.round(d),enfants:(s.filles||0)+(s.garcons||0),porte:porteE});
   });
 
   // 7. MEMBRES (cotisations)
+  // La source était membre.cotisations[annee], une structure que rien n'écrit
+  // depuis la bascule vers DB.cotisations : cette ligne valait zéro dans tous
+  // les rapports. Elle lit désormais le registre, et ne retient que les
+  // cotisations pas encore portées en recette de culte.
   var membTotal=0; var membDetails=[];
   moisList.forEach(function(ym){
-    var mo=parseInt(ym.split('-')[1]), an=parseInt(ym.split('-')[0]);
-    var cotUn=(typeof getCotisMontant==='function')?getCotisMontant(mo,an):0;
     var encaisse=0;
-    ((DB&&DB.membres)||[]).forEach(function(m){
-      var paid=(m.cotisations&&m.cotisations[an])||[];
-      if(paid.indexOf(mo)>=0) encaisse+=cotUn;
+    ((DB&&DB.cotisations)||[]).forEach(function(c){
+      if(c.injecteCulte) return;
+      if(String(c.dateEnr||'').substring(0,7)!==ym) return;
+      encaisse+=parseFloat(c.montant)||0;
     });
     if(encaisse>0) membDetails.push({ym:ym,montant:encaisse});
     membTotal+=encaisse;
@@ -19399,16 +19505,37 @@ function buildRapportHTML(type, periode) {
 
   // Agrégation
   var finRec=0,finDep=0; (gHistCache||[]).forEach(function(hh){ if(inP(hh.meta&&hh.meta.date)){ finRec+=hh.sums?hh.sums.rCDF:0; finDep+=hh.sums?hh.sums.dCDF:0; }});
-  var loyTot=0; ((LOYDB&&LOYDB.versements)||[]).forEach(function(v){ if(inP(v.date)) loyTot+=(parseFloat(v.cdf)||0)+(parseFloat(v.usd)||0)*t; });
-  var socTot=0; ((SOCDB&&SOCDB.assistances)||[]).forEach(function(a){ if(a.statut==='valide'&&inP(a.dateEnr||a.date)) socTot+=(parseFloat(a.cdf)||0)+(parseFloat(a.usd)||0)*t; });
-  var projTot=0; ((PROJDB&&PROJDB.projets)||[]).forEach(function(p){ (p.sublignes||[]).forEach(function(l){ if(inP(l.date)) projTot+=(parseFloat(l.cdf)||0)+(parseFloat(l.usd)||0)*(l.taux||t); }); });
-  var semRec=0,semDep=0; ((SEMDB&&SEMDB.sessions)||[]).forEach(function(s){ if(!inP(s.date))return; (s.recettes||[]).forEach(function(x){semRec+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;}); (s.depenses||[]).forEach(function(x){semDep+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;}); });
-  var ecoRec=0,ecoDep=0; ((ECODB&&ECODB.sessions)||[]).forEach(function(s){ if(!inP(s.date))return; (s.recettes||[]).forEach(function(x){ecoRec+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;}); (s.depenses||[]).forEach(function(x){ecoDep+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;}); });
+  var loyTot=0; ((LOYDB&&LOYDB.versements)||[]).forEach(function(v){ if(!v.injectedFinances && inP(v.date)) loyTot+=(parseFloat(v.cdf)||0)+(parseFloat(v.usd)||0)*t; });
+  var socTot=0; ((SOCDB&&SOCDB.assistances)||[]).forEach(function(a){ if(a.statut==='valide'&&!a.injectedFinances&&inP(a.dateEnr||a.date)) socTot+=(parseFloat(a.cdf)||0)+(parseFloat(a.usd)||0)*t; });
+  // Ce qui a déjà été porté en culte est compté dans finRec / finDep : le
+  // module ne totalise donc que ce qu'il n'a pas encore transmis. Sans ce
+  // filtre, chaque injection était comptée deux fois dans le consolidé.
+  var projTot=0, projPorte=0;
+  ((PROJDB&&PROJDB.projets)||[]).forEach(function(p){ (p.sublignes||[]).forEach(function(l){
+    if(!inP(l.date)) return;
+    var v=(parseFloat(l.cdf)||0)+(parseFloat(l.usd)||0)*(l.taux||t);
+    if(_projLignePortee(l)) projPorte+=v; else projTot+=v;
+  }); });
+  var semRec=0,semDep=0,semPorte=0; ((SEMDB&&SEMDB.sessions)||[]).forEach(function(s){ if(!inP(s.date))return;
+    var r=0,d=0;
+    (s.recettes||[]).forEach(function(x){r+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;});
+    (s.depenses||[]).forEach(function(x){d+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;});
+    if(_sessionPortee(s)) semPorte+=r+d; else { semRec+=r; semDep+=d; } });
+  var ecoRec=0,ecoDep=0,ecoPorte=0; ((ECODB&&ECODB.sessions)||[]).forEach(function(s){ if(!inP(s.date))return;
+    var r=0,d=0;
+    (s.recettes||[]).forEach(function(x){r+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;});
+    (s.depenses||[]).forEach(function(x){d+=(parseFloat(x.cdf)||0)+(parseFloat(x.usd)||0)*t;});
+    if(_sessionPortee(s)) ecoPorte+=r+d; else { ecoRec+=r; ecoDep+=d; } });
+  // Les cotisations étaient lues dans membre.cotisations[annee], une structure
+  // qui n'existe plus : la ligne Membres valait zéro dans tous les rapports.
+  // Elles vivent dans DB.cotisations, et seules celles non encore portées en
+  // culte s'ajoutent au total.
   var membTot=0;
-  moisList.forEach(function(ym){ var mo=parseInt(ym.split('-')[1]),an=parseInt(ym.split('-')[0]); var cotUn=(typeof getCotisMontant==='function')?getCotisMontant(mo,an):0; ((DB&&DB.membres)||[]).forEach(function(mb){ var paid=(mb.cotisations&&mb.cotisations[an])||[]; if(paid.indexOf(mo)>=0) membTot+=cotUn; }); });
+  ((DB&&DB.cotisations)||[]).forEach(function(c){ if(!c.injecteCulte && inP(String(c.dateEnr||""))) membTot+=parseFloat(c.montant)||0; });
 
   var totRec = finRec+loyTot+semRec+ecoRec+membTot;
   var totDep = finDep+socTot+projTot+semDep+ecoDep;
+  var portesTotal = projPorte+semPorte+ecoPorte;
   var solde = totRec-totDep;
 
   function ln(label, rec, dep){
@@ -19447,7 +19574,13 @@ function buildRapportHTML(type, periode) {
   html += "<td style='padding:8px 9px;text-align:right;font-family:DM Mono,monospace'>"+fmt(Math.round(totDep))+"</td>";
   html += "<td style='padding:8px 9px;text-align:right;font-family:DM Mono,monospace'>"+fmt(Math.round(solde))+"</td></tr>";
   html += "</table>";
-  html += "<div style='font-size:.68rem;color:var(--muted);margin-top:8px;text-align:center'>Généré le "+new Date().toLocaleDateString('fr-FR')+" — Membres = cotisations théoriques</div>";
+  html += "<div style='font-size:.68rem;color:var(--muted);margin-top:10px;line-height:1.55'>"
+        + "<strong>Lecture.</strong> La ligne Finances porte les cultes, donc aussi tout ce que les autres modules y ont déjà injecté. "
+        + "Les lignes des modules ne comptent que ce qui <em>n'a pas encore été porté en culte</em>, faute de quoi le même argent "
+        + "figurerait deux fois."
+        + (portesTotal > 0 ? " Pour cette période, " + fmt(Math.round(portesTotal)) + " FC déjà injectés sont comptés dans Finances et retirés de leur module." : "")
+        + " Membres = cotisations encaissées et pas encore portées en recette.</div>";
+  html += "<div style='font-size:.66rem;color:var(--muted);margin-top:6px;text-align:center'>Généré le "+new Date().toLocaleDateString('fr-FR')+"</div>";
   html += "</div>";
 
   // Bouton imprimer
