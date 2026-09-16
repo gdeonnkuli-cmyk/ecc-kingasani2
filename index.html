@@ -7037,6 +7037,89 @@ function _rapprochementCotis() {
 // Copie, sans rien détruire : l'ancien tableau reste en place et redevient la
 // source de lecture si la collection est vidée. La bascule peut donc être
 // relancée, et elle est sans effet si elle a déjà eu lieu.
+// ══ BASCULE DES MEMBRES ET COTISATIONS ═════════════════════════════════════
+function _carteMigrationMembres() {
+  var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F504} Membres et cotisations : documents s\u00e9par\u00e9s</div>';
+  var nm = ((DB && DB.membres) || []).length, nc = ((DB && DB.cotisations) || []).length;
+
+  if (gMbrParDoc) {
+    return h + '<div class="ctrl-piece ok"><div class="cp-tete"><strong>Bascule effectu\u00e9e</strong></div>'
+      + '<div class="cp-l">Chaque membre et chaque cotisation a son propre document : enregistrer un paiement '
+      + 'n\'\u00e9crit plus rien sur les autres. Deux personnes peuvent saisir en m\u00eame temps sans s\'\u00e9craser.</div>'
+      + '<div class="cp-l">Les anciens tableaux sont conserv\u00e9s en l\'\u00e9tat comme archive : ils ne sont plus mis \u00e0 jour, et rien n\'a \u00e9t\u00e9 supprim\u00e9.</div></div>';
+  }
+
+  h += '<div class="ctrl-piece ko"><div class="cp-tete"><strong>' + nm + ' membre(s) et ' + nc + ' cotisation(s) dans l\'ancien format</strong></div>'
+     + '<div class="cp-l cp-w">Les deux tableaux vivent dans un seul document, r\u00e9\u00e9crit en entier \u00e0 chaque enregistrement. '
+     + 'Si deux personnes saisissent une cotisation en m\u00eame temps, la seconde efface le travail de la premi\u00e8re, sans avertissement. '
+     + 'Le volume aggrave le risque : une ann\u00e9e de cotisations p\u00e8se plusieurs centaines d\'entr\u00e9es dans le m\u00eame document.</div>'
+     + '<div class="cp-l">La bascule copie chaque membre et chaque cotisation dans son propre document, sous son identifiant actuel, par lots. '
+     + 'Elle ne supprime rien : les anciens tableaux restent intacts, et la lecture y retombe si les collections sont vides. '
+     + 'La relancer est sans effet.</div>'
+     + '<div class="cp-l cp-e"><strong>\u00c0 faire avant :</strong> publier les r\u00e8gles Firestore des collections '
+     + '<code>membres</code> et <code>cotisations</code>, sinon l\'\u00e9criture sera refus\u00e9e. Elles figurent dans le fichier '
+     + '<code>firestore.rules</code> du d\u00e9p\u00f4t.</div></div>';
+  h += '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">'
+     + '<button class="btn btn-sm btn-p" onclick="migrerMembres()">Basculer membres et cotisations</button></div>';
+  return h;
+}
+
+function migrerMembres() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.", "err"); return; }
+  if (!IS_CONFIGURED || !gDb) { showToast("Firebase requis pour cette op\u00e9ration.", "err"); return; }
+  var mbr = ((DB && DB.membres) || []).filter(function(m){ return m && m.id; });
+  var cot = ((DB && DB.cotisations) || []).filter(function(c){ return c && c.id; });
+  if (!mbr.length && !cot.length) { showToast("Rien \u00e0 basculer.", "warn"); return; }
+
+  showModal("Basculer " + mbr.length + " membre(s) et " + cot.length + " cotisation(s) ?",
+    "Chaque entr\u00e9e sera copi\u00e9e dans son propre document, par lots.\n\n"
+    + "Rien n'est supprim\u00e9 : les anciens tableaux restent en place et pourront \u00eatre relus si besoin. "
+    + "L'op\u00e9ration peut \u00eatre relanc\u00e9e sans dommage.\n\n"
+    + "Si les r\u00e8gles Firestore des collections membres et cotisations ne sont pas encore publi\u00e9es, "
+    + "l'\u00e9criture sera refus\u00e9e et rien ne changera.",
+    function(){
+      closeModal();
+      showToast("Bascule de " + (mbr.length + cot.length) + " entr\u00e9e(s)\u2026", "ok");
+      var erreurs = [], restants = 2;
+
+      function lots(coll, liste, suite) {
+        if (!liste.length) { suite(null); return; }
+        var paquets = [], i;
+        for (i = 0; i < liste.length; i += 400) paquets.push(liste.slice(i, i + 400));
+        var reste = paquets.length, err = null;
+        paquets.forEach(function(paquet){
+          var lot = gDb.batch();
+          paquet.forEach(function(o){ lot.set(gDb.collection(coll).doc(o.id), o); });
+          lot.commit().catch(function(e){ err = e; })
+            .then(function(){ if (--reste === 0) suite(err); });
+        });
+      }
+
+      function fini(e){
+        if (e) erreurs.push(e.message || String(e));
+        if (--restants > 0) return;
+        if (!erreurs.length) {
+          gMbrParDoc = true;
+          if (typeof logAudit === "function") {
+            logAudit("MIGRATION", "Membres", mbr.length + " membre(s) et " + cot.length
+              + " cotisation(s) bascul\u00e9(e)s en documents s\u00e9par\u00e9s");
+          }
+          showToast("Bascule termin\u00e9e. Les anciens tableaux sont conserv\u00e9s comme archive.", "ok");
+          renderAdmin();
+        } else {
+          showModal("Bascule incompl\u00e8te",
+            "L'\u00e9criture a \u00e9t\u00e9 refus\u00e9e.\n\nPremi\u00e8re erreur : " + erreurs[0]
+            + "\n\nVos donn\u00e9es d'origine sont intactes. V\u00e9rifiez les r\u00e8gles Firestore des collections "
+            + "membres et cotisations, puis relancez la bascule.",
+            function(){ closeModal(); renderAdmin(); });
+        }
+      }
+
+      lots(MBR_COLL, mbr, fini);
+      lots(COT_COLL, cot, fini);
+    });
+}
+
 function _carteMigrationSocial() {
   var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F504} Assistances sociales : documents s\u00e9par\u00e9s</div>';
   var n = ((SOCDB && SOCDB.assistances) || []).length;
@@ -8396,6 +8479,7 @@ function renderAdmin(){
   html += "<div id='audit-zone'></div>";
 
   html += _carteClotures();
+  html += _carteMigrationMembres();
   html += _carteMigrationSocial();
   html += _carteRapprochementCotis();
   html += _carteControlePieces();
@@ -9674,12 +9758,102 @@ function loadDB() {
 // toutes : sans cela, la première synchronisation les injecterait en bloc.
 function _migrerCotisInjection() {
   try { if (localStorage.getItem("ecc_cotis_inject_migr") === "1") return; } catch(e) {}
-  var liste = (DB && DB.cotisations) || [], n = 0;
+  var liste = (DB && DB.cotisations) || [], n = 0, touchees = [];
   for (var i = 0; i < liste.length; i++) {
-    if (!liste[i].injecteCulte) { liste[i].injecteCulte = "anterieur"; n++; }
+    if (!liste[i].injecteCulte) { liste[i].injecteCulte = "anterieur"; n++; touchees.push(liste[i]); }
   }
   try { localStorage.setItem("ecc_cotis_inject_migr", "1"); } catch(e) {}
-  if (n) saveDB(DB);
+  if (n) { _ecrireCotisationsLot(touchees); saveDB(DB); }
+}
+
+// ══ MEMBRES ET COTISATIONS : UN DOCUMENT PAR ENTITÉ ════════════════════════
+// Même défaut que le module social avant sa bascule : membres et cotisations
+// vivaient dans deux tableaux d'un document unique, réécrits en entier à chaque
+// enregistrement. Deux personnes saisissant une cotisation en même temps
+// s'écrasaient donc mutuellement — et le volume aggrave le risque, une année
+// de cotisations pesant plusieurs centaines d'entrées dans le même document.
+//
+// Chaque membre et chaque cotisation a désormais son document. L'ancien
+// document n'est ni vidé ni supprimé : il reste l'archive de l'état d'avant
+// bascule, et la lecture y retombe tant que les collections sont vides.
+var MBR_COLL = "membres", COT_COLL = "cotisations";
+var gMbrParDoc = false;
+
+function _ecrireMembre(m, cb) {
+  try { localStorage.setItem("ecc_membres_db", JSON.stringify(DB)); } catch(e) {}
+  if (!IS_CONFIGURED || !gDb || !m || !m.id) { if (cb) cb(); return; }
+  gDb.collection(MBR_COLL).doc(m.id).set(m, { merge: false })
+    .then(function(){ gMbrParDoc = true; if (cb) cb(); })
+    .catch(function(e){
+      if (typeof showSyncError === "function") showSyncError(e, "enregistrement du membre");
+      if (cb) cb(e);
+    });
+}
+
+function _ecrireCotisation(c, cb) {
+  try { localStorage.setItem("ecc_membres_db", JSON.stringify(DB)); } catch(e) {}
+  if (!IS_CONFIGURED || !gDb || !c || !c.id) { if (cb) cb(); return; }
+  gDb.collection(COT_COLL).doc(c.id).set(c, { merge: false })
+    .then(function(){ gMbrParDoc = true; if (cb) cb(); })
+    .catch(function(e){
+      if (typeof showSyncError === "function") showSyncError(e, "enregistrement de la cotisation");
+      if (cb) cb(e);
+    });
+}
+
+// Plusieurs cotisations en une fois : un lot Firestore plutôt qu'une écriture
+// par entrée, sinon marquer les cotisations d'un culte en déclencherait des
+// dizaines en rafale.
+function _ecrireCotisationsLot(liste, cb) {
+  try { localStorage.setItem("ecc_membres_db", JSON.stringify(DB)); } catch(e) {}
+  if (!IS_CONFIGURED || !gDb || !liste || !liste.length) { if (cb) cb(); return; }
+  var paquets = [], i;
+  for (i = 0; i < liste.length; i += 400) paquets.push(liste.slice(i, i + 400));
+  var restants = paquets.length, erreur = null;
+  paquets.forEach(function(paquet){
+    var lot = gDb.batch();
+    paquet.forEach(function(c){ if (c && c.id) lot.set(gDb.collection(COT_COLL).doc(c.id), c); });
+    lot.commit()
+      .then(function(){ gMbrParDoc = true; })
+      .catch(function(e){ erreur = e; })
+      .then(function(){ if (--restants === 0 && cb) cb(erreur); });
+  });
+}
+
+function _supprimerMembreDoc(id, cotisIds, cb) {
+  try { localStorage.setItem("ecc_membres_db", JSON.stringify(DB)); } catch(e) {}
+  if (!IS_CONFIGURED || !gDb || !id) { if (cb) cb(); return; }
+  var lot = gDb.batch();
+  lot.delete(gDb.collection(MBR_COLL).doc(id));
+  (cotisIds || []).forEach(function(cid){ if (cid) lot.delete(gDb.collection(COT_COLL).doc(cid)); });
+  lot.commit().then(function(){ if (cb) cb(); })
+    .catch(function(e){
+      if (typeof showSyncError === "function") showSyncError(e, "suppression du membre");
+      if (cb) cb(e);
+    });
+}
+
+function _supprimerCotisationDoc(id, cb) {
+  try { localStorage.setItem("ecc_membres_db", JSON.stringify(DB)); } catch(e) {}
+  if (!IS_CONFIGURED || !gDb || !id) { if (cb) cb(); return; }
+  gDb.collection(COT_COLL).doc(id).delete().then(function(){ if (cb) cb(); })
+    .catch(function(e){
+      if (typeof showSyncError === "function") showSyncError(e, "suppression de la cotisation");
+      if (cb) cb(e);
+    });
+}
+
+// Lecture : les collections si elles sont alimentées, l'ancien document sinon.
+function chargerMembresCotisations(cb) {
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(null); return; }
+  var res = { membres: null, cotisations: null }, restants = 2;
+  function fini(){ if (--restants === 0) { if (res.membres || res.cotisations) gMbrParDoc = true; if (cb) cb(res); } }
+  gDb.collection(MBR_COLL).get().then(function(snap){
+    if (snap && !snap.empty) { res.membres = []; snap.forEach(function(d){ var o = d.data()||{}; o.id = d.id; res.membres.push(o); }); }
+  }).catch(function(){}).then(fini);
+  gDb.collection(COT_COLL).get().then(function(snap){
+    if (snap && !snap.empty) { res.cotisations = []; snap.forEach(function(d){ var o = d.data()||{}; o.id = d.id; res.cotisations.push(o); }); }
+  }).catch(function(){}).then(fini);
 }
 
 function saveDB(db) {
@@ -9687,30 +9861,54 @@ function saveDB(db) {
   try { localStorage.setItem("ecc_membres_db", JSON.stringify(db)); } catch(e) {}
   // 2. Synchroniser vers Firebase si connecté
   if (IS_CONFIGURED && gDb) {
-    gDb.collection("membres_db").doc("main").set({
-      membres: db.membres,
-      cotisations: db.cotisations,
+    var charge = {
       nextId: db.nextId,
+      maxNumero: db.maxNumero || 0,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedBy: gCurrentUser ? gCurrentUser.email : ""
-    }).catch(function(e){ console.warn("Membres Firebase sync error:", e.message); });
+    };
+    // Une fois les entités passées en documents séparés, réécrire les tableaux
+    // ramènerait l'écrasement concurrent que la bascule vient de supprimer.
+    if (!gMbrParDoc) { charge.membres = db.membres; charge.cotisations = db.cotisations; }
+    gDb.collection("membres_db").doc("main").set(charge, { merge: true })
+      .catch(function(e){ console.warn("Membres Firebase sync error:", e.message); });
   }
 }
 
 // Charger les membres depuis Firebase (priorité) puis localStorage
+// Charge la base membres en préférant les collections par document.
+function _chargerDBComplet(callback) {
+  chargerMembresCotisations(function(res){
+    if (res && (res.membres || res.cotisations)) {
+      if (res.membres) DB.membres = res.membres;
+      if (res.cotisations) DB.cotisations = res.cotisations;
+      try { localStorage.setItem("ecc_membres_db", JSON.stringify(DB)); } catch(e) {}
+    }
+    if (callback) callback(DB);
+  });
+}
+
 function loadDBFromFirebase(callback) {
   if (!IS_CONFIGURED || !gDb) { if(callback) callback(loadDB()); return; }
   gDb.collection("membres_db").doc("main").get()
     .then(function(doc) {
-      if (doc.exists) {
-        var data = doc.data();
-        var db = {membres: data.membres||[], cotisations: data.cotisations||[], nextId: data.nextId||1};
-        // Mettre à jour le cache local
+      var data = doc.exists ? (doc.data() || {}) : {};
+      var db = {
+        membres: data.membres || [],
+        cotisations: data.cotisations || [],
+        nextId: data.nextId || 1,
+        maxNumero: data.maxNumero || 0
+      };
+      // Les documents séparés font foi dès qu'il en existe ; les tableaux de
+      // l'ancien document ne servent plus que de repli.
+      chargerMembresCotisations(function(res){
+        if (res) {
+          if (res.membres) db.membres = res.membres;
+          if (res.cotisations) db.cotisations = res.cotisations;
+        }
         try { localStorage.setItem("ecc_membres_db", JSON.stringify(db)); } catch(e) {}
         if(callback) callback(db);
-      } else {
-        if(callback) callback(loadDB());
-      }
+      });
     }).catch(function() { if(callback) callback(loadDB()); });
 }
 
@@ -10543,6 +10741,7 @@ function saveMember() {
     }
   }
 
+  _ecrireMembre(membre);
   saveDB(DB);
   syncFichePublique(membre);
   closeMemberModal();
@@ -10585,8 +10784,10 @@ function deleteMember() {
     function() {
       var delM = findMembre(id);
       if (delM && delM.checkCode) deleteFichePublique(delM.checkCode);
+      var cotisIds = DB.cotisations.filter(function(c){return c.membreId===id;}).map(function(c){return c.id;});
       DB.membres = DB.membres.filter(function(m){return m.id!==id;});
       DB.cotisations = DB.cotisations.filter(function(c){return c.membreId!==id;});
+      _supprimerMembreDoc(id, cotisIds);
       saveDB(DB);
       closeMemberModal();
       renderMembers();
@@ -10988,6 +11189,7 @@ function enregistrerPaiement() {
     dateEnr:((document.getElementById("pay-date")||{}).value)||today()
   };
   DB.cotisations.push(cotis);
+  _ecrireCotisation(cotis);
   saveDB(DB);
   var mCotis = findMembre(membreId);
   if (mCotis) syncFichePublique(mCotis);
@@ -11073,6 +11275,7 @@ function deleteCotis(id) {
   }
   showConfirm("Supprimer ce paiement ?", msg, function(){
     DB.cotisations=DB.cotisations.filter(function(c){return c.id!==id;});
+    _supprimerCotisationDoc(id);
     saveDB(DB); renderHistorique(); renderDashboardM();
     showToast("Paiement supprime.","");
   });
@@ -11757,14 +11960,14 @@ function _marquerCotisInjectees(data) {
   });
   if (mt <= 0) { gCotisAInjecter = []; return; }
   var ref = (data && data.meta && (data.meta.piece || data.meta.date)) || "culte";
-  var ids = {}, n = 0;
+  var ids = {}, n = 0, touchees = [];
   gCotisAInjecter.forEach(function(id) { ids[id] = true; });
   var liste = (DB && DB.cotisations) || [];
   for (var i = 0; i < liste.length; i++) {
-    if (ids[liste[i].id] && !liste[i].injecteCulte) { liste[i].injecteCulte = ref; n++; }
+    if (ids[liste[i].id] && !liste[i].injecteCulte) { liste[i].injecteCulte = ref; n++; touchees.push(liste[i]); }
   }
   gCotisAInjecter = [];
-  if (n) saveDB(DB);
+  if (n) { _ecrireCotisationsLot(touchees); saveDB(DB); }
 }
 
 // == SHARED LAUNCH ==
