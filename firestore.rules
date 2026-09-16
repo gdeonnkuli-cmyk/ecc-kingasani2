@@ -15,9 +15,44 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ── Qui est administrateur ────────────────────────────────────────────
+    // Deux voies, et la première est une porte de secours volontaire : si le
+    // document de rôle du propriétaire venait à disparaître ou à être mal
+    // écrit, la règle qui protège les comptes se refermerait sur lui sans
+    // qu'il puisse se rouvrir. Son adresse est donc reconnue en dur.
+    //
+    // La seconde voie lit le rôle inscrit dans accounts/{email}. Un document
+    // absent rend l'expression fausse : le refus est le comportement par
+    // défaut, ce qui est le bon sens en matière de droits.
+    function estProprietaire() {
+      return request.auth != null
+             && request.auth.token.email == 'gdeonnkuli@gmail.com';
+    }
+    function estAdmin() {
+      return estProprietaire()
+             || (request.auth != null
+                 && exists(/databases/$(database)/documents/accounts/$(request.auth.token.email))
+                 && get(/databases/$(database)/documents/accounts/$(request.auth.token.email)).data.role == 'admin');
+    }
+
+
+    // ── Comptes et rôles ───────────────────────────────────────────────────
+    // C'était le point faible de tout l'édifice : n'importe quel compte
+    // connecté pouvait écrire son propre document avec role "admin" et se
+    // promouvoir à sa prochaine connexion. Les contrôles posés dans
+    // l'interface — validation d'une assistance, clôture d'un mois — ne
+    // valaient donc rien.
+    //
+    // La lecture reste ouverte à l'équipe : l'application a besoin des
+    // permissions de chacun. L'écriture est réservée aux administrateurs, si
+    // bien que nul ne peut plus modifier son propre rôle.
+    match /accounts/{doc} {
+      allow read:  if request.auth != null;
+      allow write: if estAdmin();
+    }
+
     // ── Données de gestion : session authentifiée obligatoire ──────────────
-    // Ces 19 collections sont celles réellement utilisées par l'application.
-    match /accounts/{doc}            { allow read, write: if request.auth != null; }
+    // Ces collections sont celles réellement utilisées par l'application.
     match /membres_db/{doc}          { allow read, write: if request.auth != null; }
     match /social_db/{doc}           { allow read, write: if request.auth != null; }
 
@@ -45,7 +80,19 @@ service cloud.firestore {
     match /cultes/{doc}              { allow read, write: if request.auth != null; }
     match /historique/{doc}          { allow read, write: if request.auth != null; }
     match /presence/{doc}            { allow read, write: if request.auth != null; }
-    match /config/{doc}              { allow read, write: if request.auth != null; }
+    // ── Configuration ─────────────────────────────────────────────────────
+    // Clôtures de période, correspondance comptable SYCEBNL, montants des
+    // cotisations : ce sont des décisions d'administration.
+    //
+    // config/compteurs fait exception : c'est la séquence des numéros de
+    // pièce, écrite par transaction à chaque enregistrement de culte, donc par
+    // tout utilisateur autorisé à saisir. La réserver aux administrateurs
+    // casserait la numérotation pour le trésorier.
+    match /config/compteurs          { allow read, write: if request.auth != null; }
+    match /config/{doc} {
+      allow read:  if request.auth != null;
+      allow write: if estAdmin();
+    }
     match /notifications/{doc}       { allow read, write: if request.auth != null; }
     match /budget_db/{doc}           { allow read, write: if request.auth != null; }
     match /mutuelle_db/{doc}         { allow read, write: if request.auth != null; }
@@ -53,14 +100,14 @@ service cloud.firestore {
     match /connexions/{doc}          { allow read, write: if request.auth != null; }
 
     // ── Journal d'audit ───────────────────────────────────────────────────
-    // ATTENTION — faiblesse connue, laissée en l'état pour ne rien casser :
-    // tout compte connecté peut modifier ou supprimer une entrée d'audit, ce
-    // qui prive le journal de sa valeur probante. La suppression est utilisée
-    // par clearAccessHistory(), réservée aux administrateurs côté interface
-    // seulement. Le durcissement correct (update/delete réservés aux admins)
-    // suppose un modèle de rôles vérifiable dans les règles — voir la note
-    // en fin de fichier.
-    match /audit_log/{doc}           { allow read, write: if request.auth != null; }
+    // Un journal que chacun peut réécrire n'a aucune valeur probante. Tout
+    // compte connecté peut y ajouter une entrée — c'est le principe même du
+    // journal — mais seul un administrateur peut en modifier ou en supprimer
+    // une, ce dont clearAccessHistory a besoin.
+    match /audit_log/{doc} {
+      allow read, create:   if request.auth != null;
+      allow update, delete: if estAdmin();
+    }
 
     // ── Fiche de membre consultable par code ──────────────────────────────
     // La règle précédente était « allow read: if true », ce qui autorisait
@@ -101,21 +148,19 @@ service cloud.firestore {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  ÉTAPE SUIVANTE — passer aux rôles
+//  OÙ EN SONT LES RÔLES
 //
-//  Aujourd'hui, tout compte connecté peut écrire dans toutes les collections
-//  de gestion : un utilisateur « finances » peut modifier le registre des
-//  membres, et les rôles ne sont appliqués que par l'interface. Pour les faire
-//  respecter côté serveur, deux voies :
+//  Les rôles sont désormais lus côté serveur, dans accounts/{email} : c'est
+//  l'identifiant du document qui porte l'adresse, si bien que la règle peut
+//  le retrouver à partir de request.auth.token.email, sans migration vers les
+//  uid ni recours à l'Admin SDK.
 //
-//  1. Custom claims (recommandé) — poser le rôle sur le compte Firebase Auth
-//     via l'Admin SDK, puis l'exploiter directement :
-//       allow write: if request.auth.token.role == 'admin';
+//  Ce qui est fermé : nul ne peut plus modifier un rôle ni réécrire le
+//  journal d'audit sans être administrateur.
 //
-//  2. Documents accounts indexés par uid — aujourd'hui ils portent un champ
-//     email et un identifiant automatique ; en les renommant avec l'uid du
-//     compte, les règles pourraient lire :
-//       get(/databases/$(database)/documents/accounts/$(request.auth.uid)).data.role
-//
-//  Les deux demandent une migration : à faire à froid, pas pendant une panne.
+//  Ce qui reste ouvert, et assumé pour l'instant : tout compte connecté peut
+//  écrire dans les collections de gestion — un utilisateur « finances » peut
+//  encore modifier le registre des membres. Restreindre demande de décider,
+//  collection par collection, quel rôle écrit quoi ; à faire une fois les
+//  rôles inscrits et stabilisés, en connaissant les usages réels.
 // ═══════════════════════════════════════════════════════════════════════════
