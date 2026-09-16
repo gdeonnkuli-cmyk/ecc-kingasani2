@@ -4658,9 +4658,10 @@ function rouvrirMois(ym) {
     });
 }
 
+// Conserve pour les appels existants : le chargement de la configuration a
+// ete deplace dans launchApp, qui est le seul passage commun a tous les
+// chemins de connexion (saisie manuelle, compte local, session Firebase).
 function launchAppFin() {
-  chargerClotures();
-  chargerSycebnl();
   launchApp();
 }
 
@@ -6920,8 +6921,20 @@ function chargerSycebnl(cb) {
     .then(function(doc) {
       if (doc.exists && doc.data()) {
         var d = doc.data();
-        gSycebnl = { comptes: d.comptes || {}, tresCDF: d.tresCDF || "", tresUSD: d.tresUSD || "" };
-        try { localStorage.setItem("ecc_sycebnl", JSON.stringify(gSycebnl)); } catch(e) {}
+        var dist = d.comptes || {}, local = gSycebnl.comptes || {};
+        // Un document distant sans aucune rubrique, face a un appareil qui en
+        // porte, n'est pas une mise a jour : c'est une perte, deja subie une
+        // fois. On garde ce que l'appareil sait, et on le republie.
+        if (!Object.keys(dist).length && Object.keys(local).length) {
+          gSycebnl.tresCDF = gSycebnl.tresCDF || d.tresCDF || "";
+          gSycebnl.tresUSD = gSycebnl.tresUSD || d.tresUSD || "";
+          if (gCurrentUser && gCurrentUser.role === "admin") {
+            gDb.collection("config").doc("sycebnl").set(gSycebnl, { merge: false }).catch(function(){});
+          }
+        } else {
+          gSycebnl = { comptes: dist, tresCDF: d.tresCDF || "", tresUSD: d.tresUSD || "" };
+          try { localStorage.setItem("ecc_sycebnl", JSON.stringify(gSycebnl)); } catch(e) {}
+        }
       }
       if (cb) cb();
     })
@@ -7647,8 +7660,14 @@ function _carteControlePieces() {
 function _carteSycebnl() {
   var rub = _rubriquesConnues();
   var tot = rub.recettes.length + rub.depenses.length;
-  var faits = 0;
-  rub.recettes.concat(rub.depenses).forEach(function(l){ if (gSycebnl.comptes[l]) faits++; });
+  var faits = 0, listees = {};
+  rub.recettes.concat(rub.depenses).forEach(function(l){ listees[l] = true; if (gSycebnl.comptes[l]) faits++; });
+  // Comptes memorises pour des rubriques que la liste ci-dessous n'affiche
+  // pas : signe que l'historique n'est pas encore charge. Le taire donnerait
+  // un compteur a zero sans explication, et inviterait a tout ressaisir.
+  var horsListe = 0;
+  for (var _r in gSycebnl.comptes) if (!listees[_r]) horsListe++;
+  var histVide = !((gHistCache || []).length);
 
   var h = '<div class="sec-lbl">Correspondance comptable SYCEBNL</div>';
   h += '<p style="font-size:.76rem;color:var(--muted);margin-bottom:9px">'
@@ -7656,6 +7675,12 @@ function _carteSycebnl() {
      + 'Tapez un chiffre (7 pour les ressources, 6 pour les emplois) ou un mot de l\'intitulé : '
      + 'les comptes du plan correspondants s\'affichent, vous en sélectionnez un, et il reste le compte par défaut de la rubrique jusqu\'à ce que vous le changiez. '
      + '<strong>' + faits + ' / ' + tot + ' rubriques renseignées.</strong></p>';
+  if (histVide || horsListe) {
+    h += '<div class="ctrl-piece ko" style="margin-bottom:9px"><div class="cp-tete"><strong>Liste incomplète</strong></div>'
+       + '<div class="cp-l">Cette liste se construit à partir de l\'historique des cultes, qui n\'est pas encore chargé. '
+       + (horsListe ? '<strong>' + horsListe + ' compte(s) déjà enregistré(s)</strong> concernent des rubriques absentes ci-dessous — ils sont conservés, pas perdus. ' : '')
+       + 'Attendez le chargement complet avant de saisir ou d\'enregistrer.</div></div>';
+  }
   function champTres(id, lbl, val) {
     return '<div class="fg"><label>' + lbl + '</label>'
       + '<div class="syc-wrap"><input type="text" class="syc-champ" id="' + id + '" data-type="T" value="'
@@ -7926,18 +7951,35 @@ function _sycClavier(input, e) {
 
 // Lecture des champs affiches. Ne renvoie rien si la carte n'est pas a l'ecran :
 // on n'ecrase jamais la correspondance enregistree avec un formulaire absent.
+//
+// La carte ne montre que les rubriques connues au moment du rendu, et cette
+// liste depend de gHistCache. Rendue avant l'arrivee de l'historique, elle
+// n'en affiche qu'une quarantaine sur plusieurs centaines. La collecte partait
+// d'un objet vide : tout ce qui n'etait pas a l'ecran disparaissait, et
+// l'enregistrement ecrivait ce vide en base avec merge:false. Un simple
+// passage du curseur dans un champ suffisait a effacer la correspondance
+// entiere -- c'est l'origine du « 0 / 230 rubriques renseignees ».
+//
+// On repart donc de la correspondance enregistree. Seuls les champs reellement
+// affiches font foi : un champ rempli pose son compte, un champ vide a la main
+// efface le sien, et une rubrique hors ecran garde le sien.
 function _sycebnlCollecte() {
   var champs = document.querySelectorAll(".syc-compte");
   if (!champs.length) return null;
-  var comptes = {};
+  var comptes = {}, k;
+  for (k in gSycebnl.comptes) comptes[k] = gSycebnl.comptes[k];
   for (var i = 0; i < champs.length; i++) {
+    var rub = champs[i].getAttribute("data-rubrique");
+    if (!rub) continue;
     var v = (champs[i].value || "").trim();
-    if (v) comptes[champs[i].getAttribute("data-rubrique")] = v;
+    if (v) comptes[rub] = v; else delete comptes[rub];
   }
+  var tc = document.getElementById("syc-tres-cdf");
+  var tu = document.getElementById("syc-tres-usd");
   return {
     comptes: comptes,
-    tresCDF: ((document.getElementById("syc-tres-cdf") || {}).value || "").trim(),
-    tresUSD: ((document.getElementById("syc-tres-usd") || {}).value || "").trim()
+    tresCDF: tc ? (tc.value || "").trim() : (gSycebnl.tresCDF || ""),
+    tresUSD: tu ? (tu.value || "").trim() : (gSycebnl.tresUSD || "")
   };
 }
 
@@ -12158,6 +12200,10 @@ function _marquerCotisInjectees(data) {
 function launchApp() {
   if (window.__appLaunched) return; // éviter le double lancement (connexion manuelle + onAuthStateChanged)
   window.__appLaunched = true;
+  // Clôtures et correspondance SYCEBNL : chargées ici et non dans launchAppFin,
+  // car onAuthStateChanged peut lancer l'application par un autre chemin.
+  chargerClotures();
+  chargerSycebnl();
   logConnexion(); // Enregistrer la visite/connexion pour l'historique admin
   document.getElementById("li-btn").textContent = "Se connecter";
   document.getElementById("unm").textContent = gCurrentUser.nom;
