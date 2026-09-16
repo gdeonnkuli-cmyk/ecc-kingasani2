@@ -1589,6 +1589,30 @@ body.dark-mode .syc-pop .syc-opt .syc-rg{color:#e8c97e;background:rgba(232,201,1
 body.dark-mode .syc-pop .syc-opt b{color:#e8c97e}
 body.dark-mode .syc-pop .syc-opt{border-bottom-color:#22374a}
 body.dark-mode .syc-pop .syc-opt.on,body.dark-mode .syc-pop .syc-opt:active{background:#1f3a52}
+/* Un champ en grille garde un min-width intrinsèque (taille par défaut d'un
+   input) qui l'empêche de rétrécir : sur téléphone, il débordait de sa colonne.
+   Le remettre à zéro est ce qui permet à la grille de le contraindre. */
+.mgrid > .fg, .form-grid > .fg{min-width:0}
+.mgrid input, .mgrid select, .form-grid input, .form-grid select,
+.syc-wrap .syc-champ{min-width:0;max-width:100%}
+.mgrid label, .form-grid label{overflow-wrap:anywhere}
+
+@media (max-width:640px){
+  .clo-table,.clo-table tbody,.clo-table tr,.clo-table td{
+    display:block!important;width:100%!important;white-space:normal!important;overflow:visible!important;}
+  .clo-table thead{display:none!important}
+  .clo-table tr{border:1px solid var(--v3-line);border-radius:var(--v3-r-md);
+    background:var(--v3-surface-2);padding:9px 12px;margin-bottom:7px;}
+  .clo-table td{border:none!important;padding:2px 0!important}
+  .clo-table td:first-child{font-size:.84rem;margin-bottom:3px}
+  .clo-table td:nth-child(2):before{content:"Cultes : ";color:var(--v3-muted);font-size:.72rem}
+  .clo-table td:nth-child(3){text-align:left!important}
+  .clo-table td:nth-child(3):before{content:"Net cumulé : ";color:var(--v3-muted);font-size:.72rem}
+  .clo-table td:last-child{margin-top:7px}
+  .clo-table td:last-child .btn{width:100%}
+  body.dark-mode .clo-table tr{background:#16293a}
+}
+
 .rap-table td{vertical-align:top}
 .rap-table tr.rap-ok td:last-child{color:#14663f;font-weight:700}
 .rap-table tr.rap-warn td:last-child{color:#8a5a00;font-weight:700}
@@ -5469,10 +5493,17 @@ function _majEcartCaisse(fCDF, fUSD, t) {
 var DRAFT_KEY = "ecc_finances_draft";
 var gDraftTimer = null;
 
+var DRAFT_VU_KEY = "ecc_finances_draft_vu";
+
 function saveDraft() {
   if(!document.getElementById("meta-date")) return; // module pas actif
   try {
     var data = captureState();
+    // draftAt = dernière écriture ; draftDepuis = première, qui seule sert à
+    // la péremption. Les confondre faisait repartir le délai de 24 h à chaque
+    // frappe, si bien qu'un brouillon ne périmait jamais.
+    var ancien = loadDraft();
+    data.draftDepuis = (ancien && ancien.draftDepuis) || (ancien && ancien.draftAt) || new Date().toISOString();
     data.draftAt = new Date().toISOString();
     localStorage.setItem(DRAFT_KEY, JSON.stringify(data));
   } catch(e) { console.warn("saveDraft:", e.message); }
@@ -5486,7 +5517,21 @@ function loadDraft() {
 }
 
 function clearDraft() {
-  try { localStorage.removeItem(DRAFT_KEY); } catch(e) {}
+  try { localStorage.removeItem(DRAFT_KEY); localStorage.removeItem(DRAFT_VU_KEY); } catch(e) {}
+}
+
+// Un brouillon déjà soumis à l'utilisateur ne lui est plus repressenté : qu'il
+// l'ait restauré ou refusé, il a répondu. Il reste récupérable jusqu'à sa
+// péremption, mais ne réapparaît plus à chaque ouverture de l'application.
+function _marquerDraftVu(draft) {
+  try { localStorage.setItem(DRAFT_VU_KEY, (draft && (draft.draftDepuis || draft.draftAt)) || ""); } catch(e) {}
+}
+
+function _draftDejaVu(draft) {
+  try {
+    var vu = localStorage.getItem(DRAFT_VU_KEY);
+    return !!vu && vu === ((draft && (draft.draftDepuis || draft.draftAt)) || "");
+  } catch(e) { return false; }
 }
 
 function startDraftTimer() {
@@ -5501,18 +5546,33 @@ function startDraftTimer() {
 function checkAndRestoreDraft() {
   var draft = loadDraft();
   if(!draft || !draft.meta || !draft.meta.date) return;
-  var draftTime = draft.draftAt ? new Date(draft.draftAt).toLocaleString("fr-FR") : "?";
-  // Vérifier que le brouillon n'est pas trop vieux (max 24h)
-  if(draft.draftAt){
-    var age = (new Date() - new Date(draft.draftAt)) / 3600000;
+
+  // Péremption calculée sur la PREMIÈRE écriture du brouillon, pas la dernière.
+  var depuis = draft.draftDepuis || draft.draftAt;
+  if(depuis){
+    var age = (new Date() - new Date(depuis)) / 3600000;
     if(age > 24){ clearDraft(); return; }
   }
+
+  // Déjà proposé une fois : on ne redemande pas à chaque ouverture.
+  if(_draftDejaVu(draft)) return;
+
+  var draftTime = draft.draftAt ? new Date(draft.draftAt).toLocaleString("fr-FR") : "?";
+  // Marqué avant l'affichage : « Annuler » ne déclenche aucun retour, c'est le
+  // seul moment où l'on est sûr de passer, quelle que soit la réponse.
+  _marquerDraftVu(draft);
+
   showModal(
     "Brouillon non sauvegardé",
-    "Un formulaire Finances non enregistré a été trouvé (culte du " + escH(draft.meta.date) + ", sauvegardé à " + draftTime + "). Voulez-vous le restaurer ?",
+    "Un formulaire Finances non enregistré a été trouvé (culte du " + escH(draft.meta.date)
+      + ", sauvegardé à " + draftTime + "). Voulez-vous le restaurer ?"
+      + "\n\nCette proposition ne sera pas répétée : le brouillon reste récupérable pendant 24 h, puis il est supprimé.",
     function(){
       closeModal();
       restoreState(draft);
+      // Le brouillon a rempli son office. Dès la première modification, un
+      // nouveau est écrit : le travail reste protégé.
+      clearDraft();
       gIsDirty = true;
       setSyncStatus("dirty", "Brouillon restauré");
       showToast("✅ Brouillon restauré — vérifiez et enregistrez.", "ok");
@@ -7905,7 +7965,7 @@ function _carteClotures() {
      + 'La réouverture est possible et inscrite au journal d\'audit.</p>';
   if (!mois.length) return h + '<p style="font-size:.78rem;color:var(--muted)">Aucun culte enregistré pour le moment.</p>';
 
-  h += '<table class="cotis-table"><thead><tr><th>Mois</th><th>Cultes</th>'
+  h += '<table class="cotis-table clo-table"><thead><tr><th>Mois</th><th>Cultes</th>'
      + '<th style="text-align:right">Net cumulé</th><th>État</th><th></th></tr></thead><tbody>';
   for (var j = 0; j < mois.length; j++) {
     var ym = mois[j], info = parMois[ym], clos = gClotures[ym];
@@ -7984,7 +8044,7 @@ function renderAdmin(){
   html+="<div class='sec-lbl'>Montants des cotisations annuelles</div>";
   html+="<div style='background:#f7fafd;border-radius:9px;border:1px solid #c5d8ed;padding:12px;margin-bottom:12px'>";
   html+="<div style='font-size:.73rem;color:#6b88a4;margin-bottom:10px'>Ces cotisations s'ajoutent aux 12 mois et sont dues une fois par an (comptées dans les arriérés).</div>";
-  html+="<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px'>";
+  html+="<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px'>";
   html+="<div class='fg'><label>District (FC)</label><input type='number' id='cotis-spec-D' value='"+(specM.D!=null?specM.D:COTIS_MENSUELLE)+"' min='0'></div>";
   html+="<div class='fg'><label>Sec. Régional (FC)</label><input type='number' id='cotis-spec-R' value='"+(specM.R!=null?specM.R:COTIS_MENSUELLE)+"' min='0'></div>";
   html+="<div class='fg'><label>Sec. Général (FC)</label><input type='number' id='cotis-spec-G' value='"+(specM.G!=null?specM.G:COTIS_MENSUELLE)+"' min='0'></div>";
