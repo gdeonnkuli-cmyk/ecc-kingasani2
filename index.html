@@ -7033,6 +7033,79 @@ function _rapprochementCotis() {
   return { lignes: lignes, attente: attente, nbAttente: nbAttente };
 }
 
+// ══ BASCULE DES ASSISTANCES EN DOCUMENTS SÉPARÉS ═══════════════════════════
+// Copie, sans rien détruire : l'ancien tableau reste en place et redevient la
+// source de lecture si la collection est vidée. La bascule peut donc être
+// relancée, et elle est sans effet si elle a déjà eu lieu.
+function _carteMigrationSocial() {
+  var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F504} Assistances sociales : documents s\u00e9par\u00e9s</div>';
+  var n = ((SOCDB && SOCDB.assistances) || []).length;
+
+  if (gSocParDoc) {
+    return h + '<div class="ctrl-piece ok"><div class="cp-tete"><strong>Bascule effectu\u00e9e</strong></div>'
+      + '<div class="cp-l">Chaque assistance a son propre document : valider ou modifier l\'une n\'\u00e9crit plus rien sur les autres. '
+      + 'Deux administrateurs peuvent travailler en m\u00eame temps sans s\'\u00e9craser.</div>'
+      + '<div class="cp-l">L\'ancien tableau est conserv\u00e9 en l\'\u00e9tat comme archive : il n\'est plus mis \u00e0 jour, et rien n\'a \u00e9t\u00e9 supprim\u00e9.</div></div>';
+  }
+
+  h += '<div class="ctrl-piece ko"><div class="cp-tete"><strong>' + n + ' assistance(s) dans l\'ancien format</strong></div>'
+     + '<div class="cp-l cp-w">Toutes les assistances vivent dans un seul document, r\u00e9\u00e9crit en entier \u00e0 chaque op\u00e9ration. '
+     + 'Si deux administrateurs valident en m\u00eame temps depuis deux appareils, le second efface le travail du premier, sans avertissement.</div>'
+     + '<div class="cp-l">La bascule copie chaque assistance dans son propre document, sous son identifiant actuel. '
+     + 'Elle ne supprime rien : l\'ancien tableau reste intact, et la lecture y retombe si la nouvelle collection est vide. '
+     + 'La relancer est sans effet.</div>'
+     + '<div class="cp-l cp-e"><strong>\u00c0 faire avant :</strong> publier la r\u00e8gle Firestore pour la collection '
+     + '<code>social_assistances</code>, sinon l\'\u00e9criture sera refus\u00e9e. La r\u00e8gle figure dans le fichier '
+     + '<code>firestore.rules</code> du d\u00e9p\u00f4t.</div></div>';
+  h += '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">'
+     + '<button class="btn btn-sm btn-p" onclick="migrerAssistances()">Basculer les assistances</button></div>';
+  return h;
+}
+
+function migrerAssistances() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.", "err"); return; }
+  if (!IS_CONFIGURED || !gDb) { showToast("Firebase requis pour cette op\u00e9ration.", "err"); return; }
+  var liste = ((SOCDB && SOCDB.assistances) || []).filter(function(a){ return a && a.id; });
+  if (!liste.length) { showToast("Aucune assistance \u00e0 basculer.", "warn"); return; }
+
+  showModal("Basculer " + liste.length + " assistance(s) ?",
+    "Chaque assistance sera copi\u00e9e dans son propre document.\n\n"
+    + "Rien n'est supprim\u00e9 : l'ancien tableau reste en place et pourra \u00eatre relu si besoin. "
+    + "L'op\u00e9ration peut \u00eatre relanc\u00e9e sans dommage.\n\n"
+    + "Si la r\u00e8gle Firestore de la collection social_assistances n'est pas encore publi\u00e9e, "
+    + "l'\u00e9criture sera refus\u00e9e et rien ne changera.",
+    function(){
+      closeModal();
+      var faits = 0, echecs = 0, restants = liste.length, premiereErreur = "";
+      showToast("Bascule de " + restants + " assistance(s)\u2026", "ok");
+      liste.forEach(function(a){
+        gDb.collection(SOC_COLL).doc(a.id).set(a, { merge: false })
+          .then(function(){ faits++; })
+          .catch(function(e){ echecs++; if (!premiereErreur) premiereErreur = e.message || ""; })
+          .then(function(){
+            if (--restants > 0) return;
+            if (faits) gSocParDoc = true;
+            if (typeof logAudit === "function") {
+              logAudit("MIGRATION", "Social", faits + " assistance(s) bascul\u00e9e(s) en documents s\u00e9par\u00e9s"
+                + (echecs ? ", " + echecs + " en \u00e9chec" : ""));
+            }
+            if (echecs) {
+              showModal("Bascule incompl\u00e8te",
+                faits + " assistance(s) bascul\u00e9e(s), " + echecs + " en \u00e9chec.\n\n"
+                + (premiereErreur ? "Premi\u00e8re erreur : " + premiereErreur + "\n\n" : "")
+                + "Vos donn\u00e9es d'origine sont intactes. V\u00e9rifiez la r\u00e8gle Firestore de la collection "
+                + "social_assistances, puis relancez la bascule.",
+                function(){ closeModal(); renderAdmin(); });
+            } else {
+              showToast(faits + " assistance(s) bascul\u00e9e(s). L'ancien tableau est conserv\u00e9 comme archive.", "ok");
+              if (typeof subscribeSoc === "function") subscribeSoc();
+              renderAdmin();
+            }
+          });
+      });
+    });
+}
+
 function _carteRapprochementCotis() {
   var r = _rapprochementCotis();
   var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F501} Rapprochement cotisations \u2194 recettes</div>';
@@ -8323,6 +8396,7 @@ function renderAdmin(){
   html += "<div id='audit-zone'></div>";
 
   html += _carteClotures();
+  html += _carteMigrationSocial();
   html += _carteRapprochementCotis();
   html += _carteControlePieces();
   html += _carteSycebnl();
@@ -11919,6 +11993,61 @@ var SOC_TYPE_COLORS = {
 var gSocUid = 0;
 function newIdS() { gSocUid++; return "sr"+gSocUid; }
 
+// ══ ASSISTANCES : UN DOCUMENT PAR DEMANDE ══════════════════════════════════
+// Le module écrivait tout le tableau des assistances dans un document unique
+// à chaque opération. Deux administrateurs validant en même temps depuis deux
+// appareils s'écrasaient donc mutuellement, en silence.
+//
+// Chaque assistance a maintenant son propre document, sous son identifiant
+// existant : valider l'une n'écrit plus rien sur les autres. L'ancien document
+// n'est ni vidé ni supprimé — il reste l'archive de l'état d'avant bascule, et
+// la lecture retombe dessus tant que la nouvelle collection est vide.
+var SOC_COLL = "social_assistances";
+var gSocParDoc = false;   // la collection par document est-elle alimentée ?
+
+// Écrit une seule assistance. Les autres ne sont pas touchées.
+function _ecrireAssistance(a, cb) {
+  try { localStorage.setItem("ecc_social_db", JSON.stringify(SOCDB)); } catch(e) {}
+  if (!IS_CONFIGURED || !gDb || !a || !a.id) { if (cb) cb(); return; }
+  gDb.collection(SOC_COLL).doc(a.id).set(a, { merge: false })
+    .then(function(){ gSocParDoc = true; if (cb) cb(); })
+    .catch(function(e){
+      if (typeof showSyncError === "function") showSyncError(e, "enregistrement de l'assistance");
+      else showToast("Non synchronisé : " + e.message, "err");
+      if (cb) cb(e);
+    });
+}
+
+function _supprimerAssistanceDoc(id, cb) {
+  try { localStorage.setItem("ecc_social_db", JSON.stringify(SOCDB)); } catch(e) {}
+  if (!IS_CONFIGURED || !gDb || !id) { if (cb) cb(); return; }
+  gDb.collection(SOC_COLL).doc(id).delete()
+    .then(function(){ if (cb) cb(); })
+    .catch(function(e){
+      if (typeof showSyncError === "function") showSyncError(e, "suppression de l'assistance");
+      if (cb) cb(e);
+    });
+}
+
+// Lecture : la collection par document si elle est alimentée, l'ancien
+// document sinon. Aucune bascule n'est décidée à la lecture.
+function chargerAssistances(cb) {
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(null); return; }
+  gDb.collection(SOC_COLL).get()
+    .then(function(snap){
+      if (!snap || snap.empty) { gSocParDoc = false; if (cb) cb(null); return; }
+      var arr = [];
+      snap.forEach(function(d){
+        var o = d.data() || {};
+        o.id = d.id;
+        arr.push(o);
+      });
+      gSocParDoc = true;
+      if (cb) cb(arr);
+    })
+    .catch(function(){ if (cb) cb(null); });
+}
+
 function loadSocDB() {
   try { return JSON.parse(localStorage.getItem("ecc_social_db") || "null") || {recettes:[], assistances:[], sessions:[], nextId:1}; } catch(e) { return {recettes:[],assistances:[],sessions:[],nextId:1}; }
 }
@@ -11927,13 +12056,18 @@ function saveSocDB(db) {
   try { localStorage.setItem("ecc_social_db", JSON.stringify(db)); } catch(e) {}
   // 2. Firebase
   if (IS_CONFIGURED && gDb) {
-    gDb.collection("social_db").doc("main").set({
-      assistances: db.assistances || [],
+    var charge = {
       sessions: db.sessions || [],
       nextId: db.nextId || 1,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedBy: gCurrentUser ? gCurrentUser.email : ""
-    }).catch(function(e){ console.warn("Social Firebase sync error:", e.message); });
+    };
+    // Une fois les assistances passées en documents séparés, les réécrire ici
+    // ramènerait l'écrasement concurrent que la bascule vient de supprimer.
+    // L'ancien tableau reste figé à son état d'avant bascule, comme archive.
+    if (!gSocParDoc) charge.assistances = db.assistances || [];
+    gDb.collection("social_db").doc("main").set(charge, { merge: true })
+      .catch(function(e){ console.warn("Social Firebase sync error:", e.message); });
   }
 }
 
@@ -11942,46 +12076,74 @@ function loadSocDBFromFirebase(callback) {
   if (!IS_CONFIGURED || !gDb) { if(callback) callback(loadSocDB()); return; }
   gDb.collection("social_db").doc("main").get()
     .then(function(doc) {
-      if (doc.exists) {
-        var data = doc.data();
-        var db = {
-          assistances: data.assistances || [],
-          sessions: data.sessions || [],
-          nextId: data.nextId || 1,
-          recettes: []
-        };
+      var data = doc.exists ? (doc.data() || {}) : {};
+      var db = {
+        assistances: data.assistances || [],
+        sessions: data.sessions || [],
+        nextId: data.nextId || 1,
+        recettes: []
+      };
+      // Les documents séparés font foi dès qu'il en existe ; le tableau de
+      // l'ancien document ne sert plus que de repli.
+      chargerAssistances(function(arr){
+        if (arr) db.assistances = arr;
         try { localStorage.setItem("ecc_social_db", JSON.stringify(db)); } catch(e) {}
         if(callback) callback(db);
-      } else {
-        if(callback) callback(loadSocDB());
-      }
+      });
     }).catch(function() { if(callback) callback(loadSocDB()); });
 }
 var SOCDB = loadSocDB();
 
 // Souscription temps réel : reflète les changements Social sur tous les appareils
 var gUnsubSoc = null;
+var gUnsubSocColl = null;
+
+function _rafraichirSoc() {
+  try { localStorage.setItem("ecc_social_db", JSON.stringify(SOCDB)); } catch(e){}
+  if (typeof renderHistSoc === "function")      renderHistSoc();
+  if (typeof renderDepSocial === "function")    renderDepSocial();
+  if (typeof renderDashboardSoc === "function") renderDashboardSoc();
+}
+
 function subscribeSoc() {
   if (!IS_CONFIGURED || !gDb) return;
   if (gUnsubSoc) gUnsubSoc();
+  if (gUnsubSocColl) gUnsubSocColl();
+
+  // Les assistances, document par document : une modification distante ne
+  // remplace plus que l'entrée concernée.
+  gUnsubSocColl = gDb.collection(SOC_COLL)
+    .onSnapshot(function(snap){
+      if (!snap) return;
+      if (snap.empty && !gSocParDoc) return;   // pas encore basculé
+      var arr = [];
+      snap.forEach(function(d){ var o = d.data() || {}; o.id = d.id; arr.push(o); });
+      gSocParDoc = true;
+      if (JSON.stringify(arr) === JSON.stringify(SOCDB.assistances || [])) return;
+      SOCDB.assistances = arr;
+      _rafraichirSoc();
+    }, function(e){
+      console.warn("Social (collection) snapshot erreur:", e.code, e.message);
+      setTimeout(subscribeSoc, 15000);
+    });
+
+  // Le reste du module — sessions, compteur — vit encore dans l'ancien
+  // document, et les assistances y sont lues tant que la bascule n'a pas eu lieu.
   gUnsubSoc = gDb.collection("social_db").doc("main")
     .onSnapshot(function(doc){
-      if (doc.exists) {
-        var data = doc.data();
-        var incoming = JSON.stringify({a:data.assistances||[], s:data.sessions||[]});
-        var current  = JSON.stringify({a:SOCDB.assistances||[], s:SOCDB.sessions||[]});
-        if (incoming === current) return;
-        SOCDB.assistances = data.assistances || [];
-        SOCDB.sessions    = data.sessions || [];
-        SOCDB.nextId      = data.nextId || 1;
-        try { localStorage.setItem("ecc_social_db", JSON.stringify(SOCDB)); } catch(e){}
-        if (typeof renderHistSoc === "function")      renderHistSoc();
-        if (typeof renderDepSocial === "function")    renderDepSocial();
-        if (typeof renderDashboardSoc === "function") renderDashboardSoc();
+      if (!doc.exists) return;
+      var data = doc.data() || {};
+      var changed = false;
+      if (JSON.stringify(data.sessions || []) !== JSON.stringify(SOCDB.sessions || [])) {
+        SOCDB.sessions = data.sessions || []; changed = true;
       }
+      SOCDB.nextId = data.nextId || SOCDB.nextId || 1;
+      if (!gSocParDoc && JSON.stringify(data.assistances || []) !== JSON.stringify(SOCDB.assistances || [])) {
+        SOCDB.assistances = data.assistances || []; changed = true;
+      }
+      if (changed) _rafraichirSoc();
     }, function(e){
       console.warn("Social snapshot erreur:", e.code, e.message);
-      setTimeout(subscribeSoc, 15000);
     });
 }
 
@@ -12324,7 +12486,7 @@ function doSaveAssistance(id, nom, isNew) {
   } else {
     for(var i=0;i<SOCDB.assistances.length;i++) if(SOCDB.assistances[i].id===id){SOCDB.assistances[i]=obj;break;}
   }
-  saveSocDB(SOCDB);
+  _ecrireAssistance(obj);
   closeAssistModal();
   renderDepSocial();
   recalcS();
@@ -12348,18 +12510,20 @@ function doSaveAssistance(id, nom, isNew) {
 
 function validerAssistance(id) {
   if(gCurrentUser&&gCurrentUser.role!=="admin"){showToast("Validation reservee a l administrateur.","err");return;}
-  for(var i=0;i<SOCDB.assistances.length;i++) {
-    if(SOCDB.assistances[i].id===id){
-      SOCDB.assistances[i].statut="valide";
-      SOCDB.assistances[i].valideBy=gCurrentUser?gCurrentUser.nom:"";
-      SOCDB.assistances[i].valideAt=getTodayStr();
-      if(SOCDB.assistances[i].parEmail){
-        notifyUser(SOCDB.assistances[i].parEmail,"✅","Assistance validée","Votre demande pour "+SOCDB.assistances[i].nom+" a été validée.","social");
-      }
-      break;
-    }
+  var cible=null;
+  for(var i=0;i<SOCDB.assistances.length;i++) if(SOCDB.assistances[i].id===id){ cible=SOCDB.assistances[i]; break; }
+  if(!cible){ showToast("Demande introuvable.","err"); return; }
+  cible.statut="valide";
+  cible.valideBy=gCurrentUser?gCurrentUser.nom:"";
+  cible.valideAt=getTodayStr();
+  delete cible.rejetePar; delete cible.rejeteAt;
+  // Seule cette assistance est écrite : une validation simultanée ailleurs
+  // n'est plus emportée.
+  _ecrireAssistance(cible);
+  if(cible.parEmail && typeof notifyUser==="function"){
+    notifyUser(cible.parEmail,"✅","Assistance validée","Votre demande pour "+cible.nom+" a été validée.","social");
   }
-  saveSocDB(SOCDB);
+  if(typeof logAudit==="function") logAudit("VALIDATION","Social","Assistance "+cible.nom+" — "+fmt(parseFloat(cible.cdf)||0)+" FC validée");
   renderDepSocial();
   recalcS();
   showToast("Assistance validee !","ok");
@@ -12376,7 +12540,7 @@ function rejeterAssistance(id) {
   cible.rejetePar=gCurrentUser?gCurrentUser.nom:"";
   cible.rejeteAt=getTodayStr();
   delete cible.valideBy; delete cible.valideAt;
-  saveSocDB(SOCDB);
+  _ecrireAssistance(cible);
   renderDepSocial();
   recalcS();
   if(typeof logAudit==="function") logAudit("REJET","Social","Assistance "+cible.nom+" — "+fmt(parseFloat(cible.cdf)||0)+" FC rejetée");
@@ -12407,7 +12571,7 @@ function supprimerAssistance(id) {
   showModal("Supprimer cette assistance ?", msg, function(){
     closeModal();
     SOCDB.assistances=SOCDB.assistances.filter(function(a){return a.id!==id;});
-    saveSocDB(SOCDB);
+    _supprimerAssistanceDoc(id);
     renderDepSocial();
     recalcS();
     if(typeof logAudit==="function"){
