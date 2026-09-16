@@ -7033,6 +7033,150 @@ function _rapprochementCotis() {
   return { lignes: lignes, attente: attente, nbAttente: nbAttente };
 }
 
+// ══ APPLICATION DES RÔLES CÔTÉ SERVEUR ═════════════════════════════════════
+// Aujourd'hui, le rôle n'existe que dans l'interface : USER_ROLES est écrit en
+// dur dans la page, et accounts/{email} peut le compléter. Rien n'empêche un
+// compte connecté d'écrire son propre document avec role "admin" et de se
+// promouvoir à sa prochaine connexion. Toutes les protections posées —
+// validation d'une assistance, clôture d'un mois, suppression d'un membre —
+// reposent donc sur rien du point de vue sécurité.
+//
+// Les règles Firestore savent lire request.auth.token.email. Il suffit que
+// chaque compte ait son document accounts/{email} portant son rôle pour
+// qu'elles puissent en décider. Cette carte prépare le terrain et ne publie
+// rien : les règles restent à coller dans la console, et seulement une fois
+// que le compte courant y figure bien comme administrateur — sans quoi il se
+// fermerait à lui-même la porte.
+var gRolesEtat = null;
+
+function _carteRolesServeur() {
+  var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F510} Application des r\u00f4les c\u00f4t\u00e9 serveur</div>';
+  h += '<p style="font-size:.74rem;color:var(--muted);margin-bottom:9px;line-height:1.5">'
+     + 'Les r\u00f4les ne sont v\u00e9rifi\u00e9s que par l\'interface : un compte connect\u00e9 peut \u00e9crire son propre '
+     + 'document et se d\u00e9clarer administrateur. Cette \u00e9tape inscrit chaque r\u00f4le dans Firestore pour que '
+     + 'les r\u00e8gles puissent le contr\u00f4ler.</p>';
+
+  if (!gRolesEtat) {
+    h += '<div class="ctrl-piece ko"><div class="cp-tete"><strong>\u00c9tat inconnu</strong></div>'
+       + '<div class="cp-l">Lancez le diagnostic pour comparer les r\u00f4les inscrits dans la page et ceux pr\u00e9sents dans Firestore.</div></div>'
+       + '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">'
+       + '<button class="btn btn-sm btn-o" onclick="diagnostiquerRoles()">Lancer le diagnostic</button></div>';
+    return h;
+  }
+
+  var e = gRolesEtat;
+  h += '<table class="cotis-table rap-table"><thead><tr><th>Compte</th><th>Dans la page</th><th>Dans Firestore</th><th></th></tr></thead><tbody>';
+  e.lignes.forEach(function(l){
+    var cls = l.ok ? "rap-ok" : (l.manquant ? "rap-ko" : "rap-warn");
+    h += '<tr class="' + cls + '"><td><strong>' + escH(l.email) + '</strong>'
+       + '<div style="font-size:.66rem;color:var(--muted)">' + escH(l.nom || "") + '</div></td>'
+       + '<td>' + escH(l.rolePage || "\u2014") + '</td>'
+       + '<td>' + escH(l.roleDb || "absent") + '</td>'
+       + '<td>' + (l.ok ? "\u2713" : (l.manquant ? "\u00e0 cr\u00e9er" : "\u00e0 aligner")) + '</td></tr>';
+  });
+  h += '</tbody></table>';
+
+  if (e.moiAdmin) {
+    h += '<div class="ctrl-piece ok" style="margin-top:8px"><div class="cp-tete"><strong>Vous pouvez publier les r\u00e8gles</strong></div>'
+       + '<div class="cp-l">Votre compte <strong>' + escH(e.moiEmail) + '</strong> figure dans Firestore avec le r\u00f4le administrateur. '
+       + 'Les r\u00e8gles durcies vous reconna\u00eetront.</div>'
+       + '<div class="cp-l">Elles se trouvent dans <code>firestore.rules</code>. Une fois publi\u00e9es, un compte ne pourra plus modifier '
+       + 'son propre r\u00f4le, et le journal d\'audit ne pourra plus \u00eatre r\u00e9\u00e9crit.</div></div>';
+  } else {
+    h += '<div class="ctrl-piece ko" style="margin-top:8px"><div class="cp-tete"><strong>Ne publiez pas encore les r\u00e8gles</strong></div>'
+       + '<div class="cp-l cp-e">Votre compte <strong>' + escH(e.moiEmail || "?") + '</strong> ne figure pas dans Firestore avec le r\u00f4le '
+       + 'administrateur. Si vous publiiez les r\u00e8gles maintenant, vous perdriez le droit de modifier les comptes, '
+       + 'sans pouvoir vous le rendre.</div>'
+       + '<div class="cp-l">Lancez d\'abord l\'inscription des r\u00f4les ci-dessous.</div></div>';
+  }
+
+  h += '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">'
+     + '<button class="btn btn-sm btn-o" onclick="diagnostiquerRoles()">Relancer le diagnostic</button>'
+     + (e.aFaire ? '<button class="btn btn-sm btn-p" onclick="inscrireRoles()">Inscrire les r\u00f4les dans Firestore (' + e.aFaire + ')</button>' : '')
+     + '</div>';
+  return h;
+}
+
+function diagnostiquerRoles() {
+  if (!IS_CONFIGURED || !gDb) { showToast("Firebase requis.", "err"); return; }
+  var moi = (gCurrentUser && gCurrentUser.email) || "";
+  gDb.collection("accounts").get()
+    .then(function(snap){
+      var dansDb = {};
+      snap.forEach(function(d){ dansDb[d.id] = d.data() || {}; });
+
+      var emails = {}, k;
+      for (k in USER_ROLES) emails[k] = true;
+      for (k in dansDb) emails[k] = true;
+      if (moi) emails[moi] = true;
+
+      var lignes = [], aFaire = 0;
+      Object.keys(emails).sort().forEach(function(em){
+        var page = USER_ROLES[em] || null;
+        var db = dansDb[em] || null;
+        var rolePage = page ? page.role : "";
+        var roleDb = db && db.role ? db.role : "";
+        // Le rôle de référence est celui de la page quand il existe : c'est lui
+        // qui fait autorité aujourd'hui, et lui qu'on inscrit.
+        var attendu = rolePage || roleDb || "finances";
+        var manquant = !db;
+        var ok = !!db && roleDb === attendu;
+        if (!ok) aFaire++;
+        lignes.push({ email: em, nom: (page && page.nom) || (db && db.nom) || "",
+                      rolePage: rolePage, roleDb: roleDb, attendu: attendu,
+                      manquant: manquant, ok: ok });
+      });
+
+      var moiLigne = null;
+      lignes.forEach(function(l){ if (l.email === moi) moiLigne = l; });
+      gRolesEtat = {
+        lignes: lignes, aFaire: aFaire, moiEmail: moi,
+        moiAdmin: !!(moiLigne && moiLigne.roleDb === "admin")
+      };
+      renderAdmin();
+      showToast(lignes.length + " compte(s) examin\u00e9(s), " + aFaire + " \u00e0 inscrire ou aligner.", aFaire ? "warn" : "ok");
+    })
+    .catch(function(e){ showToast("Lecture des comptes refus\u00e9e : " + e.message, "err"); });
+}
+
+function inscrireRoles() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.", "err"); return; }
+  if (!gRolesEtat) { showToast("Lancez d'abord le diagnostic.", "err"); return; }
+  var aFaire = gRolesEtat.lignes.filter(function(l){ return !l.ok; });
+  if (!aFaire.length) { showToast("Tous les r\u00f4les sont d\u00e9j\u00e0 inscrits.", "ok"); return; }
+
+  showModal("Inscrire " + aFaire.length + " r\u00f4le(s) dans Firestore ?",
+    aFaire.map(function(l){ return "\u2022 " + l.email + " \u2192 " + l.attendu; }).join("\n")
+    + "\n\nLes permissions d\u00e9j\u00e0 enregistr\u00e9es (modules, onglets) ne sont pas touch\u00e9es : "
+    + "seul le r\u00f4le et le nom sont \u00e9crits.",
+    function(){
+      closeModal();
+      var restants = aFaire.length, echecs = 0, premiere = "";
+      aFaire.forEach(function(l){
+        var maj = { email: l.email, role: l.attendu };
+        if (l.nom) maj.nom = l.nom;
+        gDb.collection("accounts").doc(l.email).set(maj, { merge: true })
+          .catch(function(e){ echecs++; if (!premiere) premiere = e.message || ""; })
+          .then(function(){
+            if (--restants > 0) return;
+            if (typeof logAudit === "function") {
+              logAudit("SECURITE", "Comptes", (aFaire.length - echecs) + " r\u00f4le(s) inscrit(s) dans Firestore"
+                + (echecs ? ", " + echecs + " en \u00e9chec" : ""));
+            }
+            if (echecs) {
+              showModal("Inscription incompl\u00e8te",
+                echecs + " r\u00f4le(s) n'ont pas pu \u00eatre \u00e9crits.\n\n" + (premiere ? "Erreur : " + premiere + "\n\n" : "")
+                + "Ne publiez pas les r\u00e8gles tant que le diagnostic n'est pas au vert.",
+                function(){ closeModal(); diagnostiquerRoles(); });
+            } else {
+              showToast("R\u00f4les inscrits. Relancez le diagnostic pour confirmer.", "ok");
+              diagnostiquerRoles();
+            }
+          });
+      });
+    });
+}
+
 // ══ BASCULE DES ASSISTANCES EN DOCUMENTS SÉPARÉS ═══════════════════════════
 // Copie, sans rien détruire : l'ancien tableau reste en place et redevient la
 // source de lecture si la collection est vidée. La bascule peut donc être
@@ -8489,6 +8633,7 @@ function renderAdmin(){
   html += "<div id='audit-zone'></div>";
 
   html += _carteClotures();
+  html += _carteRolesServeur();
   html += _carteMigrationMembres();
   html += _carteMigrationSocial();
   html += _carteRapprochementCotis();
