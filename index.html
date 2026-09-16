@@ -6903,7 +6903,7 @@ var SYCEBNL_COMPTES = {"10": "DOTATION", "101": "Dotation non consomptible sans 
 
 // Propositions de correspondance, établies en rapprochant les libellés des
 // rubriques de ceux du plan. Ce sont des PROPOSITIONS : le comptable tranche.
-var SYCEBNL_PROPOSITIONS = {"ARO": "652", "Action de Grace": "7043", "Budget District Dime District": "652", "Budget Region": "652", "Carburant pour Cultes": "6053", "Collecte Enveloppe": "7044", "Comite Executif": "652", "Consommables pour Cultes": "605", "Cotisation Cartes de Membre": "701", "Cotisation Loyer des Pasteurs": "701", "Cotisation Ration des Pasteurs": "701", "Delegues": "652", "Dimes Collectees": "7044", "District QP Journee Speciale": "652", "Entretien et Reparations": "624", "Equipe Technique": "663", "Facture REGIDESO": "6051", "Facture SNEL": "6052", "Financiers Collation": "663", "Intendant": "663", "Liberation Journee Speciale": "652", "Loyer Pasteur Titulaire": "6222", "Moderateurs 10pct": "663", "Offrande des Familles": "7043", "Offrandes Diacre": "7043", "Offrandes Ordinaires": "7043", "Offrandes Prophete": "7043", "Offrandes Sociales": "7048", "Orateurs Prophetes 90pct": "663", "Part Dimes Bureau Pastoral": "652", "Part Dimes Financiers": "652", "Part Dimes Secretaires": "652", "Part Ration Financiers": "652", "Part Ration Mensuelle BP": "652", "Part Ration Secretaires": "652", "Pasteur Associe Collation": "663", "Pasteur Titulaire Collation": "663", "Protocoles": "663", "Rafraichissement": "601", "Region QP Journee Speciale": "652", "SG QP Journee Speciale": "652", "SNEL REGIDESO Pasteur Titulaire": "6052", "Salaire Sentinelle": "6611", "Secretaires Collation": "663", "Transport Sentinelle": "614", "Visiteurs": "663"};
+var SYCEBNL_PROPOSITIONS = {"ARO": "652", "Action de Grace": "7043", "Budget District Dime District": "652", "Budget Region": "652", "Carburant pour Cultes": "6053", "Collecte Enveloppe": "7044", "Comite Executif": "652", "Consommables pour Cultes": "605", "Cotisation Cartes de Membre": "701", "Cotisation Loyer des Pasteurs": "701", "Cotisation Ration des Pasteurs": "701", "Delegues": "652", "Dimes Collectees": "7044", "District QP Journee Speciale": "652", "Entretien et Reparations": "624", "Equipe Technique": "663", "Facture REGIDESO": "6051", "Facture SNEL": "6052", "Financiers Collation": "663", "Intendant": "663", "Liberation Journee Speciale": "652", "Loyer Pasteur Titulaire": "6222", "Moderateurs 10pct": "663", "Offrande des Familles": "7043", "Offrandes Diacre": "7043", "Offrandes Ordinaires": "7043", "Offrandes Prophete": "7043", "Offrandes Sociales": "7048", "Orateurs Prophetes 90pct": "663", "Part Dimes Bureau Pastoral": "652", "Part Dimes Financiers": "652", "Part Dimes Secretaires": "652", "Part Ration Financiers": "652", "Part Ration Mensuelle BP": "652", "Part Ration Secretaires": "652", "Pasteur Associe Collation": "663", "Pasteur Titulaire Collation": "663", "Protocoles": "663", "Rafraichissement": "6383", "Region QP Journee Speciale": "652", "SG QP Journee Speciale": "652", "SNEL REGIDESO Pasteur Titulaire": "6052", "Salaire Sentinelle": "6611", "Secretaires Collation": "663", "Transport Sentinelle": "614", "Visiteurs": "663"};
 
 // ═══ CORRESPONDANCE COMPTABLE SYCEBNL ═════════════════════════════════════
 // Le SYCEBNL (Acte uniforme OHADA des entités à but non lucratif, en vigueur
@@ -7702,7 +7702,11 @@ var SYCEBNL_REGLES = [
   { m: ["snel", "electricite", "courant", "electrique"], c: "6052", t: "D" },
   { m: ["loyer", "location", "bail"],                    c: "6222", t: "D" },
   { m: ["salaire", "appointement", "remuneration", "prime", "gratification"], c: "6611", t: "D" },
-  { m: ["indemnite", "forfaitaire"],                     c: "663",  t: "D" },
+  // La collation de la paroisse est versée en numéraire, non servie en repas :
+  // c'est une indemnité au personnel, et non une charge de réception. Les
+  // quatre correspondances exactes héritées disaient déjà 663 ; la règle les
+  // rejoint plutôt que de les contredire.
+  { m: ["indemnite", "forfaitaire", "collation"],        c: "663",  t: "D" },
   { m: ["orateur", "moderateur", "predicateur", "honoraire"], c: "6327", t: "D" },
   { m: ["transport", "deplacement", "taxi", "voyage"],   c: "614",  t: "D" },
   { m: ["carburant", "essence", "mazout", "combustible"], c: "6042", t: "D" },
@@ -7715,11 +7719,9 @@ var SYCEBNL_REGLES = [
   { m: ["formation", "seminaire", "recyclage"],          c: "633",  t: "D" },
   { m: ["impot", "taxe", "patente"],                     c: "641",  t: "D" },
   { m: ["publication", "impression", "imprime", "photocopie"], c: "6275", t: "D" },
-  // Arbitré le 16/09/2026 : la collation est une charge de réception, non une
-  // rémunération. Les quatre correspondances exactes héritées — « Pasteur
-  // Titulaire Collation » et assimilées — pointent encore vers 663 et gardent
-  // la priorité : elles ne sont pas modifiées sans décision explicite.
-  { m: ["collation", "protocole", "reception", "accueil"], c: "6383", t: "D" },
+  // Le rafraîchissement, lui, est bien un repas ou un cocktail servi : charge
+  // externe de réception.
+  { m: ["rafraichissement", "cocktail", "protocole", "reception", "accueil"], c: "6383", t: "D" },
   { m: ["assistance", "secours", "aide sociale", "social"], c: "652", t: "D" },
   // Ce qu'une paroisse reverse à son district, sa région ou sa communauté.
   { m: ["quote-part", "quote part", "qp ", "district", "regional", "general", "communaute"], c: "6351", t: "D" },
