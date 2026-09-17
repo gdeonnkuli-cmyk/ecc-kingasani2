@@ -7297,6 +7297,104 @@ function inscrireRoles() {
 // source de lecture si la collection est vidée. La bascule peut donc être
 // relancée, et elle est sans effet si elle a déjà eu lieu.
 // ══ BASCULE DES MEMBRES ET COTISATIONS ═════════════════════════════════════
+function _carteMigrationMutuelle() {
+  var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F504} Mutuelle : documents s\u00e9par\u00e9s</div>';
+  var nm = ((MUTDB && MUTDB.membres) || []).length;
+  var nc = ((MUTDB && MUTDB.cotisations) || []).length;
+  var ns = ((MUTDB && MUTDB.soins) || []).length;
+  var tot = nm + nc + ns;
+
+  h += '<p style="font-size:.74rem;color:var(--muted);margin-bottom:9px;line-height:1.5">'
+     + 'Adh\u00e9rents, versements et demandes vivaient dans un seul document r\u00e9\u00e9crit en entier \u00e0 chaque op\u00e9ration : '
+     + 'deux personnes enregistrant en m\u00eame temps s\u2019\u00e9crasaient sans un mot. Chaque entit\u00e9 prend son propre document.</p>';
+
+  if (gMutParDoc) {
+    h += '<div class="ctrl-piece ok"><div class="cp-tete"><strong>Bascule faite</strong></div>'
+       + '<div class="cp-l">' + nm + ' adh\u00e9rent(s), ' + nc + ' versement(s) et ' + ns + ' demande(s) sont lus depuis leurs collections. '
+       + 'Les anciens tableaux restent dans mutuelle_db/main comme archive.</div></div>';
+    return h;
+  }
+  if (!tot) {
+    return h + '<div class="ctrl-piece ok"><div class="cp-tete"><strong>Rien \u00e0 basculer</strong></div>'
+         + '<div class="cp-l">La mutuelle ne contient encore aucune donn\u00e9e. La bascule se fera d\u2019elle-m\u00eame le jour venu, '
+         + 'ou d\u00e8s maintenant si vous voulez poser le marqueur avant la premi\u00e8re saisie.</div>'
+         + '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn btn-sm btn-p" onclick="migrerMutuelle()">Poser le marqueur</button></div>';
+  }
+  h += '<div class="ctrl-piece ko"><div class="cp-tete"><strong>' + tot + ' entr\u00e9e(s) encore dans le document unique</strong></div>'
+     + '<div class="cp-l cp-w">' + nm + ' adh\u00e9rent(s), ' + nc + ' versement(s), ' + ns + ' demande(s). '
+     + 'Publiez d\u2019abord les r\u00e8gles des collections mutuelle_membres, mutuelle_cotisations et mutuelle_soins, '
+     + 'sans quoi l\u2019\u00e9criture sera refus\u00e9e et rien ne changera.</div></div>'
+     + '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">'
+     + '<button class="btn btn-sm btn-p" onclick="migrerMutuelle()">Basculer les ' + tot + ' entr\u00e9e(s)</button></div>';
+  return h;
+}
+
+function migrerMutuelle() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.", "err"); return; }
+  if (!IS_CONFIGURED || !gDb) { showToast("Firebase requis pour cette op\u00e9ration.", "err"); return; }
+  var mb  = ((MUTDB && MUTDB.membres) || []).filter(function(x){ return x && x.id; });
+  var cot = ((MUTDB && MUTDB.cotisations) || []).filter(function(x){ return x && x.id; });
+  var soi = ((MUTDB && MUTDB.soins) || []).filter(function(x){ return x && x.id; });
+  var tot = mb.length + cot.length + soi.length;
+
+  showModal(tot ? ("Basculer " + tot + " entr\u00e9e(s) de la mutuelle ?") : "Poser le marqueur sans donn\u00e9es ?",
+    (tot
+      ? "Chaque adh\u00e9rent, versement et demande sera copi\u00e9 dans son propre document, par lots.\n\n"
+        + "Rien n'est supprim\u00e9 : les anciens tableaux restent en place et pourront \u00eatre relus. "
+        + "L'op\u00e9ration peut \u00eatre relanc\u00e9e sans dommage.\n\n"
+      : "La mutuelle est vide. Le marqueur sera pos\u00e9 pour que les prochaines saisies aillent directement "
+        + "dans leurs collections.\n\n")
+    + "Si les r\u00e8gles Firestore des collections mutuelle_membres, mutuelle_cotisations et mutuelle_soins "
+    + "ne sont pas encore publi\u00e9es, l'\u00e9criture sera refus\u00e9e et rien ne changera.",
+    function(){
+      closeModal();
+      if (tot) showToast("Bascule de " + tot + " entr\u00e9e(s)\u2026", "ok");
+      var erreurs = [], restants = 3;
+
+      function lots(coll, liste, suite) {
+        if (!liste.length) { suite(null); return; }
+        var paquets = [], i;
+        for (i = 0; i < liste.length; i += 400) paquets.push(liste.slice(i, i + 400));
+        var reste = paquets.length, err = null;
+        paquets.forEach(function(paquet){
+          var lot = gDb.batch();
+          paquet.forEach(function(o){ lot.set(gDb.collection(coll).doc(o.id), o); });
+          lot.commit().catch(function(e){ err = e; })
+            .then(function(){ if (--reste === 0) suite(err); });
+        });
+      }
+
+      function fini(e){
+        if (e) erreurs.push(e.message || String(e));
+        if (--restants > 0) return;
+        if (!erreurs.length) {
+          gMutParDoc = true;
+          // Marqueur explicite : c'est lui, et non la seule présence de
+          // documents, qui fera lire les collections aux autres appareils.
+          gDb.collection("mutuelle_db").doc("main")
+            .set({ docsActifs: true, docsActifsLe: getTodayStr() }, { merge: true })
+            .catch(function(){ gMutParDoc = false; showToast("Bascule faite, mais le marqueur n'a pas pu \u00eatre \u00e9crit. Relancez.", "err"); });
+          if (typeof logAudit === "function") {
+            logAudit("MIGRATION", "Mutuelle", mb.length + " adh\u00e9rent(s), " + cot.length + " versement(s) et "
+              + soi.length + " demande(s) bascul\u00e9(e)s en documents s\u00e9par\u00e9s");
+          }
+          showToast("Bascule termin\u00e9e. Les anciens tableaux sont conserv\u00e9s comme archive.", "ok");
+          renderAdmin();
+        } else {
+          showModal("Bascule incompl\u00e8te",
+            "L'\u00e9criture a \u00e9t\u00e9 refus\u00e9e.\n\nPremi\u00e8re erreur : " + erreurs[0]
+            + "\n\nVos donn\u00e9es d'origine sont intactes. V\u00e9rifiez les r\u00e8gles Firestore des trois collections "
+            + "mutuelle_*, puis relancez la bascule.",
+            function(){ closeModal(); renderAdmin(); });
+        }
+      }
+
+      lots(MUT_MB_COLL,   mb,  fini);
+      lots(MUT_COT_COLL,  cot, fini);
+      lots(MUT_SOIN_COLL, soi, fini);
+    });
+}
+
 function _carteMigrationMembres() {
   var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F504} Membres et cotisations : documents s\u00e9par\u00e9s</div>';
   var nm = ((DB && DB.membres) || []).length, nc = ((DB && DB.cotisations) || []).length;
@@ -8991,6 +9089,7 @@ function renderAdmin(){
   html += _carteClotures();
   html += _carteRolesServeur();
   html += _carteMigrationMembres();
+  html += _carteMigrationMutuelle();
   html += _carteMigrationSocial();
   html += _carteCouverture();
   html += _carteRapprochementCotis();
@@ -21474,6 +21573,54 @@ function instruireDemandeMut(soin) {
            resteAnnuel: resteAnnuel, soldeApres: soldeApres, reserve: reserve };
 }
 
+// ══ UN DOCUMENT PAR ENTITÉ ═════════════════════════════════════════════════
+// mutuelle_db/main portait les trois listes dans un seul document, réécrit en
+// entier à chaque opération. Deux personnes enregistrant en même temps
+// s'écrasaient sans un mot — sur une caisse de solidarité, une cotisation
+// encaissée pouvait disparaître entre deux clics.
+//
+// Chaque adhérent, chaque versement, chaque demande a désormais son document.
+// Les réglages — partenaire, règles, historique, règlement signé — restent
+// dans mutuelle_db/main : ce sont des décisions d'administration, rares et
+// prises par une seule personne.
+var MUT_MB_COLL  = "mutuelle_membres";
+var MUT_COT_COLL = "mutuelle_cotisations";
+var MUT_SOIN_COLL= "mutuelle_soins";
+var gMutParDoc = false;
+
+// Écriture ciblée d'une entité, sans toucher aux autres.
+function _ecrireMut(coll, obj) {
+  if (!IS_CONFIGURED || !gDb || !obj || !obj.id) return Promise.resolve();
+  return gDb.collection(coll).doc(obj.id).set(obj)
+    .catch(function(e){ console.warn("ecrireMut " + coll + ":", e.message); throw e; });
+}
+
+function _supprimerMut(coll, id) {
+  if (!IS_CONFIGURED || !gDb || !id) return Promise.resolve();
+  return gDb.collection(coll).doc(id).delete().catch(function(e){ console.warn("supprimerMut:", e.message); throw e; });
+}
+
+// Lecture des trois collections. La présence de documents ne suffit pas à
+// déclarer la bascule faite : une migration interrompue en laisserait une
+// partie, et lire cette collection amputée ferait disparaître le reste. Seul
+// le marqueur posé à la fin d'une bascule complète fait foi.
+function chargerMutParDoc(cb) {
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(null); return; }
+  var res = { membres:null, cotisations:null, soins:null }, restants = 3;
+  function fini(){ if (--restants === 0) { if (cb) cb(res); } }
+  function lire(coll, cle){
+    gDb.collection(coll).get().then(function(snap){
+      if (snap && !snap.empty) {
+        res[cle] = [];
+        snap.forEach(function(d){ var o = d.data()||{}; o.id = d.id; res[cle].push(o); });
+      }
+    }).catch(function(){}).then(fini);
+  }
+  lire(MUT_MB_COLL, "membres");
+  lire(MUT_COT_COLL, "cotisations");
+  lire(MUT_SOIN_COLL, "soins");
+}
+
 // Le distant fait foi pour ce qu'il connaît ; ce qu'il ignore est conservé.
 // Une ligne n'est jamais supprimée par un simple rechargement.
 function _mutFusion(distant, local) {
@@ -21530,11 +21677,17 @@ function subscribeMut() {
   gUnsubMut = gDb.collection("mutuelle_db").doc("main").onSnapshot(function(doc){
     if(doc.exists){
       var d = doc.data();
+      gMutParDoc = !!d.docsActifs;
       MUTDB = {
-        membres:     _mutFusion(d.membres||[],     MUTDB.membres||[]),
-        cotisations: _mutFusion(d.cotisations||[], MUTDB.cotisations||[]),
-        soins:       _mutFusion(d.soins||[],       MUTDB.soins||[]),
-        partenaire:  d.partenaire || MUTDB.partenaire || {}
+        // Une fois la bascule faite, mutuelle_db/main ne porte plus que
+        // l'archive : la reprendre effacerait tout ce qui a été saisi depuis.
+        membres:     gMutParDoc ? MUTDB.membres     : _mutFusion(d.membres||[],     MUTDB.membres||[]),
+        cotisations: gMutParDoc ? MUTDB.cotisations : _mutFusion(d.cotisations||[], MUTDB.cotisations||[]),
+        soins:       gMutParDoc ? MUTDB.soins       : _mutFusion(d.soins||[],       MUTDB.soins||[]),
+        partenaire:  d.partenaire || MUTDB.partenaire || {},
+        regles:      d.regles !== undefined ? d.regles : MUTDB.regles,
+        reglesHistorique: d.reglesHistorique || MUTDB.reglesHistorique || [],
+        reglement:   d.reglement !== undefined ? d.reglement : MUTDB.reglement
       };
       try{ localStorage.setItem("ecc_mutdb", JSON.stringify(MUTDB)); }catch(e){}
       if(typeof renderMutSection==="function") renderMutSection();
@@ -21556,6 +21709,7 @@ function loadMutDB() {
       .then(function(doc){
         if(doc.exists){
           var d=doc.data();
+          gMutParDoc = !!d.docsActifs;
           // Reprendre le distant tel quel effaçait ce qui n'était pas encore
           // monté : une cotisation encaissée hors ligne disparaissait.
           MUTDB={
@@ -21564,9 +21718,32 @@ function loadMutDB() {
             soins:       _mutFusion(d.soins||[],       MUTDB.soins||[]),
             partenaire:  d.partenaire || MUTDB.partenaire || {}
           };
+          MUTDB.regles           = d.regles !== undefined ? d.regles : MUTDB.regles;
+          MUTDB.reglesHistorique = d.reglesHistorique || MUTDB.reglesHistorique || [];
+          MUTDB.reglement        = d.reglement !== undefined ? d.reglement : MUTDB.reglement;
           try{ localStorage.setItem("ecc_mutdb",JSON.stringify(MUTDB)); }catch(e){}
         }
-        renderMutSection();
+        if(!gMutParDoc){ renderMutSection(); return; }
+        // Bascule acquise : les collections font foi. Le document unique ne
+        // garde ses tableaux que comme archive.
+        chargerMutParDoc(function(res){
+          if(res){
+            var archive = { membres:(MUTDB.membres||[]).length, cotisations:(MUTDB.cotisations||[]).length, soins:(MUTDB.soins||[]).length };
+            ["membres","cotisations","soins"].forEach(function(k){
+              if(!res[k]) return;
+              // Une collection plus courte que l'archive signale une bascule
+              // incomplète ou une perte : on ne remplace pas à l'aveugle.
+              if(res[k].length < archive[k]){
+                showToast("Mutuelle : " + k + " \u2014 " + res[k].length + " document(s) contre "
+                  + archive[k] + " dans l'archive. Lecture de l'archive conserv\u00e9e, relancez la bascule.", "err");
+                return;
+              }
+              MUTDB[k] = res[k];
+            });
+            try{ localStorage.setItem("ecc_mutdb",JSON.stringify(MUTDB)); }catch(e){}
+          }
+          renderMutSection();
+        });
       }).catch(function(){ renderMutSection(); });
   } else {
     renderMutSection();
@@ -21579,12 +21756,42 @@ function loadMutDB() {
 // Le callback reçoit désormais l'erreur, et l'appelant décide quoi en dire.
 function saveMutDB(cb) {
   try { localStorage.setItem("ecc_mutdb", JSON.stringify(MUTDB)); } catch(e){}
-  if(IS_CONFIGURED && gDb){
-    gDb.collection("mutuelle_db").doc("main").set(MUTDB)
-      .then(function(){ if(cb) cb(null); })
-      .catch(function(e){ if(cb) cb(e); });
-  } else { if(cb) cb(null); }
+  if(!IS_CONFIGURED || !gDb){ if(cb) cb(null); return; }
+
+  // Réglages : toujours dans le document unique, ils n'ont pas de concurrence.
+  var charge = {
+    partenaire:       MUTDB.partenaire || {},
+    regles:           MUTDB.regles || null,
+    reglesHistorique: MUTDB.reglesHistorique || [],
+    reglement:        MUTDB.reglement || null,
+    updatedAt:        firebase.firestore.FieldValue.serverTimestamp(),
+    updatedBy:        gCurrentUser ? gCurrentUser.email : ""
+  };
+  // Une fois les entités passées en documents séparés, réécrire les tableaux
+  // ramènerait l'écrasement concurrent que la bascule vient de supprimer.
+  if (!gMutParDoc) {
+    charge.membres     = MUTDB.membres || [];
+    charge.cotisations = MUTDB.cotisations || [];
+    charge.soins       = MUTDB.soins || [];
+  }
+
+  var attentes = [gDb.collection("mutuelle_db").doc("main").set(charge, { merge: true })];
+  // En mode par document, l'entité touchée est écrite dans son propre
+  // document. gMutEcritures est posé par l'appelant juste avant d'appeler.
+  if (gMutParDoc && gMutEcritures.length) {
+    gMutEcritures.forEach(function(e){
+      attentes.push(e.suppr ? _supprimerMut(e.coll, e.id) : _ecrireMut(e.coll, e.obj));
+    });
+  }
+  gMutEcritures = [];
+  Promise.all(attentes).then(function(){ if(cb) cb(null); }).catch(function(e){ if(cb) cb(e); });
 }
+
+// File des entités à écrire lors du prochain saveMutDB. Déclarer ce qu'on
+// vient de toucher évite de réécrire les trois collections à chaque geste.
+var gMutEcritures = [];
+function _mutTouche(coll, obj)      { gMutEcritures.push({ coll: coll, obj: obj }); }
+function _mutToucheSuppr(coll, id)  { gMutEcritures.push({ coll: coll, id: id, suppr: true }); }
 
 // Message unique pour tout enregistrement mutuelle : dit la vérité sur le sort
 // de l'écriture, et ne laisse jamais croire à une synchronisation qui n'a pas eu lieu.
@@ -21716,6 +21923,7 @@ function openMutInscription(id) {
     } else {
       MUTDB.membres.unshift(entry);
     }
+    _mutTouche(MUT_MB_COLL, entry);
     saveMutDB(function(err){ closeModal(); renderMutMembres();
       _mutToast(err, (id?"Modifi\u00e9":"Inscrit")+" : "+entry.prenom+" "+entry.nom);
       logAudit("SAVE","Mutuelle","Inscription "+entry.prenom+" "+entry.nom); });
@@ -21795,6 +22003,7 @@ function openMutCotisation() {
     };
     if(!MUTDB.cotisations) MUTDB.cotisations=[];
     MUTDB.cotisations.unshift(entry);
+    _mutTouche(MUT_COT_COLL, entry);
     saveMutDB(function(err){ closeModal(); renderMutCotisations(); renderMutCaisse();
       _mutToast(err, "Cotisation enregistr\u00e9e !");
       logAudit("SAVE","Mutuelle","Cotisation "+entry.prenom+" "+entry.nom+" — "+fmt(entry.montantFC)+" FC"); });
@@ -21846,6 +22055,7 @@ function openMutSoin() {
     };
     if(!MUTDB.soins) MUTDB.soins=[];
     MUTDB.soins.unshift(entry);
+    _mutTouche(MUT_SOIN_COLL, entry);
     saveMutDB(function(err){ closeModal(); renderMutSoins();
       _mutToast(err, "Demande de soins soumise !");
       logAudit("CREATE","Mutuelle","Soin "+entry.prenom+" "+entry.nom+" — "+entry.typeActe); });
@@ -21934,6 +22144,7 @@ function _appliquerStatutSoin(soin, statut, revision, rembourse, derogations) {
     soin.reglesAppliquees = getMutRegles();
     soin.derogations = (derogations && derogations.length) ? derogations : null;
   }
+  _mutTouche(MUT_SOIN_COLL, soin);
   saveMutDB(function(err){
     renderMutSoins(); renderMutCaisse();
     _mutToast(err, statut === "approuve"
@@ -22055,8 +22266,8 @@ function injecterMutuelleVersFinances() {
       if(r.totalSoins > 0 && typeof addDep === "function"){
         addDep("dep-ot","Mutuelle - remboursements (" + r.soins.length + ")", "Mut", r.totalSoins, 0, "Porte depuis Mutuelle");
       }
-      r.cot.forEach(function(c){ c.injecteFinances = marque; });
-      r.soins.forEach(function(x){ x.injecteFinances = marque; });
+      r.cot.forEach(function(c){ c.injecteFinances = marque; _mutTouche(MUT_COT_COLL, c); });
+      r.soins.forEach(function(x){ x.injecteFinances = marque; _mutTouche(MUT_SOIN_COLL, x); });
       saveMutDB(function(err){
         renderMutCaisse();
         _mutToast(err, "Port\u00e9 dans le culte. V\u00e9rifiez puis enregistrez le culte.");
