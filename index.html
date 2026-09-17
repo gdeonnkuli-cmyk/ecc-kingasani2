@@ -22069,6 +22069,102 @@ function injecterMutuelleVersFinances() {
     });
 }
 
+function _blocReglementSigne(estAdmin) {
+  var d = (MUTDB && MUTDB.reglement) || null;
+  var ecarts = _ecartsReglementSigne();
+
+  if (!d) {
+    var h0 = "<div style='background:#fff8e1;border:1px solid #fbbf24;border-left:4px solid #f0a500;"
+           + "border-radius:8px;padding:11px 13px;margin-bottom:13px'>"
+           + "<div style='font-size:.78rem;font-weight:700;color:#8a5a00;margin-bottom:4px'>Aucun r\u00e8glement sign\u00e9 annex\u00e9</div>"
+           + "<div style='font-size:.72rem;color:#8a5a00;line-height:1.5'>Les r\u00e8gles ci-dessous s'appliquent, mais rien ne dit "
+           + "qu'elles ont \u00e9t\u00e9 vot\u00e9es. Annexez le texte adopt\u00e9 et sign\u00e9 par le Conseil : c'est lui qui fait foi, "
+           + "l'application ne fait que l'ex\u00e9cuter.</div>";
+    if (estAdmin) h0 += _formulaireDepotReglement();
+    return h0 + "</div>";
+  }
+
+  var vert = !ecarts || !ecarts.length;
+  var h = "<div style='background:" + (vert ? "#f0faf4" : "#fdf2f2") + ";border:1px solid " + (vert ? "#a7d7bd" : "#e8b4ad")
+        + ";border-left:4px solid " + (vert ? "#1e7d52" : "#c0392b") + ";border-radius:8px;padding:11px 13px;margin-bottom:13px'>";
+  h += "<div style='font-size:.78rem;font-weight:700;color:" + (vert ? "#14532d" : "#7f1d1d") + ";margin-bottom:4px'>"
+     + (vert ? "R\u00e8glement sign\u00e9 annex\u00e9 \u2014 conforme" : "\u26a0\ufe0f Les r\u00e8gles ne correspondent plus au texte sign\u00e9") + "</div>";
+  h += "<div style='font-size:.73rem;color:" + (vert ? "#14532d" : "#7f1d1d") + ";line-height:1.55'>"
+     + "Adopt\u00e9 par le Conseil le <strong>" + escH(d.dateAdoption || "?") + "</strong>"
+     + (d.reference ? " \u00b7 r\u00e9f. " + escH(d.reference) : "")
+     + (d.nomFichier ? " \u00b7 " + escH(d.nomFichier) : "")
+     + (d.deposePar ? "<br>Annex\u00e9 par " + escH(d.deposePar) + " le " + escH(d.deposeLe || "?") : "")
+     + "</div>";
+  if (d.url) {
+    h += "<div style='margin-top:7px'><a href='" + escH(d.url) + "' target='_blank' rel='noopener' "
+       + "style='font-size:.74rem;color:var(--blue);font-weight:600'>\ud83d\udcc4 Ouvrir le document sign\u00e9</a></div>";
+  }
+
+  if (!vert) {
+    h += "<div style='font-size:.72rem;color:#7f1d1d;margin-top:8px;line-height:1.5'>"
+       + "Ces \u00e9carts signifient que l'application applique aujourd'hui autre chose que ce qui a \u00e9t\u00e9 sign\u00e9. "
+       + "Soit vous r\u00e9tablissez les valeurs du texte, soit le Conseil vote et signe un nouveau r\u00e8glement \u00e0 annexer.</div>";
+    h += "<table class='cotis-table' style='margin-top:7px;font-size:.72rem'><thead><tr>"
+       + "<th>Param\u00e8tre</th><th>Texte sign\u00e9</th><th>Appliqu\u00e9</th></tr></thead><tbody>";
+    ecarts.forEach(function(e){
+      h += "<tr><td>" + escH(e.libelle) + "</td><td>" + escH(String(e.signe)) + "</td>"
+         + "<td style='font-weight:700;color:#c0392b'>" + escH(String(e.actuel)) + "</td></tr>";
+    });
+    h += "</tbody></table>";
+  }
+
+  if (estAdmin) {
+    h += "<div style='margin-top:9px'>"
+       + "<button class='btn btn-sm btn-o' onclick='_ouvrirDepotReglement()'>Remplacer</button> "
+       + "<button class='btn btn-sm btn-d' onclick='retirerReglementSigne()'>Retirer</button></div>"
+       + "<div id='mut-doc-form' style='display:none'>" + _formulaireDepotReglement() + "</div>";
+  }
+  return h + "</div>";
+}
+
+function _formulaireDepotReglement() {
+  var d = (MUTDB && MUTDB.reglement) || {};
+  return "<div style='margin-top:9px;padding-top:9px;border-top:1px solid rgba(0,0,0,.08)'>"
+    + "<div class='form-grid'>"
+    + "<div class='fg'><label>Date d'adoption par le Conseil *</label><input type='date' id='mut-doc-date' value='" + escH(d.dateAdoption||"") + "'></div>"
+    + "<div class='fg'><label>R\u00e9f\u00e9rence / n\u00b0 de d\u00e9lib\u00e9ration</label><input type='text' id='mut-doc-ref' value='" + escH(d.reference||"") + "' placeholder='Ex : CP-2026-14'></div>"
+    + "</div>"
+    + "<div class='fg'><label>Document sign\u00e9 (PDF ou photo, 8 Mo max)</label>"
+    + "<input type='file' id='mut-doc-fichier' accept='application/pdf,image/*'></div>"
+    + "<div style='font-size:.68rem;color:var(--muted);margin:4px 0 8px;line-height:1.45'>"
+    + "Les valeurs actuellement \u00e0 l'\u00e9cran sont fig\u00e9es avec le document : c'est \u00e0 elles que la concordance sera compar\u00e9e ensuite. "
+    + "V\u00e9rifiez-les avant d'annexer.</div>"
+    + "<button class='btn btn-g btn-sm' onclick='deposerReglementSigne()'>Annexer le r\u00e8glement sign\u00e9</button></div>";
+}
+
+function _ouvrirDepotReglement() {
+  var z = document.getElementById("mut-doc-form");
+  if (z) z.style.display = (z.style.display === "none") ? "" : "none";
+}
+
+function _blocHistoriqueRegles() {
+  var hist = (MUTDB && MUTDB.reglesHistorique) || [];
+  if (!hist.length) return "";
+  var h = "<div class='sec-lbl' style='margin-top:16px'>Versions pr\u00e9c\u00e9dentes</div>";
+  h += "<div style='font-size:.7rem;color:var(--muted);margin-bottom:6px'>"
+     + "Ce qui s'appliquait avant. Un dossier se juge sur les r\u00e8gles en vigueur au jour du soin.</div>";
+  h += "<table class='cotis-table' style='font-size:.71rem'><thead><tr>"
+     + "<th>En vigueur</th><th>Fonds</th><th>Carence</th><th>Taux</th><th>Pl. acte</th><th>Pl. annuel</th><th>R\u00e9serve</th>"
+     + "</tr></thead><tbody>";
+  hist.slice(0, 12).forEach(function(v){
+    h += "<tr><td>" + escH(v.depuis || "?") + " \u2192 " + escH(v.jusqu || "?") + "</td>"
+       + "<td>" + (v.fonds === "commune" ? "commun" : "distinct") + "</td>"
+       + "<td>" + v.carenceMois + " m</td>"
+       + "<td>" + v.tauxPriseEnCharge + "\u00a0%</td>"
+       + "<td>" + fmt(v.plafondActe) + "</td>"
+       + "<td>" + fmt(v.plafondAnnuel) + "</td>"
+       + "<td>" + v.reserveMin + "\u00a0%</td></tr>";
+  });
+  h += "</tbody></table>";
+  if (hist.length > 12) h += "<div style='font-size:.68rem;color:var(--muted);margin-top:4px'>\u2026 et " + (hist.length - 12) + " version(s) plus ancienne(s).</div>";
+  return h;
+}
+
 // ══ ÉCRAN DES RÈGLES ═══════════════════════════════════════════════════════
 function renderMutRegles() {
   var cont = document.getElementById("mut-regles-body");
@@ -22077,7 +22173,8 @@ function renderMutRegles() {
   var estAdmin = !!(gCurrentUser && gCurrentUser.role === "admin");
   var perso = !!(MUTDB && MUTDB.regles);
 
-  var h = "<div style='font-size:.75rem;color:var(--muted);line-height:1.55;margin-bottom:12px'>"
+  var h = _blocReglementSigne(estAdmin);
+  h += "<div style='font-size:.75rem;color:var(--muted);line-height:1.55;margin-bottom:12px'>"
         + "Ces param\u00e8tres sont la traduction du r\u00e8glement int\u00e9rieur. Ils ne d\u00e9cident rien \u00e0 la place du comit\u00e9 : "
         + "ils rendent chaque dossier comparable au suivant, et expliquent \u00e0 l'adh\u00e9rent pourquoi la d\u00e9cision est ce qu'elle est. "
         + (perso ? "<strong>R\u00e8gles arr\u00eat\u00e9es le " + escH(R.depuis || "?") + ".</strong>"
@@ -22144,7 +22241,92 @@ function renderMutRegles() {
   h += "<div style='font-size:.7rem;color:var(--muted);margin-top:12px;line-height:1.5;border-top:1px solid var(--border);padding-top:9px'>"
      + "Une demande d\u00e9j\u00e0 approuv\u00e9e conserve les r\u00e8gles qui lui ont \u00e9t\u00e9 appliqu\u00e9es : changer le bar\u00e8me aujourd'hui "
      + "ne r\u00e9\u00e9crit pas les dossiers d'hier.</div>";
+  h += _blocHistoriqueRegles();
   cont.innerHTML = h;
+}
+
+// ══ LE RÈGLEMENT SIGNÉ ═════════════════════════════════════════════════════
+// Les paramètres de l'application sont la traduction d'un texte adopté et
+// signé. Tant que les deux concordent, l'application ne fait qu'exécuter une
+// décision. Dès qu'ils divergent — un chiffre modifié ici sans nouveau vote —
+// elle applique un règlement que personne n'a signé. Il faut donc pouvoir
+// annexer le document et voir, d'un coup d'œil, si les deux disent la même
+// chose.
+var MUT_PARAMS = ["fonds","carenceMois","toleranceRetardMois","tauxPriseEnCharge",
+                  "plafondActe","plafondAnnuel","reserveMin","couvreCharges"];
+
+var MUT_PARAM_LBL = { fonds:"Nature de la caisse", carenceMois:"D\u00e9lai de carence",
+  toleranceRetardMois:"Retard tol\u00e9r\u00e9", tauxPriseEnCharge:"Taux de prise en charge",
+  plafondActe:"Plafond par acte", plafondAnnuel:"Plafond annuel", reserveMin:"R\u00e9serve",
+  couvreCharges:"Personnes en charge" };
+
+// Écarts entre les règles en vigueur et celles que portait le texte signé.
+function _ecartsReglementSigne() {
+  var doc = (MUTDB && MUTDB.reglement) || null;
+  if (!doc || !doc.regles) return null;
+  var R = getMutRegles(), out = [];
+  MUT_PARAMS.forEach(function(k){
+    if (String(doc.regles[k]) !== String(R[k])) {
+      out.push({ cle: k, libelle: MUT_PARAM_LBL[k] || k, signe: doc.regles[k], actuel: R[k] });
+    }
+  });
+  return out;
+}
+
+function deposerReglementSigne() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.","err"); return; }
+  var f = document.getElementById("mut-doc-fichier");
+  var file = f && f.files && f.files[0];
+  var dateAd = ((document.getElementById("mut-doc-date")||{}).value) || "";
+  var ref = ((document.getElementById("mut-doc-ref")||{}).value || "").trim();
+  if (!dateAd) { showToast("Indiquez la date d'adoption par le Conseil.","err"); return; }
+
+  function poser(url, chemin, nom) {
+    // Les règles en vigueur au moment du dépôt sont figées avec le document :
+    // c'est à elles que la concordance sera comparée plus tard.
+    var R = getMutRegles(), fige = {};
+    MUT_PARAMS.forEach(function(k){ fige[k] = R[k]; });
+    MUTDB.reglement = {
+      dateAdoption: dateAd, reference: ref,
+      url: url || "", chemin: chemin || "", nomFichier: nom || "",
+      regles: fige,
+      deposePar: (gCurrentUser && gCurrentUser.nom) || "", deposeLe: getTodayStr()
+    };
+    saveMutDB(function(err){
+      renderMutRegles();
+      _mutToast(err, "R\u00e8glement sign\u00e9 annex\u00e9.");
+      logAudit("CONFIG","Mutuelle","R\u00e8glement sign\u00e9 annex\u00e9 \u2014 adopt\u00e9 le " + dateAd
+        + (ref ? ", r\u00e9f. " + ref : "") + (nom ? ", fichier " + nom : ", sans fichier"));
+    });
+  }
+
+  if (!file) { poser("", "", ""); return; }
+  if (file.size > 8 * 1024 * 1024) { showToast("Fichier trop lourd (max 8 Mo).","err"); return; }
+  if (!gStorage) { showToast("Stockage indisponible : la r\u00e9f\u00e9rence est enregistr\u00e9e sans le fichier.","warn"); poser("", "", file.name); return; }
+  showToast("Envoi du document\u2026","");
+  var chemin = "mutuelle/reglement/" + Date.now() + "_" + file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  gStorage.ref().child(chemin).put(file)
+    .then(function(snap){ return snap.ref.getDownloadURL(); })
+    .then(function(url){ poser(url, chemin, file.name); })
+    .catch(function(e){
+      showToast("\u26a0\ufe0f Document non envoy\u00e9 (" + e.message + "). La r\u00e9f\u00e9rence est tout de m\u00eame enregistr\u00e9e.","warn");
+      poser("", "", file.name);
+    });
+}
+
+function retirerReglementSigne() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.","err"); return; }
+  var d = (MUTDB && MUTDB.reglement) || null;
+  if (!d) { showToast("Aucun r\u00e8glement annex\u00e9.","err"); return; }
+  showModal("Retirer le r\u00e8glement annex\u00e9 ?",
+    "Adopt\u00e9 le " + (d.dateAdoption||"?") + (d.reference ? ", r\u00e9f. " + d.reference : "") + ".\n\n"
+    + "Le fichier d\u00e9pos\u00e9 n'est pas supprim\u00e9 du stockage ; seul le rattachement dispara\u00eet.",
+    function(){
+      closeModal();
+      MUTDB.reglement = null;
+      saveMutDB(function(err){ renderMutRegles(); _mutToast(err, "Rattachement retir\u00e9.");
+        logAudit("CONFIG","Mutuelle","R\u00e8glement sign\u00e9 d\u00e9tach\u00e9"); });
+    });
 }
 
 function enregistrerMutRegles() {
@@ -22165,6 +22347,18 @@ function enregistrerMutRegles() {
     couvreCharges: (document.getElementById("mut-r-charges")||{}).value === "1",
     depuis: getTodayStr()
   };
+  // La version précédente rejoint l'historique. Un règlement se modifie ; ce
+  // qu'il ne doit pas faire, c'est oublier ce qu'il disait. Sans cette trace,
+  // impossible de répondre à « quelle règle s'appliquait en mars ? ».
+  if(MUTDB.regles){
+    MUTDB.reglesHistorique = MUTDB.reglesHistorique || [];
+    var prec = {};
+    for (var k in MUTDB.regles) prec[k] = MUTDB.regles[k];
+    prec.jusqu = getTodayStr();
+    prec.remplacePar = (gCurrentUser && gCurrentUser.nom) || "";
+    MUTDB.reglesHistorique.unshift(prec);
+    if(MUTDB.reglesHistorique.length > 30) MUTDB.reglesHistorique = MUTDB.reglesHistorique.slice(0, 30);
+  }
   MUTDB.regles = R;
   saveMutDB(function(err){
     renderMutRegles(); renderMutCaisse();
