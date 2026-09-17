@@ -15748,19 +15748,48 @@ function showTabAnn(name) {
   if(name==="annonces") renderAnnonces();
 }
 
+// Le formulaire propose trois destinataires — tous, équipe finances,
+// administrateurs — et l'annonce affichait fidèlement « Destinataires :
+// Administrateurs »… à tout le monde. Le champ promettait une restriction
+// qu'aucune ligne n'appliquait : une annonce réservée au bureau pastoral
+// était lisible par le premier compte de saisie venu.
+function _annPourMoi(a) {
+  var d = (a && a.destinataires) || "tous";
+  if (d === "tous") return true;
+  var role = (gCurrentUser && gCurrentUser.role) || "";
+  if (role === "admin") return true;                       // l'administrateur voit tout
+  if (d === "finances") return role === "finances";
+  if (d === "admins")   return false;
+  return true;
+}
+
 function renderAnnonces() {
   loadANNDB();
   var cont = document.getElementById("ann-liste-cont");
   if(!cont) return;
   var today = getTodayStr();
   var actives = ANNDB.annonces.filter(function(a){
-    return !a.expiration || a.expiration >= today;
+    if(a.expiration && a.expiration < today) return false;
+    return _annPourMoi(a);
   });
+  var today2 = getTodayStr();
+  var expirees = ANNDB.annonces.filter(function(a){ return a.expiration && a.expiration < today2; }).length;
+  var estAdmin = !!(gCurrentUser && gCurrentUser.role === "admin");
+
+  var entete = "";
+  if(estAdmin && expirees){
+    entete += "<div style='display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;"
+            + "background:#f7fafd;border:1px solid #c5d8ed;border-radius:8px;padding:8px 11px;margin-bottom:11px'>"
+            + "<span style='font-size:.73rem;color:#6b88a4'>" + expirees + " annonce(s) expir\u00e9e(s) encore en base. "
+            + "Au-del\u00e0 de 50 annonces, les plus anciennes sortent de la fen\u00eatre relue au d\u00e9marrage.</span>"
+            + "<button class='btn btn-sm btn-o' onclick='purgerAnnoncesExpirees()'>Retirer les expir\u00e9es</button></div>";
+  }
+
   if(!actives.length){
-    cont.innerHTML = "<div style='text-align:center;padding:32px;color:#6b88a4;font-size:.85rem'>Aucune annonce publiée</div>";
+    cont.innerHTML = entete + "<div style='text-align:center;padding:32px;color:#6b88a4;font-size:.85rem'>Aucune annonce publiée</div>";
     return;
   }
-  var html = "";
+  var html = entete;
   for(var i=0;i<actives.length;i++){
     var a = actives[i];
     var isNew = a.timestamp > gAnnLastRead;
@@ -15783,6 +15812,7 @@ function renderAnnonces() {
     html += "<div style='font-size:.69rem;color:#6b88a4'>";
     if(a.expiration) html += "⏱ Expire le "+a.expiration+" • ";
     html += "Destinataires : "+escH(a.destinataires==="tous"?"Tous":a.destinataires==="finances"?"Équipe Finances":"Administrateurs");
+    if(a.destinataires && a.destinataires!=="tous") html += " · <strong>visible par eux seuls</strong>";
     html += "</div>";
     // Admin actions
     if(gCurrentUser && gCurrentUser.role==="admin"){
@@ -15846,16 +15876,59 @@ function publierAnnonce() {
   showTabAnn("annonces");
 }
 
+// Le bouton n'était affiché qu'aux administrateurs, mais la fonction, elle,
+// ne vérifiait rien : un appel depuis la console suffisait, et les règles
+// Firestore laissent écrire annonces à tout compte connecté. Une annonce
+// supprimée ne laissait par ailleurs aucune trace — sur un canal qui
+// s'adresse à toute l'assemblée, c'est peu.
 function supprimerAnnonce(id) {
-  if(!confirm("Supprimer cette annonce ?")) return;
+  if(!gCurrentUser || gCurrentUser.role !== "admin"){ showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.","err"); return; }
   loadANNDB();
-  ANNDB.annonces = ANNDB.annonces.filter(function(a){ return a.id !== id; });
-  saveANNDB();
-  if(IS_CONFIGURED && gDb){
-    gDb.collection("annonces").doc(id).delete().catch(function(e){ console.warn("Ann delete:", e); });
-  }
-  renderAnnonces();
-  showToast("Annonce supprimée.","");
+  var cible = null;
+  (ANNDB.annonces||[]).forEach(function(a){ if(a.id === id) cible = a; });
+  if(!cible){ showToast("Annonce introuvable.","err"); return; }
+  showModal("Supprimer cette annonce ?",
+    "\u00ab\u00a0" + (cible.titre||"") + "\u00a0\u00bb, publi\u00e9e par " + (cible.auteur||"?") + " le " + (cible.date||"?")
+    + ".\n\nElle dispara\u00eetra pour tout le monde. La suppression est d\u00e9finitive.",
+    function(){
+      closeModal();
+      ANNDB.annonces = ANNDB.annonces.filter(function(a){ return a.id !== id; });
+      saveANNDB();
+      if(IS_CONFIGURED && gDb){
+        gDb.collection("annonces").doc(id).delete().catch(function(e){ console.warn("Ann delete:", e); });
+      }
+      if(typeof logAudit === "function") logAudit("SUPPRESSION","Annonces","\u00ab "+(cible.titre||"")+" \u00bb de "+(cible.auteur||"?")+" du "+(cible.date||"?"));
+      renderAnnonces();
+      showToast("Annonce supprim\u00e9e.","ok");
+    });
+}
+
+// Les annonces expirées restent en base et pèsent sur la limite de 50
+// documents relus au démarrage : passé ce seuil, une annonce encore active
+// peut se retrouver hors de la fenêtre et devenir invisible. Ce nettoyage est
+// volontaire, jamais automatique — une annonce est une trace.
+function purgerAnnoncesExpirees() {
+  if(!gCurrentUser || gCurrentUser.role !== "admin"){ showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.","err"); return; }
+  loadANNDB();
+  var today = getTodayStr();
+  var expirees = (ANNDB.annonces||[]).filter(function(a){ return a.expiration && a.expiration < today; });
+  if(!expirees.length){ showToast("Aucune annonce expir\u00e9e.","ok"); return; }
+  showModal("Retirer " + expirees.length + " annonce(s) expir\u00e9e(s) ?",
+    expirees.slice(0,8).map(function(a){ return "\u2022 " + (a.titre||"") + " (expir\u00e9e le " + a.expiration + ")"; }).join("\n")
+    + (expirees.length > 8 ? "\n\u2026 et " + (expirees.length - 8) + " autre(s)" : "")
+    + "\n\nElles sont d\u00e9j\u00e0 invisibles dans la liste. Les retirer lib\u00e8re la place pour les annonces \u00e0 venir.",
+    function(){
+      closeModal();
+      var ids = expirees.map(function(a){ return a.id; });
+      ANNDB.annonces = (ANNDB.annonces||[]).filter(function(a){ return ids.indexOf(a.id) < 0; });
+      saveANNDB();
+      if(IS_CONFIGURED && gDb){
+        ids.forEach(function(i){ gDb.collection("annonces").doc(i).delete().catch(function(){}); });
+      }
+      if(typeof logAudit === "function") logAudit("PURGE","Annonces",expirees.length+" annonce(s) expir\u00e9e(s) retir\u00e9e(s)");
+      renderAnnonces();
+      showToast(expirees.length + " annonce(s) expir\u00e9e(s) retir\u00e9e(s).","ok");
+    });
 }
 
 function resetAnnonceForm() {
@@ -15887,9 +15960,18 @@ function initAnnonces() {
   if(IS_CONFIGURED && gDb){
     gDb.collection("annonces").orderBy("timestamp","desc").limit(50)
       .get().then(function(snap){
-        ANNDB.annonces = [];
-        snap.forEach(function(doc){ ANNDB.annonces.push(doc.data()); });
+        // ANNDB.annonces = [] effaçait l'appareil avant de le remplir : une
+        // annonce publiée hors ligne, pas encore montée en base, disparaissait
+        // à la connexion suivante. On fusionne, et on remonte ce qui manque.
+        var distant = [], vus = {};
+        snap.forEach(function(doc){ var d = doc.data(); distant.push(d); vus[d.id] = true; });
+        var locauxSeuls = (ANNDB.annonces || []).filter(function(a){ return a && a.id && !vus[a.id]; });
+        ANNDB.annonces = distant.concat(locauxSeuls).sort(function(a,b){ return (b.timestamp||0) - (a.timestamp||0); });
         saveANNDB();
+        locauxSeuls.forEach(function(a){
+          gDb.collection("annonces").doc(a.id).set(a).catch(function(){});
+        });
+        if(locauxSeuls.length) showToast(locauxSeuls.length + " annonce(s) locale(s) remont\u00e9e(s) en base.", "ok");
         renderAnnonces();
         updateAnnDot();
       }).catch(function(e){ console.warn("Ann load:", e); renderAnnonces(); });
@@ -17851,6 +17933,30 @@ function getPrintCSS() {
 var EFFDB = loadEffDB();
 var gUnsubEff = null;
 
+// Fusion par clé, la plus récente l'emportant. Elle ne servait qu'aux
+// programmes : seances et visiteurs étaient repris bruts du distant, si bien
+// qu'une séance saisie hors ligne, ou pendant qu'un autre poste enregistrait,
+// disparaissait au chargement suivant. C'est pourtant la séance qui porte la
+// donnée — le programme n'en est que l'annonce.
+function _fusionnerParCle(listeA, listeB, cle) {
+  var map = {}, k;
+  function poser(x){
+    if(!x) return;
+    k = String(x[cle] || x.id || "");
+    if(!k) return;
+    if(!map[k]) { map[k] = x; return; }
+    var tsA = map[k].savedAt ? new Date(map[k].savedAt).getTime() : 0;
+    var tsB = x.savedAt ? new Date(x.savedAt).getTime() : 0;
+    // À défaut d'horodatage des deux côtés, on garde l'existant plutôt que
+    // d'écraser au hasard : perdre une saisie coûte plus que garder l'ancienne.
+    if(tsB > tsA) map[k] = x;
+  }
+  (listeA||[]).forEach(poser);
+  (listeB||[]).forEach(poser);
+  return Object.keys(map).map(function(x){ return map[x]; })
+    .sort(function(a,b){ return String(b.date||"").localeCompare(String(a.date||"")); });
+}
+
 // Fusion intelligente par date — on garde TOUS les programmes de chaque source
 function fusionnerProgrammes(progA, progB) {
   var map = {};
@@ -17898,14 +18004,14 @@ function loadEffDBFromFirebase(callback) {
       if(doc.exists){
         var d = doc.data();
         var programmes = fusionnerProgrammes(d.programmes||[], EFFDB.programmes||[]);
-        EFFDB = {
-          seances:    d.seances||[],
-          visiteurs:  d.visiteurs||[],
-          programmes: programmes
-        };
+        var seances    = _fusionnerParCle(d.seances||[],   EFFDB.seances||[],   "date");
+        var visiteurs  = _fusionnerParCle(d.visiteurs||[], EFFDB.visiteurs||[], "id");
+        EFFDB = { seances: seances, visiteurs: visiteurs, programmes: programmes };
         try{ localStorage.setItem("ecc_effectif_db", JSON.stringify(EFFDB)); }catch(e){}
-        // Si des programmes locaux manquent dans Firebase → remonter
-        if(programmes.length > (d.programmes||[]).length){
+        // Si des enregistrements locaux manquent dans Firebase → remonter
+        if(programmes.length > (d.programmes||[]).length
+           || seances.length   > (d.seances||[]).length
+           || visiteurs.length > (d.visiteurs||[]).length){
           saveEffDB(EFFDB);
         }
       }
@@ -17923,8 +18029,8 @@ function subscribeEff() {
       var cur = JSON.stringify({s:EFFDB.seances||[],v:EFFDB.visiteurs||[]});
       var programmes = fusionnerProgrammes(d.programmes||[], EFFDB.programmes||[]);
       EFFDB = {
-        seances:    d.seances||[],
-        visiteurs:  d.visiteurs||[],
+        seances:    _fusionnerParCle(d.seances||[],   EFFDB.seances||[],   "date"),
+        visiteurs:  _fusionnerParCle(d.visiteurs||[], EFFDB.visiteurs||[], "id"),
         programmes: programmes
       };
       try{ localStorage.setItem("ecc_effectif_db", JSON.stringify(EFFDB)); }catch(e){}
@@ -17974,7 +18080,8 @@ function saveEffectif() {
   if(!cf&&!cl){ showToast("Entrez au moins un effectif.","err"); return; }
   var idx=-1;
   for(var i=0;i<EFFDB.seances.length;i++){ if(EFFDB.seances[i].date===date){idx=i;break;} }
-  var s={id:"eff"+Date.now(),date:date,cf:cf,cl:cl,total:cf+cl,obs:obs,par:gCurrentUser?gCurrentUser.nom:""};
+  var s={id:"eff"+Date.now(),date:date,cf:cf,cl:cl,total:cf+cl,obs:obs,
+         par:gCurrentUser?gCurrentUser.nom:"", savedAt:new Date().toISOString()};
   if(idx>=0){EFFDB.seances[idx]=s;}else{EFFDB.seances.unshift(s);}
   saveEffDB(EFFDB);
   document.getElementById("effmod-cf").value=""; document.getElementById("effmod-cl").value="";
@@ -17986,7 +18093,12 @@ function injectEffToFinances() {
   var cf=parseInt(document.getElementById("effmod-cf").value)||0;
   var cl=parseInt(document.getElementById("effmod-cl").value)||0;
   if(!cf&&!cl){
-    if(EFFDB.seances.length>0){ cf=EFFDB.seances[0].cf||0; cl=EFFDB.seances[0].cl||0; showToast("Injection dernière séance ("+EFFDB.seances[0].date+")","ok"); }
+    // seances[0] est la dernière AJOUTÉE, pas la plus récente : corriger une
+    // séance ancienne la laisse à sa place et l'injection reprenait alors une
+    // date au hasard.
+    var recente=null;
+    (EFFDB.seances||[]).forEach(function(x){ if(!recente || String(x.date)>String(recente.date)) recente=x; });
+    if(recente){ cf=recente.cf||0; cl=recente.cl||0; showToast("Injection dernière séance ("+recente.date+")","ok"); }
     else{ showToast("Aucun effectif à injecter.","err"); return; }
   }
   switchModule("finances");
@@ -21798,6 +21910,90 @@ function renderHistoriqueCultes() {
   cont.innerHTML = html;
 }
 
+// ══ CONCORDANCE AVEC LES FINANCES ══════════════════════════════════════════
+// Le même effectif est saisi deux fois : dans ce module, séance par séance, et
+// dans le formulaire du culte, qui le porte en meta.effCF / meta.effCL et le
+// fait figurer sur la fiche de recettes. Rien ne les rapprochait jamais. Deux
+// registres d'un même fait qui ne se parlent pas finissent par diverger, et
+// c'est celui qui sort sur la pièce comptable qui fait autorité sans qu'on
+// l'ait décidé.
+//
+// Ce contrôle ne corrige rien : il expose les dates où les deux ne disent pas
+// la même chose, et celles que l'un connaît et l'autre ignore.
+function _concordanceEffectif() {
+  var parDate = {};
+  (EFFDB.seances || []).forEach(function(x) {
+    if (!x || !x.date) return;
+    parDate[x.date] = parDate[x.date] || {};
+    parDate[x.date].mod = { cf: parseInt(x.cf, 10) || 0, cl: parseInt(x.cl, 10) || 0 };
+  });
+  (gHistCache || []).forEach(function(h) {
+    var m = (h && h.meta) || {}, d = m.date;
+    if (!d) return;
+    parDate[d] = parDate[d] || {};
+    parDate[d].fin = { cf: parseInt(m.effCF, 10) || 0, cl: parseInt(m.effCL, 10) || 0, piece: m.piece || "" };
+  });
+
+  var ecarts = [], seulModule = [], seulFinances = [], concordent = 0;
+  Object.keys(parDate).sort().reverse().forEach(function(d) {
+    var e = parDate[d];
+    if (e.mod && e.fin) {
+      if (e.mod.cf !== e.fin.cf || e.mod.cl !== e.fin.cl) ecarts.push({ date: d, mod: e.mod, fin: e.fin });
+      else concordent++;
+    } else if (e.mod) seulModule.push(d);
+    else seulFinances.push({ date: d, fin: e.fin });
+  });
+  return { ecarts: ecarts, seulModule: seulModule, seulFinances: seulFinances, concordent: concordent };
+}
+
+function _blocConcordanceEffectif() {
+  var c = _concordanceEffectif();
+  var total = c.ecarts.length + c.seulModule.length + c.seulFinances.length + c.concordent;
+  if (!total) return "";
+
+  var h = "<div style='margin-bottom:16px'>";
+  h += "<div style='font-size:.74rem;font-weight:700;color:var(--blue);margin-bottom:6px'>Concordance avec les finances</div>";
+
+  if (!c.ecarts.length && !c.seulModule.length && !c.seulFinances.length) {
+    return h + "<div class='ctrl-piece ok'><div class='cp-tete'><strong>Les deux registres disent la m\u00eame chose</strong></div>"
+         + "<div class='cp-l'>" + c.concordent + " date(s) v\u00e9rifi\u00e9e(s), aucun \u00e9cart.</div></div></div>";
+  }
+
+  if (c.ecarts.length) {
+    h += "<div class='ctrl-piece ko'><div class='cp-tete'><strong>" + c.ecarts.length + " date(s) o\u00f9 les chiffres diff\u00e8rent</strong></div>"
+       + "<div class='cp-l cp-e'>C'est le chiffre du culte qui figure sur la fiche de recettes. "
+       + "Corrigez celui qui est faux, dans le module concern\u00e9.</div>";
+    c.ecarts.slice(0, 12).forEach(function(x) {
+      h += "<div class='cp-l' style='font-size:.72rem'>\u2022 <strong>" + escH(x.date) + "</strong> \u2014 module CF "
+         + x.mod.cf + " / CL " + x.mod.cl + "  \u00b7  culte CF " + x.fin.cf + " / CL " + x.fin.cl
+         + (x.fin.piece ? " (" + escH(x.fin.piece) + ")" : "") + "</div>";
+    });
+    if (c.ecarts.length > 12) h += "<div class='cp-l' style='font-size:.72rem'>\u2026 et " + (c.ecarts.length - 12) + " autre(s)</div>";
+    h += "</div>";
+  }
+
+  if (c.seulFinances.length) {
+    h += "<div class='ctrl-piece ko'><div class='cp-tete'><strong>" + c.seulFinances.length
+       + " culte(s) dont l'effectif n'est pas dans ce module</strong></div>"
+       + "<div class='cp-l cp-w'>L'effectif a \u00e9t\u00e9 saisi directement dans le formulaire du culte. "
+       + "Le tableau de bord ci-dessous ne le compte pas.</div>"
+       + "<div class='cp-l' style='font-size:.72rem'>"
+       + c.seulFinances.slice(0, 15).map(function(x){ return escH(x.date); }).join(" \u00b7 ")
+       + (c.seulFinances.length > 15 ? " \u2026" : "") + "</div></div>";
+  }
+
+  if (c.seulModule.length) {
+    h += "<div class='ctrl-piece ko'><div class='cp-tete'><strong>" + c.seulModule.length
+       + " s\u00e9ance(s) sans culte correspondant</strong></div>"
+       + "<div class='cp-l cp-w'>Aucun culte enregistr\u00e9 \u00e0 ces dates dans l'historique charg\u00e9 \u2014 "
+       + "culte non encore saisi, ou date erron\u00e9e.</div>"
+       + "<div class='cp-l' style='font-size:.72rem'>"
+       + c.seulModule.slice(0, 15).map(function(x){ return escH(x); }).join(" \u00b7 ")
+       + (c.seulModule.length > 15 ? " \u2026" : "") + "</div></div>";
+  }
+  return h + "</div>";
+}
+
 // Dashboard Culte
 function renderDashboardCulte() {
   var cont = document.getElementById("eff-dashboard-body");
@@ -21815,7 +22011,8 @@ function renderDashboardCulte() {
   var moCF=0,moCL=0;
   ceM.forEach(function(c){ moCF+=c.cf||0; moCL+=c.cl||0; });
 
-  var html = "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:16px'>";
+  var html = _blocConcordanceEffectif();
+  html += "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:16px'>";
   html += mkMutKpi("📋","Total cultes",cultes.length,"#1a3a5c");
   html += mkMutKpi("👥","Moy. CF/culte",cultes.length?Math.round(totCF/cultes.length):0,"#2563a8");
   html += mkMutKpi("👥","Moy. CL/culte",cultes.length?Math.round(totCL/cultes.length):0,"#7c3aed");
