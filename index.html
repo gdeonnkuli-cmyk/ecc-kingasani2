@@ -2691,6 +2691,14 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
     <button id="mut-nav-soins" class="btn btn-o btn-sm" onclick="showMutSection('soins')">🏥 Soins</button>
     <button id="mut-nav-caisse" class="btn btn-o btn-sm" onclick="showMutSection('caisse')">💰 Caisse</button>
     <button id="mut-nav-partenaire" class="btn btn-o btn-sm" onclick="showMutSection('partenaire')">🤝 Partenaire</button>
+    <button id="mut-nav-regles" class="btn btn-o btn-sm" onclick="showMutSection('regles')">📜 Règles</button>
+  </div>
+
+  <!-- SECTION RÈGLES MUTUELLE -->
+  <div id="mut-sect-regles" style="display:none">
+    <div class="card"><div class="card-hdr"><h2>📜 Règles de la Mutuelle</h2></div>
+      <div class="card-body" id="mut-regles-body"></div>
+    </div>
   </div>
 
   <!-- SECTION MEMBRES MUTUELLE -->
@@ -21349,7 +21357,122 @@ function modalSMSAnnonce(annonce) {
 // == MUTUELLE SANTE — ECC KINGASANI 2 ==
 // ================================================
 
-var MUTDB = { membres:[], cotisations:[], soins:[], partenaire:{} };
+var MUTDB = { membres:[], cotisations:[], soins:[], partenaire:{}, regles:null };
+
+// ══ RÈGLES DE LA MUTUELLE ══════════════════════════════════════════════════
+// Une mutuelle sans règles écrites finit toujours par un litige : le premier
+// refus paraît arbitraire, le premier accord fait jurisprudence. Ces
+// paramètres sont la traduction du règlement intérieur ; ils ne décident rien
+// à la place du comité, ils rendent la décision comparable d'un dossier à
+// l'autre et expliquent pourquoi elle est ce qu'elle est.
+//
+// Les valeurs ci-dessous sont une PROPOSITION de départ. Le comité les arrête,
+// et toute modification est datée : une demande est jugée sur les règles en
+// vigueur au jour du soin, non sur celles d'aujourd'hui.
+var MUT_REGLES_DEFAUT = {
+  fonds: "distinct",          // "distinct" : caisse propre · "commune" : caisse de l'église
+  carenceMois: 3,             // mois entre l'inscription et le premier droit
+  toleranceRetardMois: 1,     // retard de cotisation toléré
+  tauxPriseEnCharge: 80,      // part remboursée, en %
+  plafondActe: 50000,         // FC, par acte
+  plafondAnnuel: 200000,      // FC, par adhérent et par an
+  reserveMin: 20,             // % du cumul des cotisations, intouchable
+  couvreCharges: true,        // les personnes en charge sont couvertes
+  depuis: ""                  // date d'entrée en vigueur
+};
+
+function getMutRegles() {
+  var r = (MUTDB && MUTDB.regles) || null;
+  if (!r) return MUT_REGLES_DEFAUT;
+  var out = {}, k;
+  for (k in MUT_REGLES_DEFAUT) out[k] = (r[k] !== undefined && r[k] !== null && r[k] !== "") ? r[k] : MUT_REGLES_DEFAUT[k];
+  return out;
+}
+
+// Nombre de mois pleins entre deux dates ISO.
+function _moisEcoules(depuis, jusqu) {
+  var a = new Date(depuis), b = new Date(jusqu);
+  if (isNaN(a.getTime()) || isNaN(b.getTime())) return 0;
+  var m = (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+  if (b.getDate() < a.getDate()) m--;
+  return m;
+}
+
+// Cotisations attendues d'un adhérent à une date, selon sa fréquence.
+function _mutCotisAttendues(mb, jusqu) {
+  if (!mb || !mb.dateInscription) return 0;
+  var m = _moisEcoules(mb.dateInscription, jusqu);
+  if (m < 0) return 0;
+  return mb.frequence === "semestrielle" ? Math.floor(m / 6) + 1 : m + 1;
+}
+
+// ══ INSTRUCTION D'UNE DEMANDE ══════════════════════════════════════════════
+// Renvoie, pour une demande, chaque règle et son verdict, puis le montant
+// remboursable qui en découle. Aucune règle n'interdit d'elle-même : le comité
+// peut déroger, mais la dérogation est nommée et tracée.
+function instruireDemandeMut(soin) {
+  var R = getMutRegles();
+  var mb = null;
+  (MUTDB.membres || []).forEach(function(x){ if (x.id === soin.membreId) mb = x; });
+  var etat = _mutEtatAdherent(soin.membreId);
+  var caisse = _mutSoldeCaisse();
+  var dateSoin = soin.date || getTodayStr();
+  var demande = parseFloat(soin.montantFC) || 0;
+  var points = [];
+
+  // 1. Adhérent en règle d'inscription
+  points.push({ cle: "statut", libelle: "Adh\u00e9rent actif",
+    ok: !!(mb && mb.statut === "actif"),
+    detail: mb ? ("statut : " + (mb.statut || "?")) : "fiche d'adh\u00e9sion introuvable" });
+
+  // 2. Délai de carence
+  var anciennete = mb && mb.dateInscription ? _moisEcoules(mb.dateInscription, dateSoin) : -1;
+  points.push({ cle: "carence", libelle: "D\u00e9lai de carence de " + R.carenceMois + " mois",
+    ok: anciennete >= R.carenceMois,
+    detail: anciennete < 0 ? "date d'inscription inconnue"
+          : (anciennete + " mois d'anciennet\u00e9 au " + dateSoin) });
+
+  // 3. À jour de ses cotisations
+  var attendues = _mutCotisAttendues(mb, dateSoin);
+  var versees = etat.nbVersements;
+  var retard = Math.max(0, attendues - versees);
+  points.push({ cle: "ajour", libelle: "\u00c0 jour de ses cotisations (tol\u00e9rance " + R.toleranceRetardMois + ")",
+    ok: retard <= R.toleranceRetardMois,
+    detail: versees + " vers\u00e9(s) sur " + attendues + " attendu(s)" + (retard ? " \u2014 " + retard + " en retard" : "") });
+
+  // 4. Plafond annuel déjà consommé
+  var an = String(dateSoin).substring(0, 4);
+  var dejaAn = 0;
+  (MUTDB.soins || []).forEach(function(x){
+    if (x.membreId !== soin.membreId || x.id === soin.id) return;
+    if (x.statut === "approuve" && String(x.date || "").substring(0, 4) === an) dejaAn += parseFloat(x.montantRembourse != null ? x.montantRembourse : x.montantFC) || 0;
+  });
+  var resteAnnuel = Math.max(0, R.plafondAnnuel - dejaAn);
+  points.push({ cle: "plafondAnnuel", libelle: "Plafond annuel " + fmt(R.plafondAnnuel) + " FC",
+    ok: resteAnnuel > 0,
+    detail: fmt(dejaAn) + " FC d\u00e9j\u00e0 rembours\u00e9(s) en " + an + ", reste " + fmt(resteAnnuel) + " FC" });
+
+  // Montant remboursable : taux, puis plafond par acte, puis reste annuel.
+  var apresTaux = demande * (R.tauxPriseEnCharge / 100);
+  var apresActe = Math.min(apresTaux, R.plafondActe);
+  var rembourse = Math.min(apresActe, resteAnnuel);
+  var bride = [];
+  if (apresTaux < demande) bride.push("taux de " + R.tauxPriseEnCharge + "\u00a0%");
+  if (apresActe < apresTaux) bride.push("plafond par acte");
+  if (rembourse < apresActe) bride.push("plafond annuel");
+
+  // 5. Réserve de la caisse
+  var reserve = caisse.cotise * (R.reserveMin / 100);
+  var soldeApres = caisse.solde - rembourse;
+  points.push({ cle: "reserve", libelle: "R\u00e9serve de " + R.reserveMin + "\u00a0% (" + fmt(reserve) + " FC)",
+    ok: soldeApres >= reserve,
+    detail: "solde " + fmt(caisse.solde) + " \u2192 " + fmt(soldeApres) + " FC apr\u00e8s remboursement" });
+
+  var bloquants = points.filter(function(x){ return !x.ok; });
+  return { regles: R, points: points, bloquants: bloquants, etat: etat, caisse: caisse,
+           demande: demande, rembourse: Math.round(rembourse), bride: bride,
+           resteAnnuel: resteAnnuel, soldeApres: soldeApres, reserve: reserve };
+}
 
 // Le distant fait foi pour ce qu'il connaît ; ce qu'il ignore est conservé.
 // Une ligne n'est jamais supprimée par un simple rechargement.
@@ -21385,10 +21508,17 @@ function _mutEtatAdherent(membreId) {
 }
 
 // Solde de la caisse mutuelle : cotisations encaissées moins soins approuvés.
+// Ce qui sort de la caisse est le montant REMBOURSÉ, arrêté par le règlement,
+// et non le montant demandé par l'adhérent. Les demandes antérieures aux
+// règles n'ont pas de montant remboursé : on retient alors le demandé.
+function _mutMontantSorti(x) {
+  return parseFloat(x.montantRembourse != null ? x.montantRembourse : x.montantFC) || 0;
+}
+
 function _mutSoldeCaisse() {
   var c = (MUTDB.cotisations || []).reduce(function(t,x){ return t + (parseFloat(x.montantFC)||0); }, 0);
   var s = (MUTDB.soins || []).filter(function(x){ return x.statut === "approuve"; })
-            .reduce(function(t,x){ return t + (parseFloat(x.montantFC)||0); }, 0);
+            .reduce(function(t,x){ return t + _mutMontantSorti(x); }, 0);
   return { cotise: c, rembourse: s, solde: c - s };
 }
 
@@ -21470,7 +21600,7 @@ function _mutToast(err, messageOk) {
 // Navigation interne
 var gMutSection = "membres";
 function showMutSection(name) {
-  var sects = ["membres","cotisations","soins","caisse","partenaire"];
+  var sects = ["membres","cotisations","soins","caisse","partenaire","regles"];
   sects.forEach(function(s){
     var el = document.getElementById("mut-sect-"+s);
     var btn = document.getElementById("mut-nav-"+s);
@@ -21491,6 +21621,7 @@ function renderMutSection() {
   if(gMutSection==="soins")       renderMutSoins();
   if(gMutSection==="caisse")      renderMutCaisse();
   if(gMutSection==="partenaire")  renderMutPartenaire();
+  if(gMutSection==="regles")      renderMutRegles();
 }
 
 // ---- MEMBRES ----
@@ -21741,42 +21872,52 @@ function validerSoin(id, statut) {
       + (soin.valideDate ? " le " + soin.valideDate : "") + ".\n\n"
       + "Revenir sur une d\u00e9cision d\u00e9j\u00e0 prise change le solde de la caisse. "
       + "Confirmez si c'est bien ce que vous voulez.",
-      function(){ closeModal(); _appliquerStatutSoin(soin, statut, true); });
+      function(){
+        closeModal();
+        var i2 = (statut === "approuve") ? instruireDemandeMut(soin) : null;
+        _appliquerStatutSoin(soin, statut, true, i2 ? i2.rembourse : 0,
+          i2 ? i2.bloquants.map(function(x){ return x.libelle; }) : null);
+      });
     return;
   }
 
-  var etat = _mutEtatAdherent(soin.membreId);
-  var caisse = _mutSoldeCaisse();
-  var montant = parseFloat(soin.montantFC) || 0;
-  var apres = caisse.solde - (statut === "approuve" ? montant : 0);
+  if(statut !== "approuve"){ _appliquerStatutSoin(soin, statut, false, 0); return; }
 
-  if(statut !== "approuve"){ _appliquerStatutSoin(soin, statut, false); return; }
+  // L'instruction applique le règlement, point par point, et en déduit le
+  // montant remboursable. Le comité garde la main : il peut déroger, mais
+  // la dérogation est nommée et inscrite au dossier.
+  var ins = instruireDemandeMut(soin);
+  var etat = ins.etat;
 
-  // Le dossier de l'adhérent et l'état de la caisse, sous les yeux, au moment
-  // de décider — et non dans un écran qu'il faudrait penser à consulter.
-  var msg = (soin.prenom||"") + " " + (soin.nom||"") + " \u2014 " + (soin.typeActe||"") + ", " + fmt(montant) + " FC.\n\n"
+  var msg = (soin.prenom||"") + " " + (soin.nom||"") + " \u2014 " + (soin.typeActe||"") + ", demande de " + fmt(ins.demande) + " FC.\n\n"
     + "SON DOSSIER\n"
-    + "\u2022 Inscrit le " + (etat.inscription || "?") + (etat.statut && etat.statut !== "actif" ? " \u2014 statut : " + etat.statut : "") + "\n"
+    + "\u2022 Inscrit le " + (etat.inscription || "?") + "\n"
     + "\u2022 A vers\u00e9 " + fmt(etat.verse) + " FC en " + etat.nbVersements + " versement(s)"
     + (etat.dernierVersement ? ", dernier le " + etat.dernierVersement : ", aucun versement") + "\n"
     + "\u2022 A d\u00e9j\u00e0 re\u00e7u " + fmt(etat.recu) + " FC en " + etat.nbSoins + " remboursement(s)\n\n"
-    + "LA CAISSE\n"
-    + "\u2022 Solde actuel " + fmt(caisse.solde) + " FC \u2192 " + fmt(apres) + " FC apr\u00e8s ce remboursement\n";
+    + "LE R\u00c8GLEMENT\n";
+  ins.points.forEach(function(pt){
+    msg += (pt.ok ? "\u2713 " : "\u2717 ") + pt.libelle + " \u2014 " + pt.detail + "\n";
+  });
+  msg += "\nMONTANT REMBOURSABLE : " + fmt(ins.rembourse) + " FC"
+       + (ins.bride.length ? " (limit\u00e9 par " + ins.bride.join(", ") + ")" : "") + "\n"
+       + "Caisse " + fmt(ins.caisse.solde) + " \u2192 " + fmt(ins.caisse.solde - ins.rembourse) + " FC.\n";
 
-  if(apres < 0){
-    msg += "\n\u26a0\ufe0f LA CAISSE NE COUVRE PAS CE REMBOURSEMENT. Il manque " + fmt(-apres) + " FC.";
-  } else if(etat.verse <= 0){
-    msg += "\n\u26a0\ufe0f Cet adh\u00e9rent n'a encore vers\u00e9 aucune cotisation.";
-  } else if(etat.recu + montant > etat.verse){
-    msg += "\n\u2139\ufe0f Cumul re\u00e7u (" + fmt(etat.recu + montant) + " FC) sup\u00e9rieur au cumul vers\u00e9 ("
-         + fmt(etat.verse) + " FC). C'est le principe m\u00eame d'une mutuelle \u2014 not\u00e9 pour m\u00e9moire.";
+  if(ins.bloquants.length){
+    msg += "\n\u26a0\ufe0f " + ins.bloquants.length + " r\u00e8gle(s) non satisfaite(s) : "
+         + ins.bloquants.map(function(x){ return x.libelle; }).join(", ")
+         + ".\nApprouver malgr\u00e9 cela est une D\u00c9ROGATION, inscrite au dossier et au journal.";
   }
 
-  showModal(apres < 0 ? "\u26a0\ufe0f Approuver malgr\u00e9 une caisse insuffisante ?" : "Approuver ce remboursement ?",
-    msg, function(){ closeModal(); _appliquerStatutSoin(soin, statut, false); });
+  showModal(ins.bloquants.length ? "\u26a0\ufe0f D\u00e9roger au r\u00e8glement ?" : "Approuver ce remboursement ?",
+    msg, function(){
+      closeModal();
+      _appliquerStatutSoin(soin, statut, false, ins.rembourse,
+        ins.bloquants.map(function(x){ return x.libelle; }));
+    });
 }
 
-function _appliquerStatutSoin(soin, statut, revision) {
+function _appliquerStatutSoin(soin, statut, revision, rembourse, derogations) {
   // L'état précédent est conservé : une caisse doit pouvoir dire non seulement
   // ce qu'elle a décidé, mais ce qu'elle avait décidé avant.
   if(revision){
@@ -21786,11 +21927,23 @@ function _appliquerStatutSoin(soin, statut, revision) {
   soin.statut = statut;
   soin.valideBy = (gCurrentUser && gCurrentUser.nom) || "";
   soin.valideDate = getTodayStr();
+  if(statut === "approuve"){
+    // Le montant remboursé est celui qu'arrête le règlement, pas celui qui a
+    // été demandé : c'est lui qui sort de la caisse et qui fera foi.
+    soin.montantRembourse = (rembourse != null) ? rembourse : (parseFloat(soin.montantFC)||0);
+    soin.reglesAppliquees = getMutRegles();
+    soin.derogations = (derogations && derogations.length) ? derogations : null;
+  }
   saveMutDB(function(err){
     renderMutSoins(); renderMutCaisse();
-    _mutToast(err, statut === "approuve" ? "Soin approuv\u00e9 \u2705" : "Soin rejet\u00e9");
+    _mutToast(err, statut === "approuve"
+      ? ("Soin approuv\u00e9 \u2014 " + fmt(soin.montantRembourse||0) + " FC \u00e0 rembourser")
+      : "Soin rejet\u00e9");
     logAudit("VALIDER","Mutuelle","Soin " + statut + " \u2014 " + (soin.prenom||"") + " " + (soin.nom||"")
-      + " " + fmt(parseFloat(soin.montantFC)||0) + " FC" + (revision ? " (r\u00e9vision)" : "")
+      + " demande " + fmt(parseFloat(soin.montantFC)||0) + " FC"
+      + (statut === "approuve" ? ", rembours\u00e9 " + fmt(soin.montantRembourse||0) + " FC" : "")
+      + (soin.derogations ? " \u2014 D\u00c9ROGATION : " + soin.derogations.join(", ") : "")
+      + (revision ? " (r\u00e9vision)" : "")
       + " par " + ((gCurrentUser&&gCurrentUser.nom)||""));
   });
 }
@@ -21800,7 +21953,7 @@ function renderMutCaisse() {
   var cont = document.getElementById("mut-caisse-resume");
   if(!cont) return;
   var totalCotis = (MUTDB.cotisations||[]).reduce(function(s,c){ return s+(c.montantFC||0); },0);
-  var totalSoins = (MUTDB.soins||[]).filter(function(s){ return s.statut==="approuve"; }).reduce(function(s,c){ return s+(c.montantFC||0); },0);
+  var totalSoins = (MUTDB.soins||[]).filter(function(s){ return s.statut==="approuve"; }).reduce(function(s,c){ return s+_mutMontantSorti(c); },0);
   var solde = totalCotis - totalSoins;
 
   function kk(icon,label,val,color){
@@ -21850,14 +22003,22 @@ function _mutNonPortes() {
   var cot = (MUTDB.cotisations || []).filter(function(c){ return !c.injecteFinances; });
   var soi = (MUTDB.soins || []).filter(function(x){ return x.statut === "approuve" && !x.injecteFinances; });
   var tc = cot.reduce(function(t,x){ return t + (parseFloat(x.montantFC)||0); }, 0);
-  var ts = soi.reduce(function(t,x){ return t + (parseFloat(x.montantFC)||0); }, 0);
+  var ts = soi.reduce(function(t,x){ return t + _mutMontantSorti(x); }, 0);
   return { cot: cot, soins: soi, totalCot: tc, totalSoins: ts };
 }
 
 function _blocLiaisonFinancesMut() {
   var r = _mutNonPortes();
+  var R = getMutRegles();
   var h = "<div style='background:#f7fafd;border:1px solid #c5d8ed;border-radius:9px;padding:11px 13px;margin-bottom:14px'>";
-  h += "<div style='font-size:.74rem;font-weight:700;color:var(--blue);margin-bottom:5px'>Liaison avec les finances</div>";
+  h += "<div style='font-size:.74rem;font-weight:700;color:var(--blue);margin-bottom:5px'>Liaison avec les finances \u2014 fonds "
+     + (R.fonds === "commune" ? "commun" : "distinct") + "</div>";
+  if (R.fonds === "distinct") {
+    h += "<div style='font-size:.72rem;color:#6b88a4;line-height:1.5;margin-bottom:6px'>"
+       + "Le r\u00e8glement retient un <strong>fonds distinct</strong> : ces cotisations appartiennent aux adh\u00e9rents et ne sont pas "
+       + "une recette de l'\u00e9glise. Ne les portez en culte que si l'argent transite mat\u00e9riellement par la caisse des cultes, "
+       + "et imputez-les alors sur un compte de fonds d\u00e9di\u00e9 de votre plan SYCEBNL, jamais sur un compte de produit.</div>";
+  }
   if (!r.cot.length && !r.soins.length) {
     h += "<div style='font-size:.73rem;color:#14532d'>Tous les mouvements de la mutuelle ont \u00e9t\u00e9 port\u00e9s en culte.</div>";
     return h + "</div>";
@@ -21867,9 +22028,11 @@ function _blocLiaisonFinancesMut() {
      + "<strong>" + r.soins.length + " remboursement(s)</strong> pour " + fmt(r.totalSoins) + " FC "
      + "ne figurent dans aucun culte. Tant qu'ils n'y sont pas, les comptes de l'\u00e9glise ignorent cet argent."
      + "</div>";
-  h += "<div style='font-size:.7rem;color:#6b88a4;margin-top:5px'>"
-     + "N'utilisez ce bouton que si la mutuelle partage la caisse de l'\u00e9glise. Si elle a sa propre caisse, laissez-le."
-     + "</div>";
+  if (R.fonds === "commune") {
+    h += "<div style='font-size:.7rem;color:#6b88a4;margin-top:5px'>"
+       + "Le r\u00e8glement retient un <strong>fonds commun</strong> : ces mouvements ont vocation \u00e0 figurer dans les cultes."
+       + "</div>";
+  }
   h += "<div style='margin-top:8px'><button class='btn btn-sm btn-o' onclick='injecterMutuelleVersFinances()'>\u2197 Porter dans le culte en cours</button></div>";
   return h + "</div>";
 }
@@ -21903,6 +22066,124 @@ function injecterMutuelleVersFinances() {
       if(typeof recalc === "function") recalc();
       if(typeof dirty === "function") dirty();
       if(typeof switchModule === "function") switchModule("finances");
+    });
+}
+
+// ══ ÉCRAN DES RÈGLES ═══════════════════════════════════════════════════════
+function renderMutRegles() {
+  var cont = document.getElementById("mut-regles-body");
+  if (!cont) return;
+  var R = getMutRegles();
+  var estAdmin = !!(gCurrentUser && gCurrentUser.role === "admin");
+  var perso = !!(MUTDB && MUTDB.regles);
+
+  var h = "<div style='font-size:.75rem;color:var(--muted);line-height:1.55;margin-bottom:12px'>"
+        + "Ces param\u00e8tres sont la traduction du r\u00e8glement int\u00e9rieur. Ils ne d\u00e9cident rien \u00e0 la place du comit\u00e9 : "
+        + "ils rendent chaque dossier comparable au suivant, et expliquent \u00e0 l'adh\u00e9rent pourquoi la d\u00e9cision est ce qu'elle est. "
+        + (perso ? "<strong>R\u00e8gles arr\u00eat\u00e9es le " + escH(R.depuis || "?") + ".</strong>"
+                 : "<strong>Proposition de d\u00e9part \u2014 aucune r\u00e8gle n'a encore \u00e9t\u00e9 arr\u00eat\u00e9e.</strong>")
+        + "</div>";
+
+  function champ(id, lbl, val, suffixe, aide) {
+    return "<div class='fg'><label>" + lbl + (suffixe ? " (" + suffixe + ")" : "") + "</label>"
+      + "<input type='number' id='" + id + "' value='" + val + "' min='0'" + (estAdmin ? "" : " disabled") + ">"
+      + (aide ? "<div style='font-size:.65rem;color:var(--muted);margin-top:3px;line-height:1.4'>" + aide + "</div>" : "")
+      + "</div>";
+  }
+
+  // Point 1 : la nature du fonds
+  h += "<div class='sec-lbl'>Nature de la caisse</div>";
+  h += "<div style='background:#f7fafd;border:1px solid #c5d8ed;border-radius:9px;padding:11px 13px;margin-bottom:12px'>";
+  h += "<div class='fg'><label>Le fonds de la mutuelle est\u2026</label>"
+     + "<select id='mut-r-fonds'" + (estAdmin ? "" : " disabled") + ">"
+     + "<option value='distinct'" + (R.fonds === "distinct" ? " selected" : "") + ">Distinct \u2014 caisse propre \u00e0 la mutuelle</option>"
+     + "<option value='commune'" + (R.fonds === "commune" ? " selected" : "") + ">Commun \u2014 confondu avec la caisse de l'\u00e9glise</option>"
+     + "</select></div>";
+  h += "<div style='font-size:.71rem;color:#6b88a4;margin-top:7px;line-height:1.5'>"
+     + "<strong>Distinct</strong> : les cotisations appartiennent aux adh\u00e9rents, pas \u00e0 l'\u00e9glise. Elles ne sont pas une recette de culte ; "
+     + "elles constituent un fonds affect\u00e9, dont l'\u00e9glise r\u00e9pond. Le bouton de report vers les finances reste disponible "
+     + "pour le seul cas o\u00f9 l'argent transite mat\u00e9riellement par la caisse des cultes, et il est alors \u00e0 imputer sur un compte "
+     + "de fonds d\u00e9di\u00e9, jamais sur un compte de produit.<br>"
+     + "<strong>Commun</strong> : cotisations et remboursements deviennent recettes et d\u00e9penses ordinaires. Plus simple \u00e0 tenir, "
+     + "mais il devient impossible de dire ce qui revient aux adh\u00e9rents si la mutuelle s'arr\u00eate."
+     + "</div></div>";
+
+  // Point 2 : l'ouverture du droit
+  h += "<div class='sec-lbl'>Ouverture du droit</div>";
+  h += "<div class='form-grid'>"
+     + champ("mut-r-carence", "D\u00e9lai de carence", R.carenceMois, "mois",
+             "Temps entre l'inscription et le premier remboursement possible. Sans lui, on adh\u00e8re le jour de l'hospitalisation.")
+     + champ("mut-r-tolerance", "Retard tol\u00e9r\u00e9", R.toleranceRetardMois, "\u00e9ch\u00e9ances",
+             "Nombre d'\u00e9ch\u00e9ances impay\u00e9es encore admises.")
+     + "</div>";
+
+  h += "<div class='sec-lbl'>Niveau de prise en charge</div>";
+  h += "<div class='form-grid'>"
+     + champ("mut-r-taux", "Taux de prise en charge", R.tauxPriseEnCharge, "%",
+             "Part rembours\u00e9e. Un reste \u00e0 charge mod\u00e8re les demandes.")
+     + champ("mut-r-pacte", "Plafond par acte", R.plafondActe, "FC", "")
+     + champ("mut-r-pannuel", "Plafond annuel par adh\u00e9rent", R.plafondAnnuel, "FC", "")
+     + champ("mut-r-reserve", "R\u00e9serve intouchable", R.reserveMin, "% des cotisations",
+             "Part du cumul cotis\u00e9 que la caisse ne descend pas en dessous.")
+     + "</div>";
+
+  h += "<div class='fg'><label>Personnes en charge</label>"
+     + "<select id='mut-r-charges'" + (estAdmin ? "" : " disabled") + ">"
+     + "<option value='1'" + (R.couvreCharges ? " selected" : "") + ">Couvertes par l'adh\u00e9sion</option>"
+     + "<option value='0'" + (!R.couvreCharges ? " selected" : "") + ">Non couvertes</option>"
+     + "</select></div>";
+
+  if (estAdmin) {
+    h += "<div style='display:flex;gap:8px;margin-top:12px;flex-wrap:wrap'>"
+       + "<button class='btn btn-g btn-sm' onclick='enregistrerMutRegles()'>Arr\u00eater ces r\u00e8gles</button>"
+       + "<button class='btn btn-o btn-sm' onclick='reinitMutRegles()'>Revenir \u00e0 la proposition</button></div>";
+  } else {
+    h += "<div style='font-size:.72rem;color:#8a5a00;margin-top:10px'>Seul un administrateur modifie les r\u00e8gles.</div>";
+  }
+
+  h += "<div style='font-size:.7rem;color:var(--muted);margin-top:12px;line-height:1.5;border-top:1px solid var(--border);padding-top:9px'>"
+     + "Une demande d\u00e9j\u00e0 approuv\u00e9e conserve les r\u00e8gles qui lui ont \u00e9t\u00e9 appliqu\u00e9es : changer le bar\u00e8me aujourd'hui "
+     + "ne r\u00e9\u00e9crit pas les dossiers d'hier.</div>";
+  cont.innerHTML = h;
+}
+
+function enregistrerMutRegles() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.","err"); return; }
+  function nb(id, def) { var v = parseFloat((document.getElementById(id)||{}).value); return isNaN(v) || v < 0 ? def : v; }
+  var taux = nb("mut-r-taux", 80);
+  if (taux > 100) { showToast("Le taux de prise en charge ne peut d\u00e9passer 100\u00a0%.","err"); return; }
+  var res = nb("mut-r-reserve", 20);
+  if (res > 100) { showToast("La r\u00e9serve ne peut d\u00e9passer 100\u00a0%.","err"); return; }
+  var R = {
+    fonds: (document.getElementById("mut-r-fonds")||{}).value || "distinct",
+    carenceMois: nb("mut-r-carence", 3),
+    toleranceRetardMois: nb("mut-r-tolerance", 1),
+    tauxPriseEnCharge: taux,
+    plafondActe: nb("mut-r-pacte", 50000),
+    plafondAnnuel: nb("mut-r-pannuel", 200000),
+    reserveMin: res,
+    couvreCharges: (document.getElementById("mut-r-charges")||{}).value === "1",
+    depuis: getTodayStr()
+  };
+  MUTDB.regles = R;
+  saveMutDB(function(err){
+    renderMutRegles(); renderMutCaisse();
+    _mutToast(err, "R\u00e8gles arr\u00eat\u00e9es.");
+    logAudit("CONFIG","Mutuelle","R\u00e8gles : fonds " + R.fonds + ", carence " + R.carenceMois + " mois, taux "
+      + R.tauxPriseEnCharge + "%, plafond acte " + fmt(R.plafondActe) + " FC, plafond annuel " + fmt(R.plafondAnnuel)
+      + " FC, r\u00e9serve " + R.reserveMin + "%");
+  });
+}
+
+function reinitMutRegles() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.","err"); return; }
+  showModal("Revenir \u00e0 la proposition de d\u00e9part ?",
+    "Les r\u00e8gles que vous avez arr\u00eat\u00e9es seront remplac\u00e9es par les valeurs propos\u00e9es \u00e0 l'origine. "
+    + "Les dossiers d\u00e9j\u00e0 trait\u00e9s conservent les r\u00e8gles qui leur ont \u00e9t\u00e9 appliqu\u00e9es.",
+    function(){
+      closeModal();
+      MUTDB.regles = null;
+      saveMutDB(function(err){ renderMutRegles(); _mutToast(err, "Retour \u00e0 la proposition de d\u00e9part."); });
     });
 }
 
