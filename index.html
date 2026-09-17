@@ -6188,7 +6188,7 @@ function printHistory() {
   var couv = totREq>0 ? Math.round(totDEq/totREq*100) : 0;
   var couvCls = couv<=100 ? "color:#15803d" : "color:#b91c1c";
 
-  var win = window.open("","_blank","width=1000,height=750");
+  var win = _fenetreImpression("width=1000,height=750"); if(!win) return;
   win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
   win.document.write("<title>Historique ECC Kingasani 2 — "+period+"</title>");
   win.document.write("<style>");
@@ -7163,6 +7163,71 @@ function _rapprochementCotis() {
 // que le compte courant y figure bien comme administrateur — sans quoi il se
 // fermerait à lui-même la porte.
 var gRolesEtat = null;
+
+// ══ SANTÉ DES PERMISSIONS ══════════════════════════════════════════════════
+// Un compte dont les permissions sont incomplètes ne se signale pas : il se
+// connecte, voit l'application, et découvre au fil de l'usage que tel onglet
+// manque — ou, avant correction, que rien ne fonctionne. Cette carte lit tous
+// les comptes et nomme ceux dont les permissions ne tiennent pas debout.
+function _auditPerms() {
+  var comptes = [], vus = {};
+  (typeof loadAccounts === "function" ? (loadAccounts() || []) : []).forEach(function(a){
+    if (a && a.email) { comptes.push(a); vus[a.email] = true; }
+  });
+  for (var e in USER_ROLES) if (!vus[e]) comptes.push({ email: e, nom: USER_ROLES[e].nom, role: USER_ROLES[e].role });
+
+  var lignes = [];
+  comptes.forEach(function(a){
+    if (a.role === "admin") return;              // l'administrateur a tout, par construction
+    var brut = a.perms || null, soucis = [];
+    if (brut) {
+      if (brut.modules === undefined)      soucis.push("aucun module d\u00e9clar\u00e9");
+      else if (typeof brut.modules === "string") soucis.push("modules en cha\u00eene et non en liste");
+      else if (!brut.modules.length)       soucis.push("liste de modules vide");
+      if (brut.financeTabs === undefined)  soucis.push("onglets Finances absents");
+      else if (typeof brut.financeTabs === "string") soucis.push("onglets Finances en cha\u00eene");
+    }
+    var eff = getPerms(a);
+    lignes.push({ email: a.email, nom: a.nom || "", role: a.role || "", soucis: soucis,
+                  modules: eff.modules.length, onglets: eff.financeTabs.length });
+  });
+  return lignes;
+}
+
+function _cartePermsSante() {
+  var l = _auditPerms();
+  var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F9ED} Sant\u00e9 des permissions</div>';
+  if (!l.length) {
+    return h + '<p style="font-size:.76rem;color:var(--muted)">Aucun compte non-administrateur.</p>';
+  }
+  var casses = l.filter(function(x){ return x.soucis.length; });
+  var muets  = l.filter(function(x){ return !x.soucis.length && !x.modules; });
+
+  if (casses.length || muets.length) {
+    h += '<div class="ctrl-piece ko"><div class="cp-tete"><strong>'
+       + (casses.length + muets.length) + ' compte(s) \u00e0 reprendre</strong></div>'
+       + '<div class="cp-l cp-e">Des permissions incompl\u00e8tes emp\u00eachaient l\u2019application de finir son d\u00e9marrage : '
+       + 'ni donn\u00e9es charg\u00e9es, ni impression possible. Elles sont d\u00e9sormais compl\u00e9t\u00e9es automatiquement au vol, '
+       + 'mais mieux vaut rouvrir ces comptes et cocher ce qui leur revient.</div></div>';
+  } else {
+    h += '<div class="ctrl-piece ok"><div class="cp-tete"><strong>Toutes les permissions tiennent debout</strong></div>'
+       + '<div class="cp-l">' + l.length + ' compte(s) non-administrateur v\u00e9rifi\u00e9(s).</div></div>';
+  }
+
+  h += '<table class="cotis-table rap-table"><thead><tr><th>Compte</th><th>R\u00f4le</th><th>Modules</th><th>Onglets</th><th>\u00c9tat</th></tr></thead><tbody>';
+  l.forEach(function(x){
+    var mauvais = x.soucis.length || !x.modules;
+    h += '<tr class="' + (mauvais ? "rap-ko" : "rap-ok") + '">'
+       + '<td><strong>' + escH(x.nom || x.email) + '</strong>'
+       + '<div style="font-size:.66rem;color:var(--muted)">' + escH(x.email) + '</div></td>'
+       + '<td>' + escH(x.role || "\u2014") + '</td>'
+       + '<td style="text-align:center">' + x.modules + '</td>'
+       + '<td style="text-align:center">' + x.onglets + '</td>'
+       + '<td style="font-size:.7rem">' + (x.soucis.length ? escH(x.soucis.join(", "))
+            : (!x.modules ? "aucun module accessible" : "\u2713")) + '</td></tr>';
+  });
+  return h + '</tbody></table>';
+}
 
 function _carteRolesServeur() {
   var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F510} Application des r\u00f4les c\u00f4t\u00e9 serveur</div>';
@@ -9087,6 +9152,7 @@ function renderAdmin(){
   html += "<div id='audit-zone'></div>";
 
   html += _carteClotures();
+  html += _cartePermsSante();
   html += _carteRolesServeur();
   html += _carteMigrationMembres();
   html += _carteMigrationMutuelle();
@@ -9209,11 +9275,48 @@ function getDefaultPerms(role) {
   return {modules:["finances","eb","annonces","projets"], financeTabs:["recettes","depenses"]};
 }
 
+// Un jeu de permissions doit toujours porter ses trois listes. Il n'en portait
+// aucune garantie : getPerms renvoyait ac.perms tel quel, et un compte au
+// format hérité — {perms:{modules:[…]}} sans financeTabs — faisait lever
+// hasFinanceTab sur perms.financeTabs.length.
+//
+// L'exception tombait dans la boucle de launchApp qui configure les onglets.
+// Tout ce qui suit cessait d'être exécuté : formulaire des finances jamais
+// initialisé, abonnement Firestore jamais posé, preloadAllModules jamais
+// appelé. L'utilisateur voyait l'application, sans données — et imprimait donc
+// des documents vides. Un seul champ manquant suffisait.
+//
+// Les modules pouvaient aussi arriver sous forme de chaîne « a,b,c » : la
+// connexion annonce ce format, mais hasModule itérait alors sur les
+// caractères et ne trouvait jamais rien.
+function _normaliserPerms(perms, role) {
+  var def = getDefaultPerms(role || "");
+  var out = perms ? perms : {};
+  function liste(v, parDefaut) {
+    if (typeof v === "string") {
+      return v.split(",").map(function(x){ return x.trim(); }).filter(function(x){ return !!x; });
+    }
+    if (Object.prototype.toString.call(v) === "[object Array]") return v;
+    return parDefaut;
+  }
+  var r = {
+    modules:     liste(out.modules,     def.modules || []),
+    financeTabs: liste(out.financeTabs, def.financeTabs || []),
+    projTabs:    liste(out.projTabs,    def.projTabs || ["achat","travaux","mo"])
+  };
+  // Les autorisations de saisie ne sont pas des listes : on les reprend telles.
+  ["socialSaisie","semSaisie","ecoSaisie","readOnly"].forEach(function(k){
+    if (out[k] !== undefined) r[k] = out[k];
+  });
+  return r;
+}
+
 // Recuperer les permissions effectives d un compte
 function getPerms(ac) {
+  if(!ac) return _normaliserPerms(null, "");
   if(ac.role==="admin") return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export"], projTabs:["achat","travaux","mo"]};
-  if(ac.perms) return ac.perms;
-  return getDefaultPerms(ac.role);
+  if(ac.perms) return _normaliserPerms(ac.perms, ac.role);
+  return _normaliserPerms(getDefaultPerms(ac.role), ac.role);
 }
 
 // Verifier si user a acces a un module
@@ -12002,7 +12105,7 @@ function printFiche() {
 
   var arrColor = arr<=0 ? "#15803d" : (arr<=2?"#e67e22":"#c0392b");
 
-  var win = window.open("","_blank","width=800,height=900");
+  var win = _fenetreImpression("width=800,height=900"); if(!win) return;
   win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Fiche "+escH(m.nom+" "+m.prenom)+"</title>");
   win.document.write("<script src='https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js'><\/script>");
   win.document.write("<style>"+getPrintCSS());
@@ -13041,14 +13144,21 @@ function launchApp() {
     }
   }
 
-  // Onglets finances selon permissions
-  for(var ti=0;ti<FINANCE_TABS.length;ti++){
-    var ftab = document.getElementById("tab-btn-"+FINANCE_TABS[ti].key);
-    if(ftab) ftab.style.display = hasFinanceTab(FINANCE_TABS[ti].key) ? "" : "none";
+  // Configurer l'affichage selon les permissions ne doit jamais empêcher
+  // l'application de démarrer. Une permission mal formée fait au pire perdre
+  // un onglet ; elle ne doit pas priver l'utilisateur de ses données.
+  try {
+    for(var ti=0;ti<FINANCE_TABS.length;ti++){
+      var ftab = document.getElementById("tab-btn-"+FINANCE_TABS[ti].key);
+      if(ftab) ftab.style.display = hasFinanceTab(FINANCE_TABS[ti].key) ? "" : "none";
+    }
+    var budgetBtnL = document.getElementById("tab-btn-budget");
+    if(budgetBtnL) budgetBtnL.style.display = canEditBudget() ? "" : "none";
+  } catch(e) {
+    console.warn("Permissions onglets:", e.message);
+    showToast("Vos permissions sont mal form\u00e9es : certains onglets peuvent manquer. "
+      + "Signalez-le \u00e0 l'administrateur.", "warn");
   }
-  // Onglet Budget (admin + directeur financier)
-  var budgetBtnL = document.getElementById("tab-btn-budget");
-  if(budgetBtnL) budgetBtnL.style.display = canEditBudget() ? "" : "none";
 
   document.getElementById("meta-date").value = getTodayStr();
   document.body.setAttribute("data-role", gCurrentUser.role);
@@ -14309,7 +14419,7 @@ function printHistSem() {
     rows += "</tr>";
   }
   var soldeTotal = (totRecCDF-totDepCDF)+(totRecUSD-totDepUSD)*t;
-  var win = window.open("","_blank","width=1000,height=750");
+  var win = _fenetreImpression("width=1000,height=750"); if(!win) return;
   win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Historique des Seminaires</title>");
   win.document.write("<style>"+getPrintCSS()+"</style></head><body>");
   win.document.write(buildPrintHeader("Historique des Seminaires — "+SEMDB.sessions.length+" session(s)"));
@@ -14782,7 +14892,7 @@ function printHistEco() {
     rows += "</tr>";
   }
   var soldeTotal = (totRecCDF-totDepCDF)+(totRecUSD-totDepUSD)*t;
-  var win = window.open("","_blank","width=1000,height=750");
+  var win = _fenetreImpression("width=1000,height=750"); if(!win) return;
   win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Historique des ECODIMs</title>");
   win.document.write("<style>"+getPrintCSS()+"</style></head><body>");
   win.document.write(buildPrintHeader("Historique des ECODIMs — "+ECODB.sessions.length+" session(s)"));
@@ -15954,7 +16064,7 @@ function printEB(num) {
   html += '<div class="no-print" style="margin-top:20px;text-align:center"><button onclick="window.print()" style="padding:10px 24px;background:#1a3a5c;color:#fff;border:none;border-radius:6px;font-size:11pt;cursor:pointer">🖨️ Imprimer / Sauvegarder PDF</button></div>';
   html += '</body></html>';
   
-  var win = window.open('','_blank','width=800,height=900');
+  var win = _fenetreImpression("width=800,height=900"); if(!win) return;
   if(win){ win.document.write(html); win.document.close(); }
   else showToast("Autorisez les pop-ups pour imprimer.","err");
 }
@@ -17230,7 +17340,7 @@ function printProjet(id) {
   }
   html+="<div class='no-print' style='margin-top:20px;text-align:center'><button onclick='window.print()' style='padding:10px 24px;background:#1a3a5c;color:#fff;border:none;border-radius:6px;font-size:11pt;cursor:pointer'>🖨️ Imprimer / Sauvegarder PDF</button></div>";
   html+="</body></html>";
-  var win=window.open("","_blank","width=800,height=900");
+  var win = _fenetreImpression("width=800,height=900"); if(!win) return;
   if(win){ win.document.write(html); win.document.close(); }
   else showToast("Autorisez les pop-ups pour imprimer.","err");
 }
@@ -18208,7 +18318,7 @@ function printLoyerRapport() {
     rows += "</tr>";
   }
 
-  var win = window.open("","_blank","width=1000,height=750");
+  var win = _fenetreImpression("width=1000,height=750"); if(!win) return;
   win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Rapport Loyer "+yr+"</title>");
   win.document.write("<style>"+getPrintCSS()+"</style></head><body>");
   win.document.write(logoHdr);
@@ -18268,6 +18378,21 @@ function buildPrintHeader(subtitle) {
 }
 
 // CSS partagé pour toutes les impressions
+// Sur téléphone, le blocage des fenêtres surgissantes est la règle plus que
+// l'exception. window.open renvoyait alors null, et le premier win.document
+// levait une exception : rien ne s'ouvrait, et rien ne le disait. L'impression
+// paraissait simplement ne pas marcher.
+function _fenetreImpression(dims) {
+  var win = null;
+  try { win = window.open("", "_blank", dims || "width=1000,height=750"); } catch(e) {}
+  if (!win || win.closed || typeof win.document === "undefined") {
+    showToast("La fen\u00eatre d'impression a \u00e9t\u00e9 bloqu\u00e9e par le navigateur. "
+      + "Autorisez les fen\u00eatres surgissantes pour ce site, puis recommencez.", "err");
+    return null;
+  }
+  return win;
+}
+
 function getPrintCSS() {
   return "body{font-family:Arial,sans-serif;font-size:11.5px;color:#0d1b2a;margin:24px 28px}"+
     ".print-header{display:flex;align-items:center;gap:16px;border-bottom:3px solid #1a3a5c;padding-bottom:12px;margin-bottom:16px}"+
@@ -18884,7 +19009,7 @@ function downloadBlob(blob, filename) {
       var isJson = filename.indexOf('.json') >= 0;
       if(isCsv || isJson){
         // Afficher le contenu dans une fenêtre de partage
-        var win = window.open('','_blank');
+        var win = _fenetreImpression(); if(!win) return;
         if(win){
           win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>'+filename+'</title></head><body>');
           win.document.write('<div style="font-family:monospace;font-size:11px;padding:10px;background:#f8f8f8">');
