@@ -21351,6 +21351,47 @@ function modalSMSAnnonce(annonce) {
 
 var MUTDB = { membres:[], cotisations:[], soins:[], partenaire:{} };
 
+// Le distant fait foi pour ce qu'il connaît ; ce qu'il ignore est conservé.
+// Une ligne n'est jamais supprimée par un simple rechargement.
+function _mutFusion(distant, local) {
+  var vus = {}, out = [];
+  (distant || []).forEach(function(x){ if(x && x.id){ vus[x.id] = true; } out.push(x); });
+  (local || []).forEach(function(x){ if(x && x.id && !vus[x.id]) out.push(x); });
+  return out;
+}
+
+// État d'un adhérent : ce qu'il a versé, ce qu'il a déjà reçu, depuis quand il
+// est inscrit. Sans ces trois chiffres sous les yeux, approuver un
+// remboursement est un geste à l'aveugle.
+function _mutEtatAdherent(membreId) {
+  var verse = 0, dernier = "", nbV = 0;
+  (MUTDB.cotisations || []).forEach(function(c){
+    if (c.membreId !== membreId) return;
+    verse += parseFloat(c.montantFC) || 0; nbV++;
+    if (String(c.date || "") > dernier) dernier = String(c.date || "");
+  });
+  var recu = 0, nbS = 0, enAttente = 0;
+  (MUTDB.soins || []).forEach(function(x){
+    if (x.membreId !== membreId) return;
+    if (x.statut === "approuve") { recu += parseFloat(x.montantFC) || 0; nbS++; }
+    else if (x.statut === "attente") enAttente += parseFloat(x.montantFC) || 0;
+  });
+  var mb = null;
+  (MUTDB.membres || []).forEach(function(m){ if (m.id === membreId) mb = m; });
+  return { verse: verse, nbVersements: nbV, dernierVersement: dernier,
+           recu: recu, nbSoins: nbS, enAttente: enAttente,
+           inscription: (mb && mb.dateInscription) || "", statut: (mb && mb.statut) || "",
+           solde: verse - recu };
+}
+
+// Solde de la caisse mutuelle : cotisations encaissées moins soins approuvés.
+function _mutSoldeCaisse() {
+  var c = (MUTDB.cotisations || []).reduce(function(t,x){ return t + (parseFloat(x.montantFC)||0); }, 0);
+  var s = (MUTDB.soins || []).filter(function(x){ return x.statut === "approuve"; })
+            .reduce(function(t,x){ return t + (parseFloat(x.montantFC)||0); }, 0);
+  return { cotise: c, rembourse: s, solde: c - s };
+}
+
 // Souscription temps réel Mutuelle
 var gUnsubMut = null;
 function subscribeMut() {
@@ -21360,10 +21401,10 @@ function subscribeMut() {
     if(doc.exists){
       var d = doc.data();
       MUTDB = {
-        membres:     d.membres||[],
-        cotisations: d.cotisations||[],
-        soins:       d.soins||[],
-        partenaire:  d.partenaire||{}
+        membres:     _mutFusion(d.membres||[],     MUTDB.membres||[]),
+        cotisations: _mutFusion(d.cotisations||[], MUTDB.cotisations||[]),
+        soins:       _mutFusion(d.soins||[],       MUTDB.soins||[]),
+        partenaire:  d.partenaire || MUTDB.partenaire || {}
       };
       try{ localStorage.setItem("ecc_mutdb", JSON.stringify(MUTDB)); }catch(e){}
       if(typeof renderMutSection==="function") renderMutSection();
@@ -21385,7 +21426,14 @@ function loadMutDB() {
       .then(function(doc){
         if(doc.exists){
           var d=doc.data();
-          MUTDB={membres:d.membres||[],cotisations:d.cotisations||[],soins:d.soins||[],partenaire:d.partenaire||{}};
+          // Reprendre le distant tel quel effaçait ce qui n'était pas encore
+          // monté : une cotisation encaissée hors ligne disparaissait.
+          MUTDB={
+            membres:     _mutFusion(d.membres||[],     MUTDB.membres||[]),
+            cotisations: _mutFusion(d.cotisations||[], MUTDB.cotisations||[]),
+            soins:       _mutFusion(d.soins||[],       MUTDB.soins||[]),
+            partenaire:  d.partenaire || MUTDB.partenaire || {}
+          };
           try{ localStorage.setItem("ecc_mutdb",JSON.stringify(MUTDB)); }catch(e){}
         }
         renderMutSection();
@@ -21395,13 +21443,28 @@ function loadMutDB() {
   }
 }
 
+// L'échec d'écriture appelait le callback comme une réussite : l'écran
+// annonçait « Cotisation enregistrée » pour de l'argent qui n'avait jamais
+// atteint la base. Sur une caisse de solidarité, c'est la pire des erreurs.
+// Le callback reçoit désormais l'erreur, et l'appelant décide quoi en dire.
 function saveMutDB(cb) {
   try { localStorage.setItem("ecc_mutdb", JSON.stringify(MUTDB)); } catch(e){}
   if(IS_CONFIGURED && gDb){
     gDb.collection("mutuelle_db").doc("main").set(MUTDB)
-      .then(function(){ if(cb) cb(); })
-      .catch(function(){ if(cb) cb(); });
-  } else { if(cb) cb(); }
+      .then(function(){ if(cb) cb(null); })
+      .catch(function(e){ if(cb) cb(e); });
+  } else { if(cb) cb(null); }
+}
+
+// Message unique pour tout enregistrement mutuelle : dit la vérité sur le sort
+// de l'écriture, et ne laisse jamais croire à une synchronisation qui n'a pas eu lieu.
+function _mutToast(err, messageOk) {
+  if (err) {
+    showToast("Enregistr\u00e9 sur cet appareil SEULEMENT \u2014 base refus\u00e9e : "
+      + (err.message || "erreur inconnue") + ". Reprenez d\u00e8s que la connexion revient.", "err");
+  } else {
+    showToast(messageOk, "ok");
+  }
 }
 
 // Navigation interne
@@ -21495,6 +21558,15 @@ function openMutInscription(id) {
     var mb = null;
     for(var i=0;i<(DB&&DB.membres||[]).length;i++) if(DB.membres[i].id===mbId){mb=DB.membres[i];break;}
     if(!mb){ showToast("Membre introuvable.","err"); return; }
+    // Deux fiches pour la même personne, ce sont deux dossiers de cotisation et
+    // deux droits au remboursement pour un seul adhérent.
+    var doublon = null;
+    (MUTDB.membres||[]).forEach(function(x){ if(x.membreId===mbId && x.id!==id) doublon = x; });
+    if(doublon){
+      showToast((mb.prenom||"")+" "+(mb.nom||"")+" est d\u00e9j\u00e0 inscrit \u00e0 la mutuelle (depuis le "
+        +(doublon.dateInscription||"?")+"). Modifiez sa fiche au lieu d'en cr\u00e9er une seconde.","err");
+      return;
+    }
     var entry = {
       id: id || ("mut_"+Date.now()),
       membreId: mbId,
@@ -21513,7 +21585,9 @@ function openMutInscription(id) {
     } else {
       MUTDB.membres.unshift(entry);
     }
-    saveMutDB(function(){ closeModal(); renderMutMembres(); showToast((id?"Modifié":"Inscrit")+" : "+entry.prenom+" "+entry.nom,"ok"); logAudit("SAVE","Mutuelle","Inscription "+entry.prenom+" "+entry.nom); });
+    saveMutDB(function(err){ closeModal(); renderMutMembres();
+      _mutToast(err, (id?"Modifi\u00e9":"Inscrit")+" : "+entry.prenom+" "+entry.nom);
+      logAudit("SAVE","Mutuelle","Inscription "+entry.prenom+" "+entry.nom); });
   }, id?"Modifier":"Inscrire");
   var okBtn = document.getElementById("modal-ok");
   if(okBtn){ okBtn.textContent=id?"Modifier":"Inscrire"; }
@@ -21590,7 +21664,9 @@ function openMutCotisation() {
     };
     if(!MUTDB.cotisations) MUTDB.cotisations=[];
     MUTDB.cotisations.unshift(entry);
-    saveMutDB(function(){ closeModal(); renderMutCotisations(); renderMutCaisse(); showToast("Cotisation enregistrée !","ok"); logAudit("SAVE","Mutuelle","Cotisation "+entry.prenom+" "+entry.nom+" — "+fmt(entry.montantFC)+" FC"); });
+    saveMutDB(function(err){ closeModal(); renderMutCotisations(); renderMutCaisse();
+      _mutToast(err, "Cotisation enregistr\u00e9e !");
+      logAudit("SAVE","Mutuelle","Cotisation "+entry.prenom+" "+entry.nom+" — "+fmt(entry.montantFC)+" FC"); });
   }, "Enregistrer");
 }
 
@@ -21639,20 +21715,84 @@ function openMutSoin() {
     };
     if(!MUTDB.soins) MUTDB.soins=[];
     MUTDB.soins.unshift(entry);
-    saveMutDB(function(){ closeModal(); renderMutSoins(); showToast("Demande de soins soumise !","ok"); logAudit("CREATE","Mutuelle","Soin "+entry.prenom+" "+entry.nom+" — "+entry.typeActe); });
+    saveMutDB(function(err){ closeModal(); renderMutSoins();
+      _mutToast(err, "Demande de soins soumise !");
+      logAudit("CREATE","Mutuelle","Soin "+entry.prenom+" "+entry.nom+" — "+entry.typeActe); });
   }, "Soumettre");
 }
 
+// Approuver un remboursement, c'est autoriser une sortie d'argent. La
+// fonction ne vérifiait rien : n'importe quel compte connecté pouvait le
+// faire, sur une caisse vide, et sans savoir si l'adhérent avait jamais
+// cotisé. Elle statuait aussi sur une demande déjà tranchée, en effaçant qui
+// l'avait tranchée et quand.
 function validerSoin(id, statut) {
-  for(var i=0;i<MUTDB.soins.length;i++){
-    if(MUTDB.soins[i].id===id){
-      MUTDB.soins[i].statut = statut;
-      MUTDB.soins[i].valideBy = gCurrentUser?gCurrentUser.nom:"";
-      MUTDB.soins[i].valideDate = getTodayStr();
-      break;
-    }
+  if(!gCurrentUser || gCurrentUser.role !== "admin"){
+    showToast("Approuver ou rejeter un remboursement est r\u00e9serv\u00e9 \u00e0 l'administrateur.","err"); return;
   }
-  saveMutDB(function(){ renderMutSoins(); renderMutCaisse(); showToast(statut==="approuve"?"Soin approuvé ✅":"Soin rejeté","ok"); logAudit("VALIDER","Mutuelle","Soin "+statut+" par "+(gCurrentUser?gCurrentUser.nom:"")); });
+  var soin = null;
+  (MUTDB.soins||[]).forEach(function(x){ if(x.id===id) soin = x; });
+  if(!soin){ showToast("Demande introuvable.","err"); return; }
+
+  if(soin.statut && soin.statut !== "attente"){
+    showModal("Demande d\u00e9j\u00e0 trait\u00e9e",
+      "Cette demande a \u00e9t\u00e9 " + (soin.statut === "approuve" ? "approuv\u00e9e" : "rejet\u00e9e")
+      + (soin.valideBy ? " par " + soin.valideBy : "")
+      + (soin.valideDate ? " le " + soin.valideDate : "") + ".\n\n"
+      + "Revenir sur une d\u00e9cision d\u00e9j\u00e0 prise change le solde de la caisse. "
+      + "Confirmez si c'est bien ce que vous voulez.",
+      function(){ closeModal(); _appliquerStatutSoin(soin, statut, true); });
+    return;
+  }
+
+  var etat = _mutEtatAdherent(soin.membreId);
+  var caisse = _mutSoldeCaisse();
+  var montant = parseFloat(soin.montantFC) || 0;
+  var apres = caisse.solde - (statut === "approuve" ? montant : 0);
+
+  if(statut !== "approuve"){ _appliquerStatutSoin(soin, statut, false); return; }
+
+  // Le dossier de l'adhérent et l'état de la caisse, sous les yeux, au moment
+  // de décider — et non dans un écran qu'il faudrait penser à consulter.
+  var msg = (soin.prenom||"") + " " + (soin.nom||"") + " \u2014 " + (soin.typeActe||"") + ", " + fmt(montant) + " FC.\n\n"
+    + "SON DOSSIER\n"
+    + "\u2022 Inscrit le " + (etat.inscription || "?") + (etat.statut && etat.statut !== "actif" ? " \u2014 statut : " + etat.statut : "") + "\n"
+    + "\u2022 A vers\u00e9 " + fmt(etat.verse) + " FC en " + etat.nbVersements + " versement(s)"
+    + (etat.dernierVersement ? ", dernier le " + etat.dernierVersement : ", aucun versement") + "\n"
+    + "\u2022 A d\u00e9j\u00e0 re\u00e7u " + fmt(etat.recu) + " FC en " + etat.nbSoins + " remboursement(s)\n\n"
+    + "LA CAISSE\n"
+    + "\u2022 Solde actuel " + fmt(caisse.solde) + " FC \u2192 " + fmt(apres) + " FC apr\u00e8s ce remboursement\n";
+
+  if(apres < 0){
+    msg += "\n\u26a0\ufe0f LA CAISSE NE COUVRE PAS CE REMBOURSEMENT. Il manque " + fmt(-apres) + " FC.";
+  } else if(etat.verse <= 0){
+    msg += "\n\u26a0\ufe0f Cet adh\u00e9rent n'a encore vers\u00e9 aucune cotisation.";
+  } else if(etat.recu + montant > etat.verse){
+    msg += "\n\u2139\ufe0f Cumul re\u00e7u (" + fmt(etat.recu + montant) + " FC) sup\u00e9rieur au cumul vers\u00e9 ("
+         + fmt(etat.verse) + " FC). C'est le principe m\u00eame d'une mutuelle \u2014 not\u00e9 pour m\u00e9moire.";
+  }
+
+  showModal(apres < 0 ? "\u26a0\ufe0f Approuver malgr\u00e9 une caisse insuffisante ?" : "Approuver ce remboursement ?",
+    msg, function(){ closeModal(); _appliquerStatutSoin(soin, statut, false); });
+}
+
+function _appliquerStatutSoin(soin, statut, revision) {
+  // L'état précédent est conservé : une caisse doit pouvoir dire non seulement
+  // ce qu'elle a décidé, mais ce qu'elle avait décidé avant.
+  if(revision){
+    soin.revisions = soin.revisions || [];
+    soin.revisions.push({ de: soin.statut, vers: statut, par: (gCurrentUser&&gCurrentUser.nom)||"", date: getTodayStr() });
+  }
+  soin.statut = statut;
+  soin.valideBy = (gCurrentUser && gCurrentUser.nom) || "";
+  soin.valideDate = getTodayStr();
+  saveMutDB(function(err){
+    renderMutSoins(); renderMutCaisse();
+    _mutToast(err, statut === "approuve" ? "Soin approuv\u00e9 \u2705" : "Soin rejet\u00e9");
+    logAudit("VALIDER","Mutuelle","Soin " + statut + " \u2014 " + (soin.prenom||"") + " " + (soin.nom||"")
+      + " " + fmt(parseFloat(soin.montantFC)||0) + " FC" + (revision ? " (r\u00e9vision)" : "")
+      + " par " + ((gCurrentUser&&gCurrentUser.nom)||""));
+  });
 }
 
 // ---- CAISSE ----
@@ -21674,6 +21814,7 @@ function renderMutCaisse() {
   html += kk("🏥","Total soins approuvés",totalSoins,"#c0392b");
   html += kk("💰","Solde caisse",solde,solde>=0?"#1e7d52":"#c0392b");
   html += "</div>";
+  html += _blocLiaisonFinancesMut();
 
   // Historique des soins approuvés
   var soinsApp = (MUTDB.soins||[]).filter(function(s){ return s.statut==="approuve"; });
@@ -21693,6 +21834,76 @@ function renderMutCaisse() {
     html += "</tbody></table>";
   }
   cont.innerHTML = html;
+}
+
+// ══ LIAISON AVEC LES FINANCES ══════════════════════════════════════════════
+// La mutuelle vivait entièrement à côté des comptes : ses cotisations
+// n'entraient dans aucune recette, ses remboursements dans aucune dépense, et
+// les rapports consolidés l'ignoraient purement et simplement. L'argent est
+// pourtant réel et passe par la caisse.
+//
+// Le geste reste volontaire. Une mutuelle peut être tenue comme un fonds
+// distinct, avec sa propre caisse ; c'est une décision de gestion, pas un
+// automatisme à imposer. Mais quand elle est décidée, elle doit être traçable :
+// chaque mouvement porté en culte est marqué, et ne sera pas proposé deux fois.
+function _mutNonPortes() {
+  var cot = (MUTDB.cotisations || []).filter(function(c){ return !c.injecteFinances; });
+  var soi = (MUTDB.soins || []).filter(function(x){ return x.statut === "approuve" && !x.injecteFinances; });
+  var tc = cot.reduce(function(t,x){ return t + (parseFloat(x.montantFC)||0); }, 0);
+  var ts = soi.reduce(function(t,x){ return t + (parseFloat(x.montantFC)||0); }, 0);
+  return { cot: cot, soins: soi, totalCot: tc, totalSoins: ts };
+}
+
+function _blocLiaisonFinancesMut() {
+  var r = _mutNonPortes();
+  var h = "<div style='background:#f7fafd;border:1px solid #c5d8ed;border-radius:9px;padding:11px 13px;margin-bottom:14px'>";
+  h += "<div style='font-size:.74rem;font-weight:700;color:var(--blue);margin-bottom:5px'>Liaison avec les finances</div>";
+  if (!r.cot.length && !r.soins.length) {
+    h += "<div style='font-size:.73rem;color:#14532d'>Tous les mouvements de la mutuelle ont \u00e9t\u00e9 port\u00e9s en culte.</div>";
+    return h + "</div>";
+  }
+  h += "<div style='font-size:.73rem;color:#6b88a4;line-height:1.5'>"
+     + "<strong>" + r.cot.length + " cotisation(s)</strong> pour " + fmt(r.totalCot) + " FC et "
+     + "<strong>" + r.soins.length + " remboursement(s)</strong> pour " + fmt(r.totalSoins) + " FC "
+     + "ne figurent dans aucun culte. Tant qu'ils n'y sont pas, les comptes de l'\u00e9glise ignorent cet argent."
+     + "</div>";
+  h += "<div style='font-size:.7rem;color:#6b88a4;margin-top:5px'>"
+     + "N'utilisez ce bouton que si la mutuelle partage la caisse de l'\u00e9glise. Si elle a sa propre caisse, laissez-le."
+     + "</div>";
+  h += "<div style='margin-top:8px'><button class='btn btn-sm btn-o' onclick='injecterMutuelleVersFinances()'>\u2197 Porter dans le culte en cours</button></div>";
+  return h + "</div>";
+}
+
+function injecterMutuelleVersFinances() {
+  if(!gCurrentUser || gCurrentUser.role !== "admin"){ showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.","err"); return; }
+  var r = _mutNonPortes();
+  if(!r.cot.length && !r.soins.length){ showToast("Rien \u00e0 porter.","ok"); return; }
+  showModal("Porter les mouvements de la mutuelle dans le culte ?",
+    fmt(r.totalCot) + " FC de cotisations en recette, " + fmt(r.totalSoins) + " FC de remboursements en d\u00e9pense.\n\n"
+    + "Ils seront ajout\u00e9s au formulaire du culte en cours, modifiables avant enregistrement. "
+    + "Chaque mouvement est marqu\u00e9 comme port\u00e9 et ne sera plus propos\u00e9.\n\n"
+    + "\u00c0 ne faire que si la mutuelle partage la caisse de l'\u00e9glise.",
+    function(){
+      closeModal();
+      var marque = { date: getTodayStr(), par: (gCurrentUser&&gCurrentUser.email)||"" };
+      if(r.totalCot > 0 && typeof addRec === "function"){
+        addRec("cl","CL","Mutuelle - cotisations (" + r.cot.length + ")", r.totalCot, 0, "Porte depuis Mutuelle");
+      }
+      if(r.totalSoins > 0 && typeof addDep === "function"){
+        addDep("dep-ot","Mutuelle - remboursements (" + r.soins.length + ")", "Mut", r.totalSoins, 0, "Porte depuis Mutuelle");
+      }
+      r.cot.forEach(function(c){ c.injecteFinances = marque; });
+      r.soins.forEach(function(x){ x.injecteFinances = marque; });
+      saveMutDB(function(err){
+        renderMutCaisse();
+        _mutToast(err, "Port\u00e9 dans le culte. V\u00e9rifiez puis enregistrez le culte.");
+        logAudit("INJECTION","Mutuelle", r.cot.length + " cotisation(s) " + fmt(r.totalCot) + " FC et "
+          + r.soins.length + " remboursement(s) " + fmt(r.totalSoins) + " FC port\u00e9s en culte");
+      });
+      if(typeof recalc === "function") recalc();
+      if(typeof dirty === "function") dirty();
+      if(typeof switchModule === "function") switchModule("finances");
+    });
 }
 
 // ---- PARTENAIRE ----
