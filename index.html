@@ -4375,7 +4375,7 @@ var FIREBASE_CONFIG = {
 // == USER ROLES ==
 // Map email -> display name + role
 var USER_ROLES = {
-  "gdeonnkuli@gmail.com":      { nom: "Pasteur Titulaire",   role: "admin",    label: "Administrateur" },
+  "gdeonnkuli@gmail.com":      { nom: "Admin-Fin",           role: "admin",    label: "Administrateur" },
   "channinglumesa@gmail.com":  { nom: "Directeur Financier", role: "finances", label: "Finances" },
   "lbasingili@cbfck2.org":     { nom: "Lauriane BASINGILI",  role: "saisie",   label: "Saisie",
     perms: { modules: ["seminaire","eb","annonces","projets"], financeTabs: [] }
@@ -9165,7 +9165,7 @@ function hasProjTab(tab) {
 function loadAccounts() {
   // Built-in accounts + custom accounts from localStorage
   var builtin = [
-    {email:"gdeonnkuli@gmail.com",   nom:"Pasteur Titulaire",   role:"admin",    hash:"56ac21a218ef043e6983a9426194906dd1b1e07294ad9fdccd6ef5a3242919a1", builtin:true},
+    {email:"gdeonnkuli@gmail.com",   nom:"Admin-Fin",           role:"admin",    hash:"56ac21a218ef043e6983a9426194906dd1b1e07294ad9fdccd6ef5a3242919a1", builtin:true},
     {email:"channinglumesa@gmail.com",nom:"Directeur Financier", role:"finances", hash:"1c6ae103267ec787a4ea458ace15dbd17520ceb94a77cc9e123b54a6c6d4ec4f", builtin:true}
   ];
   var custom = [];
@@ -9414,7 +9414,13 @@ function saveEditAccount() {
       projTabs: newPerms.projTabs || ["achat","travaux","mo"]
     }).then(function(){
       showToast("Permissions synchronisees !", "ok");
-    }).catch(function(e){ console.warn("Account update:", e); });
+    }).catch(function(e){
+      // L'échec ne partait qu'en console : l'écran disait « enregistré », et
+      // les permissions restaient celles d'avant sur les autres appareils.
+      console.warn("Account update:", e);
+      showToast("Enregistr\u00e9 sur cet appareil seulement \u2014 synchronisation refus\u00e9e : "
+        + (e && e.message ? e.message : "erreur inconnue"), "err");
+    });
   }
 
   // Update USER_ROLES
@@ -9425,16 +9431,40 @@ function saveEditAccount() {
   showToast("Compte modifie : "+nom, "ok");
 }
 
+// La suppression ne touchait que localStorage. Le document accounts/{email}
+// restait en base avec son rôle et ses permissions, et loadUserPermsFromFirestore
+// les réapplique à la connexion : le compte « supprimé » se reconnectait avec
+// tous ses droits, et réapparaissait sur les autres appareils. L'interface
+// promettait « supprimé définitivement » ce que le code ne faisait pas.
+//
+// Ce qui reste hors de portée, et qu'il faut dire : le compte Firebase
+// Authentication lui-même. Le retirer exige la console Firebase — sans ce
+// geste, l'adresse peut encore s'authentifier, simplement sans rôle inscrit.
 function deleteAccount(email) {
+  if(!gCurrentUser || gCurrentUser.role !== "admin"){ showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.","err"); return; }
   if(email===gCurrentUser.email){showToast("Impossible de supprimer votre propre compte.","err");return;}
-  showConfirmF("Supprimer ce compte ?","Email: "+email+" sera supprime definitivement.", function(){
+  showConfirmF("Supprimer ce compte ?",
+    email + " perdra son r\u00f4le et ses permissions, sur cet appareil comme en base.\n\n"
+    + "Sa connexion Firebase n'est pas supprim\u00e9e pour autant : retirez-la dans la console Firebase "
+    + "(Authentication \u2192 Utilisateurs) si vous voulez lui fermer la porte enti\u00e8rement.",
+    function(){
     var custom = [];
     try{custom=JSON.parse(localStorage.getItem("ecc_accounts")||"[]");}catch(e){}
     custom = custom.filter(function(a){return a.email!==email;});
     try{localStorage.setItem("ecc_accounts",JSON.stringify(custom));}catch(e){}
     delete USER_ROLES[email];
-    renderAdmin();
-    showToast("Compte supprime.", "");
+    if(typeof logAudit === "function") logAudit("SECURITE","Comptes","Suppression du compte "+email);
+    var fini = function(msg, t){ renderAdmin(); showToast(msg, t||"ok"); };
+    if(IS_CONFIGURED && gDb){
+      gDb.collection("accounts").doc(email).delete()
+        .then(function(){ fini("Compte supprim\u00e9, ici et en base."); })
+        .catch(function(e){
+          fini("Retir\u00e9 de cet appareil, mais PAS de la base : " + (e.message||"\u00e9criture refus\u00e9e")
+             + ". Le compte garde ses droits ailleurs.", "err");
+        });
+    } else {
+      fini("Compte retir\u00e9 de cet appareil.", "warn");
+    }
   });
 }
 
@@ -15997,10 +16027,16 @@ function loadPROJDBFromFirebase(callback) {
   if(!IS_CONFIGURED || !gDb){ loadPROJDB(); if(callback) callback(); return; }
   gDb.collection("projets").get()
     .then(function(snap){
-      var arr=[];
-      snap.forEach(function(doc){ arr.push(doc.data()); });
-      PROJDB.projets = arr;
+      // PROJDB.projets = arr effaçait l'appareil : un projet créé hors ligne,
+      // ou une ligne ajoutée pendant que la base était injoignable,
+      // disparaissait au chargement suivant. On garde ce qui n'existe qu'ici
+      // et on le remonte.
+      var arr=[], vus={};
+      snap.forEach(function(doc){ var d=doc.data(); arr.push(d); if(d&&d.id) vus[d.id]=true; });
+      var locauxSeuls=(PROJDB.projets||[]).filter(function(x){ return x && x.id && !vus[x.id]; });
+      PROJDB.projets = arr.concat(locauxSeuls);
       try { localStorage.setItem("ecc_projets", JSON.stringify(PROJDB)); } catch(e){}
+      locauxSeuls.forEach(function(x){ gDb.collection("projets").doc(x.id).set(x,{merge:true}).catch(function(){}); });
       if(callback) callback();
     })
     .catch(function(e){
@@ -16009,15 +16045,16 @@ function loadPROJDBFromFirebase(callback) {
       if(callback) callback();
     });
 }
-function savePROJDB() {
+// projId : n'écrire que le projet touché. Sans lui, ajouter une ligne d'achat
+// réécrivait TOUS les projets en base — vingt écritures pour une saisie.
+function savePROJDB(projId) {
   try { localStorage.setItem("ecc_projets", JSON.stringify(PROJDB)); } catch(e){}
-  // Sauvegarder chaque projet dans Firebase (avec ses sublignes achat/travaux/mo)
   if(IS_CONFIGURED && gDb && PROJDB.projets){
     for(var i=0;i<PROJDB.projets.length;i++){
       var p=PROJDB.projets[i];
-      if(p && p.id){
-        gDb.collection("projets").doc(p.id).set(p, {merge:true}).catch(function(e){ console.warn("savePROJDB Firebase:", e.message); });
-      }
+      if(!p || !p.id) continue;
+      if(projId && p.id !== projId) continue;
+      gDb.collection("projets").doc(p.id).set(p, {merge:true}).catch(function(e){ console.warn("savePROJDB Firebase:", e.message); });
     }
   }
 }
@@ -16187,6 +16224,10 @@ function renderProjSub(type) {
   html+="<div style='font-size:.85rem;font-weight:700;color:var(--navy)'>"+typeLabels[type]+" — "+escH(proj.titre||proj.nom||"")+"</div>";
   html+="<div style='font-family:DM Mono,monospace;font-size:1rem;font-weight:800;color:var(--navy)'>"+fmt(total)+" FC</div>";
   html+="</div>";
+  // Le budget était défini à la création du projet puis jamais confronté aux
+  // dépenses. Sur un chantier, c'est pourtant le seul chiffre qui compte, et
+  // il doit apparaître là où l'on engage la dépense, pas dans un rapport.
+  html+=_jaugeBudgetProjet(proj);
   if(lignes.length===0){
     html+="<p style='color:var(--muted);font-size:.82rem;text-align:center;padding:14px'>Aucune ligne pour ce projet.</p>";
   } else {
@@ -16247,19 +16288,45 @@ function resetProjSubInjection(type, projId, ligneId) {
   showToast("Ligne remise en attente — vous pouvez ré-injecter.","ok");
 }
 
+// Un seul appui sur la croix effaçait la ligne, sans un mot. Et si elle avait
+// déjà été injectée dans un culte enregistré, la dépense restait au culte
+// tandis que le projet perdait sa justification : l'argent sorti n'était plus
+// rattaché à rien.
 function delProjSub(type, ligneId) {
   loadPROJDB();
   var projId=(document.getElementById("psub-"+type+"-projet")||{}).value;
+  var proj=null, ligne=null;
   for(var i=0;i<PROJDB.projets.length;i++){
-    if(PROJDB.projets[i].id===projId && PROJDB.projets[i].sublignes){
-      PROJDB.projets[i].sublignes=PROJDB.projets[i].sublignes.filter(function(l){ return l.id!==ligneId; });
-      break;
-    }
+    if(PROJDB.projets[i].id===projId){ proj=PROJDB.projets[i]; break; }
   }
-  savePROJDB();
-  renderProjSub(type);
-  if(typeof renderProjListe==="function") renderProjListe();
-  showToast("Ligne supprimée.","");
+  if(!proj){ showToast("Projet introuvable.","err"); return; }
+  (proj.sublignes||[]).forEach(function(l){ if(l.id===ligneId) ligne=l; });
+  if(!ligne){ showToast("Ligne introuvable.","err"); return; }
+
+  var eq = (parseFloat(ligne.cdf)||0) + (parseFloat(ligne.usd)||0)*(ligne.taux||getTaux());
+  var portee = !!(ligne.injecte && ligne.injecteSave);
+  showModal("Supprimer cette ligne ?",
+    "\u00ab\u00a0" + (ligne.lib||"") + "\u00a0\u00bb \u2014 " + fmt(eq) + " FC, du " + (ligne.date||"?")
+    + (ligne.four ? ", " + ligne.four : "") + "."
+    + (portee
+        ? "\n\n\u26a0\ufe0f Cette ligne a \u00e9t\u00e9 inject\u00e9e et son culte est enregistr\u00e9"
+          + (ligne.injecteDate ? " (inject\u00e9e le " + ligne.injecteDate + ")" : "")
+          + ". La d\u00e9pense restera dans le culte ; seule sa justification c\u00f4t\u00e9 projet dispara\u00eet. "
+          + "Pour annuler la d\u00e9pense elle-m\u00eame, reprenez le culte dans Finances."
+        : "\n\nElle n'a pas encore \u00e9t\u00e9 port\u00e9e en d\u00e9pense.")
+    + "\n\nLa suppression est d\u00e9finitive.",
+    function(){
+      closeModal();
+      proj.sublignes=(proj.sublignes||[]).filter(function(l){ return l.id!==ligneId; });
+      savePROJDB(projId);
+      renderProjSub(type);
+      if(typeof renderProjListe==="function") renderProjListe();
+      if(typeof logAudit === "function"){
+        logAudit("PROJETS","Suppression de ligne","\u00ab "+(ligne.lib||"")+" \u00bb "+fmt(eq)+" FC \u2014 "
+          +(proj.titre||proj.nom||"")+(portee?" (d\u00e9j\u00e0 port\u00e9e en culte)":""));
+      }
+      showToast("Ligne supprim\u00e9e.","ok");
+    });
 }
 
 // Injecter les lignes non injectées dans les Dépenses Finances
@@ -16285,15 +16352,33 @@ function resetInjecteProjSub(type, projId) {
   var proj=null;
   for(var i=0;i<PROJDB.projets.length;i++){ if(PROJDB.projets[i].id===projId){ proj=PROJDB.projets[i]; break; } }
   if(!proj){ return; }
-  showConfirmF("Reinitialiser les injections ?",
-    "Les lignes seront a nouveau disponibles pour injection. A utiliser si une injection precedente n'a pas ete sauvegardee.",
+  // Une ligne dont le culte a été enregistré est déjà une dépense comptabilisée.
+  // La remettre en attente permettrait de l'injecter une seconde fois, et de
+  // payer deux fois la même tôle. Seules les injections restées en l'air —
+  // culte jamais sauvegardé — sont rouvertes.
+  var enLAir = (proj.sublignes||[]).filter(function(l){ return l.type===type && l.injecte && !l.injecteSave; });
+  var verrouillees = (proj.sublignes||[]).filter(function(l){ return l.type===type && l.injecte && l.injecteSave; });
+  if(!enLAir.length){
+    showModal("Rien \u00e0 r\u00e9initialiser",
+      verrouillees.length
+        ? verrouillees.length + " ligne(s) sont inject\u00e9es ET leur culte est enregistr\u00e9 : elles sont "
+          + "d\u00e9j\u00e0 comptabilis\u00e9es en d\u00e9pense. Les rouvrir permettrait de les payer deux fois.\n\n"
+          + "Pour corriger une de ces lignes, reprenez le culte concern\u00e9 dans Finances."
+        : "Aucune injection en attente pour ce type.",
+      function(){ closeModal(); });
+    return;
+  }
+  showConfirmF("R\u00e9initialiser " + enLAir.length + " injection(s) en attente ?",
+    "Ces lignes ont \u00e9t\u00e9 inject\u00e9es mais leur culte n'a jamais \u00e9t\u00e9 enregistr\u00e9 : elles redeviennent disponibles."
+    + (verrouillees.length ? "\n\n" + verrouillees.length + " autre(s) ligne(s) ne sont pas touch\u00e9es \u2014 leur culte est enregistr\u00e9." : ""),
     function(){
       (proj.sublignes||[]).forEach(function(l){
-        if(l.type===type){ l.injecte=false; l.injecteSave=false; }
+        if(l.type===type && l.injecte && !l.injecteSave){ l.injecte=false; l.injecteDate=""; }
       });
-      savePROJDB();
+      savePROJDB(projId);
       renderProjSub(type);
-      showToast("Reinitialise. Vous pouvez re-injecter.","ok");
+      if(typeof logAudit === "function") logAudit("PROJETS","R\u00e9initialisation",enLAir.length+" injection(s) en attente rouverte(s) \u2014 "+(proj.titre||proj.nom||""));
+      showToast(enLAir.length + " ligne(s) r\u00e9ouverte(s). Vous pouvez r\u00e9-injecter.","ok");
     });
 }
 
@@ -16341,6 +16426,36 @@ function projPrioriteLabel(p) {
   if(p==="urgente") return "<span style='background:#fdf0ee;color:#c0392b;font-size:.63rem;font-weight:700;padding:1px 6px;border-radius:8px;border:1px solid #e8b4ad'>🔥 URGENT</span>";
   if(p==="haute") return "<span style='background:#fff8e1;color:#b45309;font-size:.63rem;font-weight:700;padding:1px 6px;border-radius:8px;border:1px solid #fbbf24'>⬆️ HAUTE</span>";
   return "";
+}
+
+// Budget, engagé, reste — et le dépassement dit en toutes lettres.
+function _jaugeBudgetProjet(proj) {
+  var budget = getProjBudgetEq(proj);
+  var engage = getProjDepenseEq(proj);
+  if (budget <= 0) {
+    return "<div style='background:#fff8e1;border:1px solid #fbbf24;border-radius:7px;padding:8px 11px;margin-bottom:10px;font-size:.74rem;color:#8a5a00'>"
+         + "<strong>Aucun budget d\u00e9fini</strong> pour ce projet \u2014 " + fmt(engage) + " FC d\u00e9j\u00e0 engag\u00e9s, sans r\u00e9f\u00e9rence pour juger.</div>";
+  }
+  var reste = budget - engage;
+  var pct = Math.min(100, Math.round(engage / budget * 100));
+  var depasse = reste < 0;
+  var couleur = depasse ? "#c0392b" : (pct >= 85 ? "#e67e22" : "#1e7d52");
+  var h = "<div style='background:" + (depasse ? "#fdf2f2" : "#f7fafd") + ";border:1px solid " + (depasse ? "#e8b4ad" : "#c5d8ed")
+        + ";border-radius:7px;padding:9px 11px;margin-bottom:10px'>";
+  h += "<div style='display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:.73rem;margin-bottom:5px'>"
+     + "<span style='color:#6b88a4'>Budget <strong style='color:var(--navy);font-family:DM Mono,monospace'>" + fmt(budget) + "</strong></span>"
+     + "<span style='color:#6b88a4'>Engag\u00e9 <strong style='color:" + couleur + ";font-family:DM Mono,monospace'>" + fmt(engage) + "</strong></span>"
+     + "<span style='color:#6b88a4'>" + (depasse ? "D\u00e9passement" : "Reste") + " <strong style='color:" + couleur + ";font-family:DM Mono,monospace'>"
+     + fmt(Math.abs(reste)) + "</strong></span></div>";
+  h += "<div style='height:7px;background:#e3edf7;border-radius:4px;overflow:hidden'>"
+     + "<div style='height:100%;width:" + pct + "%;background:" + couleur + "'></div></div>";
+  if (depasse) {
+    h += "<div style='font-size:.72rem;color:#7f1d1d;margin-top:6px'><strong>Budget d\u00e9pass\u00e9 de " + fmt(-reste)
+       + " FC.</strong> Les lignes ci-dessous incluent achats, travaux et main-d\'\u0153uvre, inject\u00e9s ou non.</div>";
+  } else if (pct >= 85) {
+    h += "<div style='font-size:.72rem;color:#8a5a00;margin-top:6px'>" + pct + "\u00a0% du budget engag\u00e9.</div>";
+  }
+  return h + "</div>";
 }
 
 function getProjBudgetEq(proj) {
