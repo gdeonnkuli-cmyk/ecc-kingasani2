@@ -3363,7 +3363,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
           <div id="eb-lignes-err" style="color:#c0392b;font-size:.72rem;margin-top:4px;display:none">Ajoutez au moins une ligne.</div>
         </div>
         <div class="fg" style="grid-column:1/-1">
-          <label>Pièce jointe (facture pro forma, image)</label>
+          <label>Pièce jointe (facture pro forma, image ou PDF — 8 Mo max)</label>
           <input type="file" id="eb-pj" accept="image/*,application/pdf" onchange="ebHandlePJ(this)" style="font-size:.78rem">
           <div id="eb-pj-preview" style="margin-top:6px;display:none">
             <img id="eb-pj-img" style="max-width:100%;max-height:120px;border-radius:6px;border:1px solid #c5d8ed">
@@ -15273,7 +15273,16 @@ function loadEBFromFirebase(callback) {
       snap.forEach(function(doc){ arr.push(doc.data()); });
       // Trier par date soumission décroissante
       arr.sort(function(a,b){ return (b.dateSoumis||"").localeCompare(a.dateSoumis||""); });
-      EBDB.demandes = arr;
+      // Remplacer la liste effaçait une demande soumise hors ligne, pas encore
+      // montée en base : elle disparaissait au rechargement. On garde ce qui
+      // n'existe qu'ici et on le remonte.
+      var vus = {}; arr.forEach(function(d){ if(d && d.num) vus[d.num] = true; });
+      var locales = (EBDB.demandes||[]).filter(function(d){ return d && d.num && !vus[d.num]; });
+      EBDB.demandes = arr.concat(locales);
+      if(locales.length && IS_CONFIGURED && gDb){
+        locales.forEach(function(d){ gDb.collection("eb_demandes").doc(d.num).set(d).catch(function(){}); });
+        showToast(locales.length+" demande(s) locale(s) remontée(s) en base.","ok");
+      }
       try { localStorage.setItem("ecc_eb", JSON.stringify(EBDB)); } catch(e){}
       if(callback) callback();
     })
@@ -15293,7 +15302,9 @@ function subscribeEB() {
       var incoming = JSON.stringify(arr);
       var current  = JSON.stringify(EBDB.demandes||[]);
       if(incoming === current){ if(!ready){ ready=true; } return; }
-      EBDB.demandes = arr;
+      var vus2 = {}; arr.forEach(function(d){ if(d && d.num) vus2[d.num] = true; });
+      var loc2 = (EBDB.demandes||[]).filter(function(d){ return d && d.num && !vus2[d.num]; });
+      EBDB.demandes = arr.concat(loc2);
       try { localStorage.setItem("ecc_eb", JSON.stringify(EBDB)); } catch(e){}
       if(!ready){ ready=true; return; } // ignorer le 1er chargement (historique)
       // Notifier l'admin d'une nouvelle demande
@@ -15320,16 +15331,57 @@ function saveEBDB() {
   try { localStorage.setItem("ecc_eb", JSON.stringify(EBDB)); } catch(e) {}
 }
 
+function _ebMaxLocal(year) {
+  var max = 0;
+  ((EBDB && EBDB.demandes) || []).forEach(function(d){
+    if(!d.num || d.num.indexOf("EB"+year) !== 0) return;
+    var v = parseInt(d.num.slice(4), 10) || 0;
+    if(v > max) max = v;
+  });
+  return max;
+}
+
+function _ebFormat(year, n) {
+  return "EB" + year + (n < 10 ? "00" : n < 100 ? "0" : "") + n;
+}
+
 function getNextEBNum() {
   var year = new Date().getFullYear().toString().slice(-2);
-  var existing = EBDB.demandes.filter(function(d){ return d.num && d.num.startsWith("EB"+year); });
-  var max = 0;
-  for(var i=0;i<existing.length;i++){
-    var n = parseInt(existing[i].num.slice(4)) || 0;
-    if(n > max) max = n;
-  }
-  var next = max + 1;
-  return "EB" + year + (next < 10 ? "00" : next < 100 ? "0" : "") + next;
+  return _ebFormat(year, _ebMaxLocal(year) + 1);
+}
+
+// Le numéro se calculait sur la seule liste locale, puis la demande était
+// écrite avec doc(num).set(). Deux personnes soumettant en même temps
+// obtenaient le même numéro, et la seconde écriture ÉCRASAIT la première :
+// une demande entière disparaissait sans trace. Le compteur central, déjà
+// utilisé pour les numéros de pièce, supprime la collision.
+function _attribuerNumEB(cb) {
+  var year = new Date().getFullYear().toString().slice(-2), fini = false;
+  function local(){ cb({ num: _ebFormat(year, _ebMaxLocal(year) + 1), provisoire: true }); }
+  if (!IS_CONFIGURED || !gDb || typeof gDb.runTransaction !== "function") { local(); return; }
+  // Hors ligne, une transaction ne se résout pas : au-delà de 5 s on laisse
+  // l'utilisateur soumettre, avec un numéro provisoire clairement signalé.
+  var minuteur = setTimeout(function(){ if(!fini){ fini = true; local(); } }, 5000);
+  var ref = gDb.collection("config").doc("compteurs");
+  gDb.runTransaction(function(tx){
+    return tx.get(ref).then(function(doc){
+      var d = (doc.exists && doc.data()) || {};
+      var eb = d.eb || {};
+      var v = (parseInt(eb[year], 10) || 0) + 1;
+      // Ne jamais reculer sous ce que la liste connue contient déjà.
+      var loc = _ebMaxLocal(year) + 1;
+      if (loc > v) v = loc;
+      eb[year] = v;
+      tx.set(ref, { eb: eb }, { merge: true });
+      return v;
+    });
+  }).then(function(v){
+    if(fini) return; fini = true; clearTimeout(minuteur);
+    cb({ num: _ebFormat(year, v), provisoire: false });
+  }).catch(function(){
+    if(fini) return; fini = true; clearTimeout(minuteur);
+    local();
+  });
 }
 
 function showTabEB(name) {
@@ -15375,10 +15427,19 @@ function ebCheckAutre() {
 var gEBPJData = null;
 var gEBPJName = "";
 
+// La pièce jointe était encodée en base64 et écrite DANS le document
+// Firestore. Un document Firestore est plafonné à 1 Mio, et le base64 gonfle
+// d'un tiers : un fichier d'un mégaoctet dépassait donc la limite et
+// l'enregistrement était refusé — la demande ne partait jamais en base.
+// Le fichier va désormais dans le stockage, comme les factures de projets, et
+// le document ne porte que son adresse.
+var gEBPJFile = null;
+
 function ebHandlePJ(input) {
   if(!input.files||!input.files[0]) return;
   var file = input.files[0];
-  if(file.size > 1024*1024) { showToast("Fichier trop lourd (max 1MB)","err"); return; }
+  if(file.size > 8*1024*1024) { showToast("Fichier trop lourd (max 8 Mo)","err"); return; }
+  gEBPJFile = file;
   gEBPJName = file.name;
   var reader = new FileReader();
   reader.onload = function(e) {
@@ -15431,14 +15492,19 @@ function submitEB() {
   if(errEl) errEl.style.display = "none";
 
   var structure = typeStruct==="departement" ? dept : (serv==="Autre" ? autreDesc : serv);
-  var num = getNextEBNum();
 
   // Calculer totaux depuis les lignes
   var totFC=0, totUSD=0;
   lignesValides.forEach(function(l){ totFC+=(l.qte||1)*(l.puCdf||0); totUSD+=(l.qte||1)*(l.puUsd||0); });
 
+  _attribuerNumEB(function(attr){ _finaliserEB(attr, typeStruct, structure, objet, desc, lignesValides, totFC, totUSD, urgence, dateSouh); });
+}
+
+function _finaliserEB(attr, typeStruct, structure, objet, desc, lignesValides, totFC, totUSD, urgence, dateSouh) {
+  var num = attr.num;
   var eb = {
     num: num,
+    numProvisoire: attr.provisoire || false,
     typeStruct: typeStruct,
     structure: structure,
     objet: objet,
@@ -15448,7 +15514,6 @@ function submitEB() {
     montantUSD: Math.round(totUSD*100)/100,
     urgence: urgence,
     dateSouhait: dateSouh,
-    pj: gEBPJData || null,
     pjName: gEBPJName || "",
     soumisBy: gCurrentUser ? gCurrentUser.nom : "",
     soumisEmail: gCurrentUser ? gCurrentUser.email : "",
@@ -15463,13 +15528,39 @@ function submitEB() {
   saveEBDB();
   pushNotif("📋","Nouvelle Expression de Besoin",num+" - "+objet+" par "+eb.soumisBy,"eb");
   notifyAdmin("📋","Nouvelle Expression de Besoin",num+" - "+objet,"eb");
-  logAudit("CREATE","EB",num+" — "+objet);
-  showToast("Demande "+num+" soumise avec succès !","ok");
+  logAudit("CREATE","EB",num+" — "+objet+(attr.provisoire?" (numéro provisoire)":""));
+  showToast("Demande "+num+" soumise"+(attr.provisoire?" avec un numéro PROVISOIRE (hors ligne)":" avec succès")+" !",
+            attr.provisoire?"warn":"ok");
+  var fichier = gEBPJFile;
   resetEBForm();
-  
-  // Save to Firebase if configured
-  if(IS_CONFIGURED && gDb) {
-    gDb.collection("eb_demandes").doc(num).set(eb).catch(function(e){ console.warn("EB Firebase:", e); showToast("⚠️ Demande enregistrée localement seulement.","warn"); });
+
+  function ecrire(){
+    if(!IS_CONFIGURED || !gDb) return;
+    gDb.collection("eb_demandes").doc(num).set(eb).catch(function(e){
+      console.warn("EB Firebase:", e);
+      showToast("⚠️ Demande enregistrée localement seulement : "+(e.message||"écriture refusée"),"err");
+    });
+  }
+
+  // La pièce jointe part dans le stockage ; son adresse seule rejoint le
+  // document. Un envoi qui échoue ne doit pas emporter la demande avec lui.
+  if(fichier && gStorage){
+    var chemin = "eb/"+num+"/"+Date.now()+"_"+fichier.name.replace(/[^a-zA-Z0-9._-]/g,"_");
+    showToast("Envoi de la pièce jointe…","");
+    gStorage.ref().child(chemin).put(fichier)
+      .then(function(snap){ return snap.ref.getDownloadURL(); })
+      .then(function(url){
+        eb.pjUrl = url; eb.pjChemin = chemin;
+        for(var i=0;i<EBDB.demandes.length;i++) if(EBDB.demandes[i].num===num){ EBDB.demandes[i]=eb; break; }
+        saveEBDB(); ecrire(); renderEBMesListe();
+      })
+      .catch(function(e){
+        showToast("⚠️ Pièce jointe non envoyée ("+e.message+"). La demande est enregistrée sans elle.","warn");
+        ecrire();
+      });
+  } else {
+    if(fichier && !gStorage) showToast("Stockage indisponible : la demande part sans sa pièce jointe.","warn");
+    ecrire();
   }
 }
 
@@ -15486,7 +15577,7 @@ function resetEBForm() {
   // Ajouter une ligne vide par défaut
   ebAjouterLigne();
 
-  gEBPJData = null; gEBPJName = "";
+  gEBPJData = null; gEBPJName = ""; gEBPJFile = null;
   var prev = document.getElementById("eb-pj-preview");
   if(prev) prev.style.display = "none";
   var pjInput = document.getElementById("eb-pj");
@@ -15596,8 +15687,12 @@ function renderEBAdminListe() {
     html += "<div style='font-size:.72rem;color:#6b88a4;margin:3px 0'>"+escH(eb.structure)+" • Par : <strong>"+escH(eb.soumisBy)+"</strong> • "+eb.dateSoumis+" "+ebUrgenceLabel(eb.urgence)+"</div>";
     html += "<div style='font-size:.74rem;color:#1a2a3a;margin-bottom:5px'>"+escH(eb.description)+"</div>";
     if(eb.montantFC||eb.montantUSD) html += "<div style='font-size:.73rem;color:#1f6fad;font-weight:600;margin-bottom:5px'>Montant estimé : "+(eb.montantFC?fmt(eb.montantFC)+" FC":"")+(eb.montantFC&&eb.montantUSD?" / ":"")+(eb.montantUSD?eb.montantUSD+" USD":"")+"</div>";
-    if(eb.pj && eb.pj.startsWith("data:image")) html += "<img src='"+eb.pj+"' style='max-width:100%;max-height:100px;border-radius:6px;border:1px solid #c5d8ed;margin-bottom:6px'>";
-    else if(eb.pj) html += "<div style='font-size:.72rem;color:#6b88a4;margin-bottom:5px'>📎 "+escH(eb.pjName)+"</div>";
+    // pjUrl : nouvelle forme, le fichier vit dans le stockage. pj : ancienne
+    // forme en base64 dans le document, encore lisible pour les demandes déjà
+    // enregistrées.
+    if(eb.pjUrl) html += "<div style='font-size:.72rem;margin-bottom:5px'><a href='"+escH(eb.pjUrl)+"' target='_blank' rel='noopener' style='color:#1f6fad;font-weight:600'>\ud83d\udcce "+escH(eb.pjName||"Pièce jointe")+"</a></div>";
+    else if(eb.pj && eb.pj.indexOf("data:image")===0) html += "<img src='"+eb.pj+"' style='max-width:100%;max-height:100px;border-radius:6px;border:1px solid #c5d8ed;margin-bottom:6px'>";
+    else if(eb.pj || eb.pjName) html += "<div style='font-size:.72rem;color:#6b88a4;margin-bottom:5px'>📎 "+escH(eb.pjName||"")+"</div>";
     if(eb.statut==="attente"||eb.statut==="traitement"){
       html += "<div style='margin-top:6px'>";
       html += "<div style='display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap'>";
@@ -15626,8 +15721,27 @@ function renderEBAdminListe() {
 }
 
 function validateEB(num, newStatut) {
-  if(gCurrentUser && gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.","err"); return; }
+  if(!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.","err"); return; }
   loadEBDB();
+  // Approuver une seconde fois réinjectait les lignes dans le culte : la même
+  // dépense comptée deux fois, sans rien pour le signaler. Une demande déjà
+  // tranchée exige une confirmation, et le report en dépense n'a lieu qu'une
+  // fois — il est marqué.
+  var dejaEB = null;
+  for(var z=0;z<EBDB.demandes.length;z++) if(EBDB.demandes[z].num===num){ dejaEB=EBDB.demandes[z]; break; }
+  if(dejaEB && dejaEB.statut && dejaEB.statut !== "attente"){
+    showModal("Demande d\u00e9j\u00e0 trait\u00e9e",
+      num + " a \u00e9t\u00e9 " + (dejaEB.statut === "approuve" ? "approuv\u00e9e" : "rejet\u00e9e")
+      + (dejaEB.valideBy ? " par " + dejaEB.valideBy : "")
+      + (dejaEB.dateDecision ? " le " + dejaEB.dateDecision : "") + "."
+      + (dejaEB.injecteFinances
+          ? "\n\nSes lignes ont d\u00e9j\u00e0 \u00e9t\u00e9 port\u00e9es en d\u00e9pense le " + (dejaEB.injecteFinances.date||"?")
+            + " : elles ne le seront pas une seconde fois."
+          : "")
+      + "\n\nRevenir sur cette d\u00e9cision ?",
+      function(){ closeModal(); doApproveEB(num, newStatut); });
+    return;
+  }
   // P4 : Vérifier si une EB similaire existe déjà (même objet, même structure, statut approuvé)
   var eb0 = null; for(var k=0;k<EBDB.demandes.length;k++) if(EBDB.demandes[k].num===num){ eb0=EBDB.demandes[k]; break; }
   if(newStatut==="approuve" && eb0){
@@ -15657,16 +15771,27 @@ function doApproveEB(num, newStatut) {
       EBDB.demandes[i].valideBy = gCurrentUser ? gCurrentUser.nom : "";
       EBDB.demandes[i].dateDecision = getTodayStr();
       if(montantReel>0) EBDB.demandes[i].montantReel = montantReel;
-      var ecart = (eb ? (eb.montantFC||0) : 0) - montantReel;
-      if(ecart!==0 && newStatut==="approuve") EBDB.demandes[i].ecartMontant = ecart;
+      // eb valait encore null à cet endroit : l'écart se calculait donc
+      // toujours comme 0 − montantReel, soit l'opposé du montant réel, jamais
+      // la différence avec le montant demandé. Les notes portées en dépense
+      // annonçaient un dépassement du montant entier.
+      if(newStatut==="approuve" && montantReel>0){
+        var ecart = (EBDB.demandes[i].montantFC||0) - montantReel;
+        if(ecart!==0) EBDB.demandes[i].ecartMontant = ecart;
+        else delete EBDB.demandes[i].ecartMontant;
+      }
       eb = EBDB.demandes[i];
       break;
     }
   }
   saveEBDB();
 
-  // Si approuvé → basculer dans les dépenses Finances (dep-ot)
-  if(newStatut === "approuve" && eb) {
+  // Si approuvé → basculer dans les dépenses Finances (dep-ot), une seule fois.
+  if(newStatut === "approuve" && eb && eb.injecteFinances){
+    showToast("D\u00e9cision enregistr\u00e9e. Les lignes avaient d\u00e9j\u00e0 \u00e9t\u00e9 port\u00e9es en d\u00e9pense le "
+      + (eb.injecteFinances.date||"?") + ".", "warn");
+  } else if(newStatut === "approuve" && eb) {
+    eb.injecteFinances = { date: getTodayStr(), par: (gCurrentUser && gCurrentUser.email) || "" };
     var ecartMsg = (eb.ecartMontant && eb.ecartMontant!==0) ? " | Écart: "+fmt(Math.abs(eb.ecartMontant))+" FC "+(eb.ecartMontant>0?"économisé":"dépassé") : "";
     var note = "EB approuvée le "+getTodayStr()+(comment?" | "+comment:"")+ecartMsg;
     var depOt = document.getElementById("dep-ot");
@@ -15720,12 +15845,27 @@ function doApproveEB(num, newStatut) {
   }
 
   renderEBAdminListe();
-  
+
+  // saveEBDB() plus haut s'exécute AVANT que la marque d'injection ne soit
+  // posée : sans cette seconde sauvegarde, la marque ne survivait pas au
+  // rechargement de la liste, et une seconde approbation réinjectait les
+  // lignes. On enregistre donc après, et on remonte la marque en base.
+  saveEBDB();
   if(IS_CONFIGURED && gDb) {
-    gDb.collection("eb_demandes").doc(num).update({
+    var maj = {
       statut: newStatut, commentaire: comment,
       valideBy: gCurrentUser?gCurrentUser.nom:"", dateDecision: getTodayStr()
-    }).catch(function(e){ console.warn("EB Firebase update:", e); });
+    };
+    if(eb){
+      if(eb.montantReel != null)   maj.montantReel = eb.montantReel;
+      if(eb.ecartMontant != null)  maj.ecartMontant = eb.ecartMontant;
+      if(eb.injecteFinances)       maj.injecteFinances = eb.injecteFinances;
+    }
+    gDb.collection("eb_demandes").doc(num).update(maj)
+      .catch(function(e){
+        console.warn("EB Firebase update:", e);
+        showToast("D\u00e9cision enregistr\u00e9e localement seulement : "+(e.message||"\u00e9criture refus\u00e9e"),"err");
+      });
   }
 }
 
@@ -15796,7 +15936,10 @@ function printEB(num) {
   html += '</div>';
   
   // PJ
-  if(eb.pj && eb.pj.startsWith("data:image")){
+  if(eb.pjUrl){
+    html += '<div class="sec"><div class="lbl">Pièce jointe</div>';
+    html += '<div style="font-size:11px">'+escH(eb.pjName||"")+' — '+escH(eb.pjUrl)+'</div></div>';
+  } else if(eb.pj && eb.pj.indexOf("data:image")===0){
     html += '<div class="section-title">Pièce jointe</div>';
     html += '<img src="'+eb.pj+'" class="pj-img"><br>';
   }
