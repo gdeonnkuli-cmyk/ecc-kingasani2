@@ -3163,6 +3163,8 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
         <button class="btn btn-p" onclick="printProgramme('cf')">🖨️ CF</button>
         <button class="btn btn-p" onclick="printProgramme('cl')">🖨️ CL</button>
         <button class="btn btn-d" onclick="resetProgramme()">🗑️ Nouveau</button>
+        <button class="btn btn-o" onclick="document.getElementById('prog-import-fichier').click()">📥 Importer</button>
+        <input type="file" id="prog-import-fichier" accept="application/json,.json" style="display:none" onchange="importerProgrammes(this)">
       </div>
     </div>
     <div class="card-body">
@@ -21103,6 +21105,164 @@ function toggleTypeService() {
     if(clBlock) clBlock.style.display = "";
     if(titre) titre.textContent = "Effectif du culte — CL (Lingalaphone)";
   }
+}
+
+// ══ IMPORT DE PROGRAMMES ═══════════════════════════════════════════════════
+// Ressaisir à la main des programmes déjà rédigés ailleurs est une perte de
+// temps et une source de fautes de frappe. L'import lit un fichier JSON —
+// produit à partir des documents existants — et le confronte à l'historique
+// avant d'écrire quoi que ce soit.
+//
+// Rien n'est appliqué sans aperçu : ce qui sera créé, ce qui sera remplacé,
+// et ce qui est refusé. Un programme déjà saisi n'est jamais écrasé en
+// silence : il apparaît comme « remplacement » et le comptable décide.
+var PROG_CHAMPS_TXT = ["theme","sainteCene","moderateur","orateur","scH","scF","scJ","scV"];
+var PROG_CHAMPS_NUM = ["cfH","cfF","cfJ","cfE","cfV","clH","clF","clJ","clE","clV"];
+
+// Un objet importé n'est pas un programme : il faut qu'il en prenne la forme
+// exacte, sans quoi les écrans plus loin trouveront des champs absents.
+function _normaliserProgrammeImporte(o) {
+  var date = String((o && o.date) || "").trim();
+  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(date)) return null;
+  var type = String((o.typeService || "CF")).toUpperCase();
+  if (type !== "CF" && type !== "CL") type = "CF";
+  var prog = {
+    id: "prog_" + date.replace(/-/g, "") + "_" + type,
+    date: date, typeService: type, points: [],
+    par: (o.par || (gCurrentUser ? gCurrentUser.nom : "")) + " (import)",
+    savedAt: o.savedAt || new Date().toISOString()
+  };
+  PROG_CHAMPS_TXT.forEach(function(k){ prog[k] = o[k] != null ? String(o[k]) : ""; });
+  PROG_CHAMPS_NUM.forEach(function(k){ prog[k] = parseInt(o[k], 10) || 0; });
+  var pts = (o.points && o.points.length) ? o.points : [];
+  for (var i = 0; i < 15; i++) prog.points.push(pts[i] != null ? String(pts[i]) : "");
+  return prog;
+}
+
+function importerProgrammes(input) {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.", "err"); input.value = ""; return; }
+  var f = input && input.files && input.files[0];
+  input.value = "";
+  if (!f) return;
+  if (f.size > 4 * 1024 * 1024) { showToast("Fichier trop lourd (max 4 Mo).", "err"); return; }
+
+  var lecteur = new FileReader();
+  lecteur.onload = function(e) {
+    var brut;
+    try { brut = JSON.parse(e.target.result); }
+    catch (err) { showToast("Fichier illisible : " + (err.message || "JSON invalide"), "err"); return; }
+    var liste = (brut && brut.programmes) ? brut.programmes
+              : (Object.prototype.toString.call(brut) === "[object Array]" ? brut : null);
+    if (!liste || !liste.length) { showToast("Aucun programme dans ce fichier.", "err"); return; }
+    _apercuImportProgrammes(liste);
+  };
+  lecteur.onerror = function(){ showToast("Lecture du fichier impossible.", "err"); };
+  lecteur.readAsText(f);
+}
+
+function _apercuImportProgrammes(liste) {
+  if (!EFFDB.programmes) EFFDB.programmes = [];
+  var nouveaux = [], remplaces = [], refuses = [], vus = {};
+
+  liste.forEach(function(o, i) {
+    var prog = _normaliserProgrammeImporte(o);
+    if (!prog) { refuses.push("ligne " + (i + 1) + " : date absente ou mal form\u00e9e"); return; }
+    var cle = prog.date + "_" + prog.typeService;
+    if (vus[cle]) { refuses.push(prog.date + " " + prog.typeService + " : en double dans le fichier"); return; }
+    vus[cle] = true;
+
+    var existant = null, memeDate = 0;
+    EFFDB.programmes.forEach(function(x){
+      if (x.date !== prog.date) return;
+      memeDate++;
+      if ((x.typeService || "CF") === prog.typeService) existant = x;
+    });
+    // La règle de saisie vaut aussi pour l'import : deux cultes par date au plus.
+    if (!existant && memeDate >= 2) {
+      refuses.push(prog.date + " " + prog.typeService + " : cette date porte d\u00e9j\u00e0 deux cultes");
+      return;
+    }
+    (existant ? remplaces : nouveaux).push({ prog: prog, avant: existant });
+  });
+
+  if (!nouveaux.length && !remplaces.length) {
+    showModal("Rien \u00e0 importer",
+      "Aucun programme exploitable.\n\n" + refuses.slice(0, 10).join("\n"),
+      function(){ closeModal(); });
+    return;
+  }
+
+  var h = "<div style='font-size:.82rem;line-height:1.55'>";
+  h += "<p style='margin:0 0 10px'><strong>" + nouveaux.length + " programme(s) \u00e0 cr\u00e9er</strong>"
+     + (remplaces.length ? ", <strong>" + remplaces.length + " \u00e0 remplacer</strong>" : "")
+     + (refuses.length ? ", " + refuses.length + " \u00e9cart\u00e9(s)" : "") + ".</p>";
+
+  if (remplaces.length) {
+    h += "<div style='background:#fff8e1;border-left:3px solid #f0a500;border-radius:6px;padding:9px 11px;margin-bottom:10px;color:#8a5a00;font-size:.76rem'>"
+       + "<strong>Ces dates portent d\u00e9j\u00e0 un programme.</strong> L'import le remplacera. "
+       + "D\u00e9cochez ce que vous voulez conserver tel quel.</div>";
+  }
+
+  function ligne(x, remplace) {
+    var p = x.prog;
+    var cf = p.cfH + p.cfF + p.cfJ + p.cfE + p.cfV;
+    var cl = p.clH + p.clF + p.clJ + p.clE + p.clV;
+    return "<label style='display:flex;gap:9px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--border);cursor:pointer'>"
+      + "<input type='checkbox' class='imp-prog' data-cle='" + p.date + "_" + p.typeService + "' checked style='width:auto;margin-top:3px'>"
+      + "<span><strong>" + escH(p.date) + "</strong> <span style='font-size:.72rem;color:var(--muted)'>" + p.typeService + "</span>"
+      + (remplace ? " <span style='color:#8a5a00;font-size:.7rem;font-weight:700'>remplacement</span>" : "")
+      + "<br><span style='font-size:.75rem'>" + escH(p.theme || "sans th\u00e8me") + "</span>"
+      + "<br><span style='font-size:.7rem;color:var(--muted)'>"
+      + (p.orateur ? "Orateur : " + escH(p.orateur) + " \u00b7 " : "")
+      + (cf || cl ? "effectif CF " + cf + " / CL " + cl : "effectif non renseign\u00e9")
+      + "</span></span></label>";
+  }
+  nouveaux.forEach(function(x){ h += ligne(x, false); });
+  remplaces.forEach(function(x){ h += ligne(x, true); });
+
+  if (refuses.length) {
+    h += "<div style='margin-top:10px;font-size:.73rem;color:#8a5a00'><strong>\u00c9cart\u00e9(s) :</strong><br>"
+       + refuses.slice(0, 12).map(escH).join("<br>")
+       + (refuses.length > 12 ? "<br>\u2026 et " + (refuses.length - 12) + " autre(s)" : "") + "</div>";
+  }
+  h += "</div>";
+
+  var tous = nouveaux.concat(remplaces);
+  showModalHTML("Importer des programmes de culte", h, function(){
+    _appliquerImportProgrammes(tous);
+  }, "Importer les programmes coch\u00e9s");
+}
+
+function _appliquerImportProgrammes(tous) {
+  var coches = {};
+  var cases = document.querySelectorAll(".imp-prog");
+  for (var i = 0; i < cases.length; i++) if (cases[i].checked) coches[cases[i].getAttribute("data-cle")] = true;
+
+  var faits = 0, majs = 0;
+  tous.forEach(function(x) {
+    var p = x.prog;
+    if (!coches[p.date + "_" + p.typeService]) return;
+    var idx = -1;
+    for (var j = 0; j < EFFDB.programmes.length; j++) {
+      if (EFFDB.programmes[j].date === p.date
+          && (EFFDB.programmes[j].typeService || "CF") === p.typeService) { idx = j; break; }
+    }
+    if (idx >= 0) { EFFDB.programmes[idx] = p; majs++; }
+    else { EFFDB.programmes.unshift(p); faits++; }
+  });
+
+  if (!faits && !majs) { closeModal(); showToast("Aucun programme coch\u00e9.", "warn"); return; }
+
+  if (!EFFDB.seances)   EFFDB.seances   = [];
+  if (!EFFDB.visiteurs) EFFDB.visiteurs = [];
+  saveEffDB(EFFDB);
+  closeModal();
+  if (typeof renderHistProgramme === "function") renderHistProgramme();
+  if (typeof renderDashboardCulte === "function") renderDashboardCulte();
+  if (typeof logAudit === "function") {
+    logAudit("IMPORT", "Culte", faits + " programme(s) cr\u00e9\u00e9(s) et " + majs + " remplac\u00e9(s) par import");
+  }
+  showToast(faits + " programme(s) cr\u00e9\u00e9(s)" + (majs ? ", " + majs + " remplac\u00e9(s)" : "") + ".", "ok");
 }
 
 function saveProgramme() {
