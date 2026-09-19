@@ -13295,6 +13295,7 @@ function launchApp() {
   chargerBareme();
   chargerReports();
   chargerExercicesClos();
+  chargerBudgetPostes();
   logConnexion(); // Enregistrer la visite/connexion pour l'historique admin
   document.getElementById("li-btn").textContent = "Se connecter";
   document.getElementById("unm").textContent = gCurrentUser.nom;
@@ -20350,6 +20351,192 @@ var BUDGET_RECETTES = [
   { key:"r_autres", label:"Autres recettes de culte",      icon:"➕", rub:"*" }
 ];
 
+// ── Postes de recette ajoutes a la main ───────────────────────────────────
+// Le poste attrape-tout n'est pas une fin en soi : c'est un signal. Quand il
+// porte des montants, c'est qu'une rubrique est saisie au culte sous un
+// libelle que le budget ne connait pas. Plutot que de deviner la liste, le
+// module dit lesquels il n'a pas reconnu, et laisse soit en faire un poste,
+// soit les rattacher a un poste existant — car le cas le plus frequent n'est
+// pas une nouvelle categorie, mais une variante d'orthographe.
+//
+// Stocke dans budget_db/_postes, deja ouvert a tout compte authentifie : le
+// service finances gere ses postes sans passer par l'administrateur.
+var gBgtPostesSup = [];   // [{key,label,icon}]
+var gBgtAlias = {};       // { "libelle normalise": "cle de poste" }
+
+function _bgtInvaliderIndex() { _bgtRubIndex = null; }
+
+function chargerBudgetPostes(cb) {
+  try {
+    var l = JSON.parse(localStorage.getItem("ecc_bgt_postes") || "{}");
+    gBgtPostesSup = l.postes || []; gBgtAlias = l.alias || {};
+  } catch (e) { gBgtPostesSup = []; gBgtAlias = {}; }
+  _bgtInvaliderIndex();
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(); return; }
+  gDb.collection("budget_db").doc("_postes").get()
+    .then(function(doc) {
+      if (doc.exists && doc.data()) {
+        var d = doc.data();
+        gBgtPostesSup = d.postes || [];
+        gBgtAlias = d.alias || {};
+        _bgtInvaliderIndex();
+        try { localStorage.setItem("ecc_bgt_postes", JSON.stringify({ postes: gBgtPostesSup, alias: gBgtAlias })); } catch (e) {}
+      }
+      if (cb) cb();
+    })
+    .catch(function() { if (cb) cb(); });
+}
+function _enregistrerBudgetPostes(cb) {
+  try { localStorage.setItem("ecc_bgt_postes", JSON.stringify({ postes: gBgtPostesSup, alias: gBgtAlias })); } catch (e) {}
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(); return; }
+  gDb.collection("budget_db").doc("_postes")
+    .set({ postes: gBgtPostesSup, alias: gBgtAlias, updatedBy: gCurrentUser ? gCurrentUser.email : "" })
+    .then(function() { if (cb) cb(); })
+    .catch(function(e) { showSyncError(e, "enregistrement des postes de budget"); if (cb) cb(); });
+}
+
+// La liste effective : les postes d'origine, les postes ajoutes, puis
+// l'attrape-tout qui reste toujours en dernier.
+function _bgtRecettes() {
+  var fixes = BUDGET_RECETTES.filter(function(p) { return p.key !== "r_autres"; });
+  var fin = BUDGET_RECETTES.filter(function(p) { return p.key === "r_autres"; });
+  return fixes.concat(gBgtPostesSup, fin);
+}
+
+// Libelles de recette qu'aucun poste ne reconnait, sur la periode de
+// suggestion. C'est ce que l'attrape-tout contient, nomme.
+function _bgtLibellesNonMappes(ym, horizon) {
+  var mois = _bgtMoisAvant(ym, horizon || gBgtHorizon).concat([ym]);
+  var dans = {}; mois.forEach(function(m) { dans[m] = true; });
+  var t = getTaux(), agg = {}, hist = gHistCache || [];
+  for (var i = 0; i < hist.length; i++) {
+    var h = hist[i];
+    if (!dans[((h.meta && h.meta.date) || "").substring(0, 7)]) continue;
+    var lignes = [].concat(h.cf || [], h.cl || []);
+    for (var j = 0; j < lignes.length; j++) {
+      var r = lignes[j]; if (!r) continue;
+      var lib = r.l || r.lib || ""; if (!lib) continue;
+      if (_bgtPosteDeRubrique(lib) !== "r_autres") continue;
+      var cle = _bgtNormLib(lib);
+      if (!agg[cle]) agg[cle] = { libelle: lib, norm: cle, total: 0, n: 0 };
+      agg[cle].total += (parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * t;
+      agg[cle].n++;
+    }
+  }
+  var out = [];
+  for (var k in agg) out.push(agg[k]);
+  out.sort(function(a, b) { return b.total - a.total; });
+  return out;
+}
+
+function _bgtCleDepuisLibelle(lib) {
+  var base = "r_x_" + _bgtNormLib(lib).replace(/\s+/g, "_").slice(0, 28);
+  var pris = {}; _bgtRecettes().forEach(function(p) { pris[p.key] = true; });
+  var k = base, n = 2;
+  while (pris[k]) { k = base + "_" + n; n++; }
+  return k;
+}
+
+function _carteLibellesNonMappes(ym) {
+  var liste = _bgtLibellesNonMappes(ym);
+  var peut = canEditBudget();
+  var h = "";
+  if (gBgtPostesSup.length) {
+    h += "<div style='font-size:.73rem;color:#6b88a4;margin-top:8px'>Postes ajoutés : ";
+    h += gBgtPostesSup.map(function(p) {
+      return "<span style='display:inline-block;background:#eef4fb;border-radius:11px;padding:2px 9px;margin:2px 3px 2px 0'>" + escH(p.label)
+        + (peut ? " <a href='javascript:void(0)' onclick=\"retirerPosteBudget('" + p.key + "')\" style='color:#c0392b;text-decoration:none;font-weight:700' title='Retirer ce poste'>✕</a>" : "")
+        + "</span>";
+    }).join("");
+    h += "</div>";
+  }
+  if (!liste.length) {
+    if (!gBgtPostesSup.length) return "";
+    return h;
+  }
+  h += "<div style='background:#fff8e1;border-left:3px solid #f0a500;border-radius:0 6px 6px 0;padding:9px 11px;margin-top:8px'>";
+  h += "<div style='font-size:.76rem;font-weight:700;color:#b45309;margin-bottom:5px'>"
+     + liste.length + " libellé(s) de recette hors poste sur les " + gBgtHorizon + " derniers mois</div>";
+  h += "<div style='font-size:.72rem;color:#8a6220;margin-bottom:7px'>Ces montants tombent dans « Autres recettes de culte ». "
+     + "Faites-en un poste à part, ou rattachez-les à un poste existant quand il s'agit d'une variante d'écriture.</div>";
+  h += "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:.75rem'>";
+  h += "<tr style='background:rgba(255,255,255,.6)'><th style='padding:4px 7px;text-align:left'>Libellé saisi au culte</th>"
+     + "<th style='padding:4px 7px;text-align:right'>Cumul FC</th><th style='padding:4px 7px;text-align:center'>Lignes</th><th></th></tr>";
+  liste.forEach(function(x) {
+    h += "<tr style='border-bottom:1px solid rgba(180,83,9,.15)'>"
+      + "<td style='padding:4px 7px;font-weight:600'>" + escH(x.libelle) + "</td>"
+      + "<td style='padding:4px 7px;text-align:right;font-family:DM Mono,monospace;font-weight:700'>" + fmt(x.total) + "</td>"
+      + "<td style='padding:4px 7px;text-align:center'>" + x.n + "</td>"
+      + "<td style='padding:3px 7px;text-align:right'>"
+      + (peut ? "<button class='btn btn-o btn-sm' style='padding:2px 8px' onclick=\"classerLibelleBudget('" + escH(x.libelle).replace(/'/g, "\\'") + "')\">Classer</button>" : "")
+      + "</td></tr>";
+  });
+  h += "</table></div></div>";
+  return h;
+}
+
+function classerLibelleBudget(lib) {
+  if (!canEditBudget()) { showToast("Accès refusé.", "err"); return; }
+  var opts = _bgtRecettes().filter(function(p) { return p.key !== "r_autres"; })
+    .map(function(p) { return "<option value='" + p.key + "'>" + escH(p.label) + "</option>"; }).join("");
+  var h = "<div style='font-size:.84rem;color:#33506e'>";
+  h += "<p style='margin-bottom:10px'>Libellé saisi au culte : <b>" + escH(lib) + "</b></p>";
+  h += "<label style='display:block;border:1px solid var(--border);border-radius:7px;padding:9px 11px;margin-bottom:7px;cursor:pointer'>"
+     + "<input type='radio' name='bgt-classe' value='neuf' checked> <b>En faire un poste de budget</b>"
+     + "<div style='font-size:.73rem;color:#6b88a4;margin-left:22px'>Une nouvelle ligne apparaîtra dans le tableau des recettes.</div></label>";
+  h += "<label style='display:block;border:1px solid var(--border);border-radius:7px;padding:9px 11px;margin-bottom:7px;cursor:pointer'>"
+     + "<input type='radio' name='bgt-classe' value='alias'> <b>Rattacher à un poste existant</b>"
+     + "<div style='font-size:.73rem;color:#6b88a4;margin-left:22px'>À choisir quand c'est une variante d'écriture du même poste.</div>"
+     + "<select id='bgt-classe-cible' style='width:100%;margin-top:6px;padding:5px 8px;border:1px solid #c5d8ed;border-radius:6px;font-size:.82rem'>" + opts + "</select></label>";
+  h += "<div style='font-size:.73rem;color:#6b88a4'>Le réalisé de tous les mois, passés comme à venir, suivra immédiatement ce classement.</div>";
+  h += "</div>";
+  showModalHTML("Classer un libellé de recette", h, function() {
+    var choix = document.querySelector("input[name='bgt-classe']:checked");
+    var mode = choix ? choix.value : "neuf";
+    var norm = _bgtNormLib(lib);
+    if (mode === "alias") {
+      var cible = document.getElementById("bgt-classe-cible");
+      var key = cible ? cible.value : "";
+      if (!key) { showToast("Choisissez un poste.", "err"); return; }
+      gBgtAlias[norm] = key;
+    } else {
+      var k = _bgtCleDepuisLibelle(lib);
+      gBgtPostesSup.push({ key: k, label: lib, icon: "💵" });
+      gBgtAlias[norm] = k;
+    }
+    _bgtInvaliderIndex();
+    _enregistrerBudgetPostes(function() {
+      closeModal();
+      showToast(mode === "alias" ? "Libellé rattaché." : "Poste « " + lib + " » créé.", "ok");
+      if (typeof logAudit === "function") logAudit("BUDGET", "Postes", (mode === "alias" ? "Rattachement" : "Création") + " du libellé " + lib);
+      var sel = document.getElementById("budget-mois");
+      if (sel) renderBudgetTable(sel.value, BUDGETDB[sel.value] || {});
+    });
+  }, "Valider");
+}
+
+function retirerPosteBudget(key) {
+  if (!canEditBudget()) { showToast("Accès refusé.", "err"); return; }
+  var p = null;
+  gBgtPostesSup.forEach(function(x) { if (x.key === key) p = x; });
+  if (!p) return;
+  showModal("Retirer le poste « " + p.label + " » ?",
+    "Ses montants retourneront dans « Autres recettes de culte », et le libellé reparaîtra dans la liste des non classés. "
+    + "Le budget déjà saisi pour ce poste reste enregistré et revient si vous le recréez.",
+    function() {
+      gBgtPostesSup = gBgtPostesSup.filter(function(x) { return x.key !== key; });
+      for (var n in gBgtAlias) if (gBgtAlias[n] === key) delete gBgtAlias[n];
+      _bgtInvaliderIndex();
+      _enregistrerBudgetPostes(function() {
+        closeModal();
+        showToast("Poste retiré.", "warn");
+        if (typeof logAudit === "function") logAudit("BUDGET", "Postes", "Retrait du poste " + p.label);
+        var sel = document.getElementById("budget-mois");
+        if (sel) renderBudgetTable(sel.value, BUDGETDB[sel.value] || {});
+      });
+    });
+}
+
 function _bgtNormLib(s) {
   return String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
     .replace(/[^a-z0-9]+/g, " ").trim();
@@ -20359,6 +20546,10 @@ function _bgtPosteDeRubrique(lib) {
   if (!_bgtRubIndex) {
     _bgtRubIndex = {};
     BUDGET_RECETTES.forEach(function(p) { if (p.rub !== "*") _bgtRubIndex[_bgtNormLib(p.rub)] = p.key; });
+    // Les rattachements decides a la main priment sur la table d'origine :
+    // c'est ce qui permet de corriger une variante d'ecriture sans toucher au
+    // code, et de defaire ce rattachement plus tard.
+    for (var n in gBgtAlias) _bgtRubIndex[n] = gBgtAlias[n];
   }
   return _bgtRubIndex[_bgtNormLib(lib)] || "r_autres";
 }
@@ -20463,7 +20654,7 @@ function appliquerSuggestions(quoi) {
       if (s.montant > 0) { el.value = s.montant; n++; }
     });
   }
-  if (quoi !== "dep") poser("rec", BUDGET_RECETTES, "bgt-");
+  if (quoi !== "dep") poser("rec", _bgtRecettes(), "bgt-");
   if (quoi !== "rec") poser("dep", BUDGET_POSTES, "bgt-");
   updateBudgetSynthese();
   showToast(n ? n + " poste(s) pré-rempli(s). Ajustez puis enregistrez." : "Aucune suggestion exploitable sur la période.", n ? "ok" : "warn");
@@ -20582,7 +20773,8 @@ function renderBudgetTable(ym, postes) {
   html += _bgtBarreSuggestions(ym);
 
   html += "<div class='sec-lbl'>📈 Recettes prévues</div>";
-  html += _bgtTable("rec", BUDGET_RECETTES, ym, postes);
+  html += _bgtTable("rec", _bgtRecettes(), ym, postes);
+  html += _carteLibellesNonMappes(ym);
   html += "<div class='sec-lbl' style='margin-top:14px'>📉 Dépenses prévues</div>";
   html += _bgtTable("dep", BUDGET_POSTES, ym, postes);
 
@@ -20640,7 +20832,7 @@ function updateBudgetSynthese() {
     return { prevu: totP, realise: totR };
   }
 
-  var R = bloc("rec", BUDGET_RECETTES, "rec");
+  var R = bloc("rec", _bgtRecettes(), "rec");
   var D = bloc("dep", BUDGET_POSTES, "dep");
   var syn = document.getElementById("budget-synthese"); if (!syn) return;
 
@@ -20674,7 +20866,7 @@ function saveBudget() {
   // Recettes et depenses vivent dans le meme document : les cles de recette
   // portent le prefixe r_, il n'y a donc pas de collision, mais les deux
   // listes doivent etre parcourues sous peine d'effacer l'une des deux.
-  BUDGET_RECETTES.concat(BUDGET_POSTES).forEach(function(p) {
+  _bgtRecettes().concat(BUDGET_POSTES).forEach(function(p) {
     var elC = document.getElementById("bgt-" + p.key), elU = document.getElementById("bgtu-" + p.key);
     if (!elC && !elU) return;
     var cdf = elC ? (parseFloat(elC.value) || 0) : 0;
@@ -20706,7 +20898,7 @@ function copierBudgetPrecedent() {
     .then(function(doc) {
       if (!doc.exists) { showToast("Aucun budget trouvé pour " + pym + ".", "warn"); return; }
       var postes = doc.data().postes || {};
-      BUDGET_RECETTES.concat(BUDGET_POSTES).forEach(function(p) {
+      _bgtRecettes().concat(BUDGET_POSTES).forEach(function(p) {
         var n = _bgtNorm(postes[p.key]);
         var elC = document.getElementById("bgt-" + p.key);  if (elC) elC.value = n.cdf || "";
         var elU = document.getElementById("bgtu-" + p.key); if (elU) elU.value = n.usd || "";
@@ -20749,7 +20941,7 @@ function printBudget() {
       + "<td style='padding:6px 9px;text-align:right;font-family:monospace;color:" + (te >= 0 ? "#86efac" : "#fca5a5") + "'>" + fmt(Math.abs(te)) + (te < 0 ? " ▲" : " ▼") + "</td><td></td></tr>";
     return { rows: rows, prevu: tP, realise: tR };
   }
-  var R = corps("rec", BUDGET_RECETTES);
+  var R = corps("rec", _bgtRecettes());
   var D = corps("dep", BUDGET_POSTES);
   var soldePrevu = R.prevu - D.prevu, soldeReel = R.realise - D.realise;
 
@@ -20947,7 +21139,7 @@ function exportGlobalXLS() {
       var prevu=_bgtPrevuFC(postes[bp.key]), realise=getRealiseMois(ym,bp.key);
       bgtRows.push([ym,'Dépense',bp.label,nb.cdf,nb.usd,nb.taux||'',prevu,realise,prevu-realise,prevu>0?Math.round(realise/prevu*100):0]);
     });
-    BUDGET_RECETTES.forEach(function(bp){
+    _bgtRecettes().forEach(function(bp){
       var nb=_bgtNorm(postes[bp.key]);
       var prevu=_bgtPrevuFC(postes[bp.key]), realise=getRealiseRecetteMois(ym,bp.key);
       bgtRows.push([ym,'Recette',bp.label,nb.cdf,nb.usd,nb.taux||'',prevu,realise,realise-prevu,prevu>0?Math.round(realise/prevu*100):0]);
@@ -21051,7 +21243,7 @@ function buildCSVText() {
       var nb=_bgtNorm(postes[bp.key]);
       bgtRows.push([ym,'Dépense',bp.label,nb.cdf,nb.usd,nb.taux||'',_bgtPrevuFC(postes[bp.key]),getRealiseMois(ym,bp.key)]);
     });
-    BUDGET_RECETTES.forEach(function(bp){
+    _bgtRecettes().forEach(function(bp){
       var nb=_bgtNorm(postes[bp.key]);
       bgtRows.push([ym,'Recette',bp.label,nb.cdf,nb.usd,nb.taux||'',_bgtPrevuFC(postes[bp.key]),getRealiseRecetteMois(ym,bp.key)]);
     });
