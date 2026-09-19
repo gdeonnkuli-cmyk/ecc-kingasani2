@@ -1935,6 +1935,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
   <button class="tab" id="tab-btn-historique" onclick="showTab('historique')">Historique</button>
   <button class="tab" id="tab-btn-dashboard" onclick="showTab('dashboard')">Dashboard</button>
   <button class="tab" id="tab-btn-export" onclick="showTab('export')">Export</button>
+  <button class="tab" id="tab-btn-exercices" onclick="showTab('exercices')">📚 Exercices clos</button>
   <button class="tab" id="tab-btn-budget" onclick="showTab('budget')">💰 Budget</button>
 </nav>
 <div class="main" id="fin-main" style="display:none">
@@ -2239,6 +2240,10 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
 
 <!-- ADMIN -->
 <!-- ========== PAGE BUDGET ========== -->
+<div class="page" id="page-exercices" style="display:none">
+  <div id="ex-body"><p style="color:var(--muted);font-size:.82rem">Chargement de l'archive…</p></div>
+</div>
+
 <div class="page" id="page-budget" style="display:none">
   <div class="card">
     <div class="card-hdr" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
@@ -6362,7 +6367,7 @@ function clearHist() {
 function showTab(name) {
   var finMain = document.getElementById("fin-main");
   if (finMain && finMain.style.display === "none") finMain.style.display = "block";
-  var pages=["recettes","depenses","solde","distrib","historique","dashboard","export","budget","admin"];
+  var pages=["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","budget","admin"];
   for(var i=0;i<pages.length;i++){
     var pg=document.getElementById("page-"+pages[i]);
     var tb=document.getElementById("tab-btn-"+pages[i]);
@@ -6388,6 +6393,7 @@ function showTab(name) {
   if(name==="dashboard")buildDashboard();
   if(name==="distrib")calcDistrib();
   if(name==="admin")renderAdmin();
+  if(name==="exercices") renderExercices();
   if(name==="budget") initBudgetPage();
   recalc();
 }
@@ -9297,14 +9303,15 @@ var FINANCE_TABS = [
   {key:"distrib",    label:"Distribution"},
   {key:"historique", label:"Historique"},
   {key:"dashboard",  label:"Dashboard"},
-  {key:"export",     label:"Export"}
+  {key:"export",     label:"Export"},
+  {key:"exercices",  label:"Exercices clos"}
 ];
 
 // Permissions par defaut selon role legacy
 function getDefaultPerms(role) {
-  if(role==="admin")    return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export"], projTabs:["achat","travaux","mo"]};
-  if(role==="finances") return {modules:["finances","social","seminaire","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export"]};
-  if(role==="tresorier") return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer","budget"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export"], readOnly:true};
+  if(role==="admin")    return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices"], projTabs:["achat","travaux","mo"]};
+  if(role==="finances") return {modules:["finances","social","seminaire","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices"]};
+  if(role==="tresorier") return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer","budget"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices"], readOnly:true};
   return {modules:["finances","eb","annonces","projets"], financeTabs:["recettes","depenses"]};
 }
 
@@ -9347,7 +9354,7 @@ function _normaliserPerms(perms, role) {
 // Recuperer les permissions effectives d un compte
 function getPerms(ac) {
   if(!ac) return _normaliserPerms(null, "");
-  if(ac.role==="admin") return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export"], projTabs:["achat","travaux","mo"]};
+  if(ac.role==="admin") return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices"], projTabs:["achat","travaux","mo"]};
   if(ac.perms) return _normaliserPerms(ac.perms, ac.role);
   return _normaliserPerms(getDefaultPerms(ac.role), ac.role);
 }
@@ -13139,6 +13146,7 @@ function launchApp() {
   chargerClotures();
   chargerSycebnl();
   chargerBareme();
+  chargerReports();
   logConnexion(); // Enregistrer la visite/connexion pour l'historique admin
   document.getElementById("li-btn").textContent = "Se connecter";
   document.getElementById("unm").textContent = gCurrentUser.nom;
@@ -18907,6 +18915,736 @@ function exporterVisiteurs(){
 
 
 // ================================================
+// == EXERCICES CLOS — ARCHIVE 2025 ==
+// ================================================
+// L'exercice 2025 n'a pas ete saisi dans l'application : il existe sous la
+// forme d'un rapport signe par les Services Finances. On l'archive donc tel
+// quel, en dur dans le code, plutot que dans la base : un document signe ne
+// doit pas pouvoir deriver. Les montants sont ceux du document, y compris
+// lorsqu'ils sont errones ; les ecarts sont recalcules et affiches a part.
+// Convention de signe des depenses : positif = sortie de caisse.
+var EXERCICE_2025 = {
+  exercice: "2025",
+  titre: "Rapport annuel des finances — Exercice 2025",
+  entite: "ECC / 13e CBFC — Église locale de Kingasani 2",
+  source: "Rapport signé des Services Finances (14 pages)",
+  dateDocument: "2025-01-20",
+  signataires: ["Pasteur Titulaire", "Directeur Financier — Fr GÉDÉON NKULI"],
+  tauxUSD: null,
+  provisionNonDecaissee: 530400,
+  recettes: [
+    { compte:"7000000", libelle:"REVENUS", lignes:[
+      ["Actions de Grâce", 5932950, 1827000],
+      ["Collecte Enveloppe Budget", 32000, 21000],
+      ["Cotisation cartes de membre", 1178400, 28000],
+      ["Dîmes", 9121000, 1036000],
+      ["Offrandes Diacre", 659400, 84000],
+      ["Offrandes famille", 1052550, 231000],
+      ["Offrandes Ordinaires", 3743350, 679000],
+      ["Recette nette des séminaires", 449700, 56000],
+      ["Réport 2024 / Affecté", 570500, 0]
+    ]},
+    { compte:"7010000", libelle:"Cotisations des adhérents", lignes:[
+      ["Cotisations des adhérents", 30000, 2240000]
+    ]},
+    { compte:"7041000", libelle:"Dons", lignes:[
+      ["Dons", 0, 1673000]
+    ]},
+    { compte:"7048000", libelle:"Autres revenus liés à la générosité", lignes:[
+      ["Cotisations Ration Pasteur", 1562000, 2443000],
+      ["Offrandes Prophète", 3013450, 1246000],
+      ["Offrandes sociales", 636250, 49000]
+    ]},
+    { compte:"7060000", libelle:"Revenus des manifestations", lignes:[
+      ["Appel des fonds", 981900, 1025500],
+      ["Collecte Enveloppe", 4393750, 3528000],
+      ["Compétition NOËL", 519500, 315000],
+      ["MATONDO", 1778850, 5588800],
+      ["NSISANI", 688100, 2016000]
+    ]},
+    { compte:"7080000", libelle:"Autres revenus", lignes:[
+      ["MATONDO District", 0, 504000],
+      ["MATONDO Région", 0, 546000],
+      ["Opération banc", 455000, 112000],
+      ["Opération tôle", 382000, 812000],
+      ["Prestation Branches", 79550, 0]
+    ]},
+    { compte:"7588000", libelle:"Autres produits divers", lignes:[
+      ["Cotisation achat pagne", 41500, 0],
+      ["Ventes des chaises cassées", 9000, 0],
+      ["Recettes annuelles des branches", 10825600, 4649400],
+      ["Réport 2024", 12500, 0]
+    ]}
+  ],
+  depenses: [
+    { num:"1", titre:"Administration", cdfPublie:14782700, usdPublie:3664100, totalPublie:18446800, comptes:[
+      { compte:"6041000", libelle:"Matières consommables", lignes:[
+        ["Achat consommables", 366000, 0],
+        ["Achat enveloppes", 20000, 0],
+        ["Cocktail comité de gestion", 80500, 0],
+        ["Rafraîchissement", 420700, 0]
+      ]},
+      { compte:"6050000", libelle:"Autres achats", lignes:[
+        ["Achat ampoules pour l'église", 41000, 0],
+        ["Achat médicaments", 3500, 0],
+        ["Achat pagne", 15000, 0]
+      ]},
+      { compte:"6051000", libelle:"Fournitures non stockables — Eau", lignes:[
+        ["Intervention REGIDESO", 10000, 0],
+        ["Facture REGIDESO", 656900, 0]
+      ]},
+      { compte:"6052000", libelle:"Fournitures non stockables — Électricité", lignes:[
+        ["Facture SNEL", 214100, 0]
+      ]},
+      { compte:"6053000", libelle:"Fournitures non stockables — Autres", lignes:[
+        ["Achat carburant", 1341150, 56000]
+      ]},
+      { compte:"6054000", libelle:"Fournitures d'entretien non stockables", lignes:[
+        ["Achat piles micros", 48000, 0]
+      ]},
+      { compte:"6068000", libelle:"Autres activités", lignes:[
+        ["Achat cartes pour membres", 25000, 0],
+        ["Coût de séminaire", 0, 67500],
+        ["Frais de saisie", 45000, 0],
+        ["Frais d'organisation conférence", 0, 84000],
+        ["Impressions", 90000, 0]
+      ]},
+      { compte:"6240000", libelle:"Entretien, réparation, remise en état", lignes:[
+        ["Achat huile moteur", 397500, 14700],
+        ["Entretien", 37500, 28000],
+        ["Réparation", 268250, 0]
+      ]},
+      { compte:"6248000", libelle:"Autres entretiens et réparations", lignes:[
+        ["Nettoyage", 20000, 0]
+      ]},
+      { compte:"6270000", libelle:"Publicité, publications, relations", lignes:[
+        ["Accueil visiteur", 160500, 0],
+        ["Collation Pasteurs visiteurs", 80000, 0]
+      ]},
+      { compte:"6288000", libelle:"Autres frais de télécommunications", lignes:[
+        ["Achat crédit téléphone", 4500, 0]
+      ]},
+      { compte:"6330000", libelle:"Frais de formation", lignes:[
+        ["Frais de formation financiers", 100000, 0]
+      ]},
+      { compte:"6500000", libelle:"Autres charges", lignes:[
+        ["Frais sainte cène", 55000, 0]
+      ]},
+      { compte:"6510000", libelle:"Créances et assimilées", note:"Mouvements de trésorerie, pas des charges", lignes:[
+        ["Emprunt", -32000, 224000],
+        ["Prêt", 60000, 420000],
+        ["Remboursement", 76000, -168000]
+      ]},
+      { compte:"6515000", libelle:"Autres débiteurs", note:"Dépenses des branches, consolidées en une ligne", lignes:[
+        ["Dépenses annuelles des branches", 10178600, 2937900]
+      ]}
+    ]},
+    { num:"2", titre:"Primes & Collations", cdfPublie:23570550, usdPublie:7497000, totalPublie:31866450, comptes:[
+      { compte:"6324000", libelle:"Honoraires", lignes:[
+        ["Collation Orateur", 3032700, 518000]
+      ]},
+      { compte:"6327000", libelle:"Rémunérations des autres prestataires", lignes:[
+        ["Collation Équipe technique", 239000, 0],
+        ["Collation Financiers", 1582350, 0],
+        ["Collation Intendant", 95000, 0],
+        ["Collation Modérateurs", 433700, 0],
+        ["Collation Protocoles", 319500, 0],
+        ["Collation Secrétaires", 926200, 0],
+        ["Commission MATONDO", 160000, 392000],
+        ["Frais comité de gestion", 47000, 0],
+        ["Intendant", 50000, 0],
+        ["Délégations", 44000, 0],
+        ["Indemnité transport", 80500, 0],
+        ["Motivation pour mobilisateur", 0, 168000],
+        ["Restauration Chorale", 35000, 0]
+      ]},
+      { compte:"6610000", libelle:"Rémunérations directes versées au personnel", lignes:[
+        ["Salaire sentinelle", 1128500, 539000]
+      ]},
+      { compte:"6630000", libelle:"Indemnités forfaitaires versées au personnel", lignes:[
+        ["60 % Dîmes destinés au BP", 7470400, 0],
+        ["Colis Noël Bureau Pastoral", 250000, 0],
+        ["Collation Pasteurs", 4048100, 0],
+        ["Cotisation dîner des Pasteurs / HB", 25000, 0],
+        ["Quote-part MATONDO", 0, 728000],
+        ["Ration Pasteurs", 1483200, 0],
+        ["Régul Dîmes", 1267400, 0]
+      ]},
+      { compte:"6631000", libelle:"Indemnités de logement", lignes:[
+        ["Loyers", 362000, 5152000]
+      ]},
+      { compte:"6638000", libelle:"Autres indemnités et avantages divers", lignes:[
+        ["Transport sentinelle", 491000, 0]
+      ]},
+      { compte:"6515000", libelle:"Autres débiteurs", note:"Même compte que dans la rubrique 1 — exclu des colonnes de devise du sous-total publié", lignes:[
+        ["Dépenses effectuées SÉMINAIRES", 606600, 0],
+        ["Frais de retrait M-Pesa", 0, 11200],
+        ["Intervention", 56000, 0],
+        ["Majorette", 66300, 0],
+        ["Motivation MP", 22800, 0],
+        ["Transfert au DDC", 36000, 0]
+      ]}
+    ]},
+    { num:"3", titre:"Transports", cdfPublie:401500, usdPublie:0, totalPublie:401500, comptes:[
+      { compte:"6100000", libelle:"Transports", lignes:[["Transport", 50500, 0]] },
+      { compte:"6160000", libelle:"Transports de plis", lignes:[["Transport des colis", 20000, 0]] },
+      { compte:"6180000", libelle:"Autres frais de transport", lignes:[["Frais de transport courses", 331000, 0]] }
+    ]},
+    { num:"4", titre:"Travaux et Investissements", cdfPublie:6401450, usdPublie:7953400, totalPublie:14354850, comptes:[
+      { compte:"2180000", libelle:"Autres droits et valeurs incorporels", note:"Compte de classe 2 — immobilisation, pas une charge", lignes:[
+        ["Paiement dossier parcellaire", 0, 560000],
+        ["Transmission du document parcellaire", 5000, 0]
+      ]},
+      { compte:"2350000", libelle:"Aménagements de bureaux et assimilés", note:"Compte de classe 2 — immobilisation, pas une charge", lignes:[
+        ["Achat 2 sacs ciment / posage vitre", 61000, 0],
+        ["Achat clous de tôles", 66000, 168000],
+        ["Achat lot des tôles", 2494350, 2226000],
+        ["Main-d'œuvre montage vitre", 28000, 0],
+        ["Transport planches", 0, 56000],
+        ["Travaux de posage vitre", 110000, 0],
+        ["Solde main-d'œuvre menuisier", 0, 138600],
+        ["Posage vitre", 28000, 0],
+        ["Travaux d'aménagement du Bureau Finance", 0, 308000],
+        ["Travaux de fabrication bancs de l'Église", 236000, 212800],
+        ["Travaux du Bureau Finance", 28000, 0]
+      ]},
+      { compte:"2478000", libelle:"Autres agencements, aménagements", note:"Compte de classe 2 — immobilisation, pas une charge", lignes:[
+        ["Achat mètres cubes bois (1)", 0, 1960000],
+        ["Achat mètres cubes bois (2)", 884100, 2156000],
+        ["Coût de fabrication 20 bancs", 922000, 0],
+        ["Frais de manutention", 30000, 0],
+        ["Main-d'œuvre fabrication bancs", 160000, 0],
+        ["Transport planches", 63000, 0],
+        ["Manutention bois", 100000, 0],
+        ["Frais de transport livraison 10 bancs", 125000, 0],
+        ["Transport expédition bancs", 125000, 0],
+        ["Acompte opérations bancs", 461000, 0],
+        ["Frais de transport livraison 20 bancs", 190000, 0],
+        ["Main-d'œuvre fabrication bancs (2)", 285000, 168000]
+      ]}
+    ]},
+    { num:"5", titre:"Contributions aux instances et assises", cdfPublie:7260150, usdPublie:2748200, totalPublie:10008350, comptes:[
+      { compte:"6348000", libelle:"Autres redevances", lignes:[
+        ["Comité exécutif District", 32500, 84000],
+        ["Cotisation Journées Spéciales", 1233700, 1345400],
+        ["Cotisation Budget District", 487400, 0],
+        ["Cotisation Budget Région", 4170850, 0],
+        ["Dîmes District", 1055500, 0],
+        ["Pâques District", 30000, 0],
+        ["Quote-part District", 150200, 0],
+        ["Quote-part Région", 75000, 0],
+        ["Régul ARO", 0, 268800],
+        ["Versement MATONDO District", 0, 504000],
+        ["Versement MATONDO Région", 0, 546000],
+        ["Frais œcuménisme", 25000, 0]
+      ]}
+    ]},
+    { num:"6", titre:"Accueil, assistance sociale et soins médicaux", cdfPublie:339750, usdPublie:92400, totalPublie:432150, comptes:[
+      { compte:"6640000", libelle:"Charges sociales", lignes:[
+        ["Assistance sociale et médicale", 144500, 64400]
+      ]},
+      { compte:"6680000", libelle:"Autres charges sociales", lignes:[
+        ["Assistances sociales", 195250, 28000]
+      ]}
+    ]},
+    { num:"7", titre:"Provisions", cdfPublie:530400, usdPublie:0, totalPublie:530400, comptes:[
+      { compte:"6591000", libelle:"Provision pour paiement arriérés de dettes", note:"Aucune sortie de caisse", lignes:[
+        ["Provision pour paiement arriérés de dettes", 530400, 0]
+      ]}
+    ]}
+  ],
+  synthese: {
+    eLocale:  { report:570500, recettes:62800500, depenses:62924000, solde:447000 },
+    branches: { report:12500,  recettes:15475000, depenses:13116500, solde:2371000 },
+    generale: { report:583000, recettes:78275500, depenses:76040500, solde:2818000 }
+  },
+  realisations: [
+    "Paiement régulier des budgets dûs au Secrétariat Régional et au District",
+    "Paiement régulier des factures Eau & Électricité",
+    "Paiement régulier des charges locatives",
+    "Participation aux imprévus et demandes de la hiérarchie",
+    "Organisation réussie des MATONDO",
+    "Financement des travaux de rénovation du bâtiment de la paroisse"
+  ]
+};
+
+// --- Agregats recalcules a partir du detail ---
+function _ex25SommeLignes(lignes) {
+  var cdf = 0, usd = 0;
+  for (var i = 0; i < lignes.length; i++) { cdf += lignes[i][1] || 0; usd += lignes[i][2] || 0; }
+  return { cdf: cdf, usd: usd, total: cdf + usd };
+}
+function _ex25Compte(c) { return _ex25SommeLignes(c.lignes); }
+function _ex25Rubrique(r) {
+  var cdf = 0, usd = 0;
+  for (var i = 0; i < r.comptes.length; i++) { var s = _ex25Compte(r.comptes[i]); cdf += s.cdf; usd += s.usd; }
+  return { cdf: cdf, usd: usd, total: cdf + usd };
+}
+function _ex25TotalRecettes() {
+  var cdf = 0, usd = 0;
+  EXERCICE_2025.recettes.forEach(function(c) { var s = _ex25Compte(c); cdf += s.cdf; usd += s.usd; });
+  return { cdf: cdf, usd: usd, total: cdf + usd };
+}
+function _ex25TotalDepenses() {
+  var cdf = 0, usd = 0;
+  EXERCICE_2025.depenses.forEach(function(r) { var s = _ex25Rubrique(r); cdf += s.cdf; usd += s.usd; });
+  return { cdf: cdf, usd: usd, total: cdf + usd };
+}
+
+// --- Controles : on recalcule, on ne corrige pas le document signe ---
+function _ex25Controles() {
+  var out = [];
+  var tr = _ex25TotalRecettes(), td = _ex25TotalDepenses();
+  var syn = EXERCICE_2025.synthese;
+
+  function ctrl(intitule, attendu, calcule, gravite, note) {
+    out.push({ intitule: intitule, attendu: attendu, calcule: calcule,
+               ecart: Math.round(calcule - attendu), ok: Math.round(calcule - attendu) === 0,
+               gravite: gravite || "info", note: note || "" });
+  }
+
+  ctrl("Total des recettes (report inclus)", syn.generale.report + syn.generale.recettes, tr.total, "bloquant");
+  ctrl("Total des dépenses", syn.generale.depenses, td.total, "bloquant");
+  ctrl("Solde reporté en 2026",
+       syn.generale.solde,
+       syn.generale.report + syn.generale.recettes - syn.generale.depenses, "bloquant");
+  ctrl("Recettes église locale + branches",
+       syn.generale.recettes, syn.eLocale.recettes + syn.branches.recettes, "bloquant");
+  ctrl("Dépenses église locale + branches",
+       syn.generale.depenses, syn.eLocale.depenses + syn.branches.depenses, "bloquant");
+
+  EXERCICE_2025.depenses.forEach(function(r) {
+    var s = _ex25Rubrique(r);
+    if (s.total !== r.totalPublie) {
+      ctrl("Rubrique " + r.num + " — total", r.totalPublie, s.total, "bloquant");
+    }
+    if (s.cdf !== r.cdfPublie || s.usd !== r.usdPublie) {
+      out.push({ intitule: "Rubrique " + r.num + " — colonnes de devise",
+                 attendu: r.cdfPublie + " CDF / " + r.usdPublie + " USD converti",
+                 calcule: s.cdf + " CDF / " + s.usd + " USD converti",
+                 ecart: (s.cdf - r.cdfPublie) + (s.usd - r.usdPublie), ok: false,
+                 gravite: "presentation",
+                 note: "Le total de la rubrique est juste ; seules les deux colonnes de devise du sous-total sont sous-évaluées." });
+    }
+  });
+  return out;
+}
+
+// --- Report a nouveau : la seule donnee mutable, stockee en base ---
+// config/reports = { "2026": { base, montant, poseLe, posePar } }
+var gReports = {};
+var REPORT_BASES = {
+  publie:     { label:"Solde du rapport signé", detail:"Le chiffre publié en page 13. Fidèle au document, mais inclut une provision de 530 400 FC qui n'est pas sortie de caisse." },
+  tresorerie: { label:"Trésorerie réelle", detail:"Solde publié majoré de la provision non décaissée. C'est l'encaisse effective au 31/12/2025." },
+  eglise:     { label:"Église locale seule", detail:"Hors branches. À retenir si les branches tiennent leur propre caisse en dehors de l'application." }
+};
+function getMontantReport(base) {
+  var s = EXERCICE_2025.synthese;
+  if (base === "tresorerie") return s.generale.solde + EXERCICE_2025.provisionNonDecaissee;
+  if (base === "eglise")     return s.eLocale.solde;
+  return s.generale.solde;
+}
+function chargerReports(cb) {
+  try { gReports = JSON.parse(localStorage.getItem("ecc_reports") || "{}"); } catch(e) { gReports = {}; }
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(); return; }
+  gDb.collection("config").doc("reports").get()
+    .then(function(doc) {
+      if (doc.exists && doc.data() && doc.data().annees) {
+        gReports = doc.data().annees;
+        try { localStorage.setItem("ecc_reports", JSON.stringify(gReports)); } catch(e) {}
+      }
+      if (cb) cb();
+    })
+    .catch(function() { if (cb) cb(); });
+}
+function _enregistrerReports(cb) {
+  try { localStorage.setItem("ecc_reports", JSON.stringify(gReports)); } catch(e) {}
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(); return; }
+  gDb.collection("config").doc("reports").set({ annees: gReports }, { merge: true })
+    .then(function() { if (cb) cb(); })
+    .catch(function(e) { showSyncError(e, "enregistrement du report à nouveau"); if (cb) cb(); });
+}
+// Consomme par les rapports 2026 : jamais additionne aux recettes.
+function getReportEntrant(annee) {
+  var r = gReports[String(annee)];
+  if (!r || !r.montant) return null;
+  return r;
+}
+
+function poserReport2026() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.", "err"); return; }
+  var el = document.querySelector("input[name='ex25-base']:checked");
+  var base = el ? el.value : "publie";
+  var montant = getMontantReport(base);
+  showModal("Reporter " + fmt(montant) + " FC sur 2026 ?",
+    "Base retenue : " + REPORT_BASES[base].label + ". Ce montant apparaîtra comme solde d'ouverture dans les rapports 2026, "
+    + "sans jamais être additionné aux recettes de l'exercice. Vous pourrez le modifier ou le retirer.",
+    function() {
+      gReports["2026"] = { base: base, montant: montant, depuis: "2025",
+                           poseLe: new Date().toISOString(), posePar: (gCurrentUser.email || "") };
+      _enregistrerReports(function() {
+        closeModal();
+        showToast("Report à nouveau 2026 posé : " + fmt(montant) + " FC.", "ok");
+        if (typeof logAudit === "function") logAudit("REPORT", "Finances", "Report à nouveau 2026 = " + montant + " FC (base " + base + ")");
+        renderExercices();
+      });
+    });
+}
+function retirerReport2026() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.", "err"); return; }
+  showModal("Retirer le report à nouveau 2026 ?",
+    "Les rapports 2026 n'afficheront plus de solde d'ouverture. L'archive 2025 n'est pas touchée.",
+    function() {
+      delete gReports["2026"];
+      _enregistrerReports(function() {
+        closeModal();
+        showToast("Report à nouveau retiré.", "warn");
+        if (typeof logAudit === "function") logAudit("REPORT", "Finances", "Retrait du report à nouveau 2026");
+        renderExercices();
+      });
+    });
+}
+
+// --- Verrouillage de l'exercice : reutilise le mecanisme de cloture mensuelle ---
+function _ex25MoisVerrouilles() {
+  var n = 0;
+  for (var m = 1; m <= 12; m++) { if (gClotures["2025-" + (m < 10 ? "0" : "") + m]) n++; }
+  return n;
+}
+function verrouillerExercice2025() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.", "err"); return; }
+  showModal("Verrouiller les 12 mois de 2025 ?",
+    "Aucun culte ne pourra plus être enregistré ni supprimé sur l'exercice 2025. "
+    + "C'est ce qui garantit que l'archive reste la seule source pour cette année. Réversible mois par mois.",
+    function() {
+      for (var m = 1; m <= 12; m++) {
+        var ym = "2025-" + (m < 10 ? "0" : "") + m;
+        if (!gClotures[ym]) gClotures[ym] = { le: new Date().toISOString(), par: (gCurrentUser.email || "") };
+      }
+      _enregistrerClotures(function() {
+        closeModal();
+        showToast("Exercice 2025 verrouillé.", "ok");
+        if (typeof logAudit === "function") logAudit("CLOTURE", "Finances", "Verrouillage des 12 mois de l'exercice 2025");
+        renderExercices();
+      });
+    });
+}
+
+// --- Affichage ---
+var gEx25Deploye = {};
+function basculerRubrique2025(cle) {
+  gEx25Deploye[cle] = !gEx25Deploye[cle];
+  renderExercices();
+}
+function _ex25LigneHTML(lib, cdf, usd, note) {
+  return "<tr style='border-bottom:1px solid #f1f5f9'>"
+    + "<td style='padding:4px 8px;padding-left:22px;color:#33506e'>" + escH(lib)
+    + (note ? "<span style='color:#b45309;font-size:.68rem'> — " + escH(note) + "</span>" : "") + "</td>"
+    + "<td style='padding:4px 8px;text-align:right'>" + fmt(cdf) + "</td>"
+    + "<td style='padding:4px 8px;text-align:right'>" + fmt(usd) + "</td>"
+    + "<td style='padding:4px 8px;text-align:right;font-weight:700'>" + fmt(cdf + usd) + "</td></tr>";
+}
+function renderExercices() {
+  var cont = document.getElementById("ex-body"); if (!cont) return;
+  var E = EXERCICE_2025, syn = E.synthese;
+  var tr = _ex25TotalRecettes(), td = _ex25TotalDepenses();
+  var ctrls = _ex25Controles();
+  var ecarts = ctrls.filter(function(c) { return !c.ok; });
+  var estAdminUser = !!(gCurrentUser && gCurrentUser.role === "admin");
+  var h = "";
+
+  // En-tete de l'archive
+  h += "<div class='card'><div class='card-hdr' style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px'>"
+    + "<h2>" + escH(E.titre) + "</h2>"
+    + "<div style='display:flex;gap:6px;flex-wrap:wrap'>"
+    + "<button class='btn btn-o btn-sm' onclick='printExercice2025()'>🖨️ Imprimer</button>"
+    + "<button class='btn btn-o btn-sm' onclick='exporterExercice2025()'>📊 Excel</button>"
+    + "</div></div><div class='card-body'>";
+  h += "<div style='background:#eef4fb;border-radius:7px;padding:9px 11px;font-size:.76rem;color:#33506e;margin-bottom:10px'>"
+    + "<b>Archive en lecture seule.</b> " + escH(E.source) + ". Les montants sont ceux du document signé ; "
+    + "l'application les recalcule mais ne les corrige pas. Cet exercice n'a pas été saisi culte par culte : "
+    + "il n'alimente ni le journal SYCEBNL, ni le rapprochement des cotisations, ni les statistiques d'effectif."
+    + "</div>";
+  h += "<div class='stat-grid' style='margin-bottom:4px'>"
+    + "<div class='stat'><div class='stat-lbl'>Report 2024</div><div class='stat-val' style='color:#6b88a4'>" + fmt(syn.generale.report) + "</div></div>"
+    + "<div class='stat'><div class='stat-lbl'>Recettes 2025</div><div class='stat-val' style='color:#15803d'>" + fmt(syn.generale.recettes) + "</div></div>"
+    + "<div class='stat'><div class='stat-lbl'>Dépenses 2025</div><div class='stat-val' style='color:#c0392b'>" + fmt(syn.generale.depenses) + "</div></div>"
+    + "<div class='stat'><div class='stat-lbl'>Solde au 31/12</div><div class='stat-val' style='color:#1a3a5c'>" + fmt(syn.generale.solde) + "</div></div>"
+    + "</div></div></div>";
+
+  // Controles
+  h += "<div class='card' style='margin-top:12px'><div class='card-hdr'><h2>Contrôles arithmétiques</h2></div><div class='card-body'>";
+  if (!ecarts.length) {
+    h += "<p style='color:#15803d;font-size:.82rem;font-weight:700'>✓ Les " + ctrls.length + " contrôles passent : le document est arithmétiquement cohérent.</p>";
+  } else {
+    h += "<p style='font-size:.8rem;color:#33506e;margin-bottom:8px'>" + (ctrls.length - ecarts.length) + " contrôle(s) sur " + ctrls.length + " passent. Écarts relevés :</p>";
+    ecarts.forEach(function(c) {
+      var coul = c.gravite === "bloquant" ? "#c0392b" : "#b45309";
+      h += "<div style='border-left:3px solid " + coul + ";padding:6px 10px;margin-bottom:6px;background:#fdf6ee;border-radius:0 6px 6px 0'>"
+        + "<div style='font-weight:700;font-size:.8rem;color:" + coul + "'>" + escH(c.intitule) + "</div>"
+        + "<div style='font-size:.75rem;color:#33506e'>Publié : " + escH(String(c.attendu)) + " · Recalculé : " + escH(String(c.calcule)) + "</div>"
+        + (c.note ? "<div style='font-size:.72rem;color:#6b88a4;margin-top:2px'>" + escH(c.note) + "</div>" : "")
+        + "</div>";
+    });
+  }
+  h += "<div style='font-size:.73rem;color:#6b88a4;margin-top:8px;line-height:1.5'>"
+    + "• Le document porte la date du <b>20 janvier 2025</b> pour l'exercice 2025 : il s'agit du 20 janvier 2026.<br>"
+    + "• Le <b>taux de conversion USD n'est indiqué nulle part</b> ; la colonne « convers USD » est déjà en francs.<br>"
+    + "• Le report 2024 (" + fmt(syn.generale.report) + " FC) est logé dans les recettes : ce n'est pas un produit de l'exercice.<br>"
+    + "• Les comptes de classe 2 (2180000, 2350000, 2478000 = " + fmt(_ex25Rubrique(E.depenses[3]).total) + " FC) sont des immobilisations, pas des charges.<br>"
+    + "• La provision de " + fmt(E.provisionNonDecaissee) + " FC n'est pas sortie de caisse."
+    + "</div></div></div>";
+
+  // Recettes
+  h += "<div class='card' style='margin-top:12px'><div class='card-hdr'><h2>Recettes — " + fmt(tr.total) + " FC</h2></div><div class='card-body'>";
+  h += "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:.78rem'>";
+  h += "<tr style='background:var(--pale)'><th style='padding:6px 8px;text-align:left'>Compte / libellé</th><th style='padding:6px 8px;text-align:right'>CDF</th><th style='padding:6px 8px;text-align:right'>Convers. USD</th><th style='padding:6px 8px;text-align:right'>Total</th></tr>";
+  E.recettes.forEach(function(c) {
+    var s = _ex25Compte(c), cle = "r" + c.compte, ouvert = !!gEx25Deploye[cle];
+    h += "<tr style='background:#f8fafd;border-bottom:1px solid #e5eaf0;cursor:pointer' onclick=\"basculerRubrique2025('" + cle + "')\">"
+      + "<td style='padding:6px 8px;font-weight:800;color:#1a3a5c'>" + (ouvert ? "▾" : "▸") + " " + escH(c.compte) + " — " + escH(c.libelle) + "</td>"
+      + "<td style='padding:6px 8px;text-align:right;font-weight:700'>" + fmt(s.cdf) + "</td>"
+      + "<td style='padding:6px 8px;text-align:right;font-weight:700'>" + fmt(s.usd) + "</td>"
+      + "<td style='padding:6px 8px;text-align:right;font-weight:800;color:#15803d'>" + fmt(s.total) + "</td></tr>";
+    if (ouvert) c.lignes.forEach(function(l) { h += _ex25LigneHTML(l[0], l[1], l[2]); });
+  });
+  h += "<tr style='background:#1a3a5c;color:#fff'><td style='padding:7px 8px;font-weight:800'>TOTAL RECETTES (report 2024 inclus)</td>"
+    + "<td style='padding:7px 8px;text-align:right;font-weight:800'>" + fmt(tr.cdf) + "</td>"
+    + "<td style='padding:7px 8px;text-align:right;font-weight:800'>" + fmt(tr.usd) + "</td>"
+    + "<td style='padding:7px 8px;text-align:right;font-weight:800'>" + fmt(tr.total) + "</td></tr>";
+  h += "</table></div></div></div>";
+
+  // Depenses
+  h += "<div class='card' style='margin-top:12px'><div class='card-hdr'><h2>Dépenses — " + fmt(td.total) + " FC</h2></div><div class='card-body'>";
+  h += "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:.78rem'>";
+  h += "<tr style='background:var(--pale)'><th style='padding:6px 8px;text-align:left'>Rubrique / compte / libellé</th><th style='padding:6px 8px;text-align:right'>CDF</th><th style='padding:6px 8px;text-align:right'>Convers. USD</th><th style='padding:6px 8px;text-align:right'>Total</th></tr>";
+  E.depenses.forEach(function(r) {
+    var s = _ex25Rubrique(r), cle = "d" + r.num, ouvert = !!gEx25Deploye[cle];
+    var pct = td.total ? (s.total / td.total * 100).toFixed(1) : "0";
+    h += "<tr style='background:#f8fafd;border-bottom:1px solid #e5eaf0;cursor:pointer' onclick=\"basculerRubrique2025('" + cle + "')\">"
+      + "<td style='padding:6px 8px;font-weight:800;color:#1a3a5c'>" + (ouvert ? "▾" : "▸") + " " + escH(r.num) + ". " + escH(r.titre)
+      + " <span style='color:#6b88a4;font-weight:600;font-size:.72rem'>" + pct + " %</span></td>"
+      + "<td style='padding:6px 8px;text-align:right;font-weight:700'>" + fmt(s.cdf) + "</td>"
+      + "<td style='padding:6px 8px;text-align:right;font-weight:700'>" + fmt(s.usd) + "</td>"
+      + "<td style='padding:6px 8px;text-align:right;font-weight:800;color:#c0392b'>" + fmt(s.total) + "</td></tr>";
+    if (ouvert) {
+      r.comptes.forEach(function(c) {
+        var sc = _ex25Compte(c);
+        h += "<tr style='border-bottom:1px solid #eef2f6'>"
+          + "<td style='padding:5px 8px;padding-left:16px;font-weight:700;color:#33506e'>" + escH(c.compte) + " — " + escH(c.libelle)
+          + (c.note ? "<div style='font-size:.68rem;color:#b45309;font-weight:600'>" + escH(c.note) + "</div>" : "") + "</td>"
+          + "<td style='padding:5px 8px;text-align:right'>" + fmt(sc.cdf) + "</td>"
+          + "<td style='padding:5px 8px;text-align:right'>" + fmt(sc.usd) + "</td>"
+          + "<td style='padding:5px 8px;text-align:right;font-weight:700'>" + fmt(sc.total) + "</td></tr>";
+        c.lignes.forEach(function(l) { h += _ex25LigneHTML(l[0], l[1], l[2]); });
+      });
+      if (s.cdf !== r.cdfPublie || s.usd !== r.usdPublie) {
+        h += "<tr style='background:#fdf6ee'><td colspan='4' style='padding:5px 8px;font-size:.72rem;color:#b45309'>"
+          + "Sous-total publié dans le rapport : " + fmt(r.cdfPublie) + " CDF / " + fmt(r.usdPublie)
+          + " convers. USD — le compte 6515000 en est absent, alors qu'il est bien compté dans le total.</td></tr>";
+      }
+    }
+  });
+  h += "<tr style='background:#1a3a5c;color:#fff'><td style='padding:7px 8px;font-weight:800'>TOTAL DÉPENSES</td>"
+    + "<td style='padding:7px 8px;text-align:right;font-weight:800'>" + fmt(td.cdf) + "</td>"
+    + "<td style='padding:7px 8px;text-align:right;font-weight:800'>" + fmt(td.usd) + "</td>"
+    + "<td style='padding:7px 8px;text-align:right;font-weight:800'>" + fmt(td.total) + "</td></tr>";
+  h += "</table></div></div></div>";
+
+  // Synthese par perimetre
+  h += "<div class='card' style='margin-top:12px'><div class='card-hdr'><h2>Synthèse par périmètre</h2></div><div class='card-body'>";
+  h += "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:.8rem'>";
+  h += "<tr style='background:var(--pale)'><th style='padding:6px 8px;text-align:left'>Périmètre</th><th style='padding:6px 8px;text-align:right'>Report 2024</th><th style='padding:6px 8px;text-align:right'>Recettes</th><th style='padding:6px 8px;text-align:right'>Dépenses</th><th style='padding:6px 8px;text-align:right'>Solde</th></tr>";
+  [["Église locale", syn.eLocale], ["Branches", syn.branches], ["Ensemble", syn.generale]].forEach(function(p, i) {
+    var v = p[1], gras = i === 2;
+    h += "<tr style='border-bottom:1px solid #eef2f6;" + (gras ? "background:#f0faf4;font-weight:800" : "") + "'>"
+      + "<td style='padding:6px 8px;font-weight:700'>" + p[0] + "</td>"
+      + "<td style='padding:6px 8px;text-align:right'>" + fmt(v.report) + "</td>"
+      + "<td style='padding:6px 8px;text-align:right'>" + fmt(v.recettes) + "</td>"
+      + "<td style='padding:6px 8px;text-align:right'>" + fmt(v.depenses) + "</td>"
+      + "<td style='padding:6px 8px;text-align:right;color:" + (v.solde >= 0 ? "#15803d" : "#c0392b") + "'>" + fmt(v.solde) + "</td></tr>";
+  });
+  h += "</table></div>";
+  var exploit = syn.eLocale.recettes - syn.eLocale.depenses;
+  h += "<div style='margin-top:10px;background:" + (exploit < 0 ? "#fdf0ee" : "#f0faf4") + ";border-radius:7px;padding:9px 11px;font-size:.78rem;color:#33506e'>"
+    + "Résultat d'exploitation de l'église locale, hors report : <b style='color:" + (exploit < 0 ? "#c0392b" : "#15803d") + "'>" + fmt(exploit) + " FC</b>. "
+    + "Les branches dégagent <b>" + fmt(syn.branches.recettes - syn.branches.depenses) + " FC</b>. "
+    + "Le résultat d'ensemble de <b>" + fmt(syn.generale.recettes - syn.generale.depenses) + " FC</b> est donc porté par les branches."
+    + "</div></div></div>";
+
+  // Report a nouveau
+  var rep = getReportEntrant(2026);
+  h += "<div class='card' style='margin-top:12px'><div class='card-hdr'><h2>Report à nouveau sur 2026</h2></div><div class='card-body'>";
+  if (rep) {
+    h += "<div style='background:#f0faf4;border-radius:7px;padding:10px 12px;margin-bottom:10px'>"
+      + "<div style='font-size:.75rem;color:#6b88a4;font-weight:700;text-transform:uppercase'>Solde d'ouverture 2026</div>"
+      + "<div style='font-size:1.5rem;font-weight:800;color:#15803d'>" + fmt(rep.montant) + " FC</div>"
+      + "<div style='font-size:.75rem;color:#33506e;margin-top:3px'>Base : " + escH((REPORT_BASES[rep.base] || {}).label || rep.base)
+      + " · posé le " + escH(String(rep.poseLe || "").slice(0, 10)) + (rep.posePar ? " par " + escH(rep.posePar) : "") + "</div>"
+      + "</div>";
+    h += "<div style='font-size:.75rem;color:#6b88a4;margin-bottom:8px'>Ce montant apparaît comme ligne d'ouverture dans le rapport consolidé 2026. Il n'est jamais additionné aux recettes de l'exercice.</div>";
+    if (estAdminUser) h += "<button class='btn btn-d btn-sm' onclick='retirerReport2026()'>Retirer le report</button>";
+  } else if (estAdminUser) {
+    h += "<p style='font-size:.8rem;color:#33506e;margin-bottom:8px'>Trois lectures du solde de clôture sont défendables. Choisissez celle que le comité retient :</p>";
+    ["publie", "tresorerie", "eglise"].forEach(function(b, i) {
+      h += "<label style='display:block;border:1px solid var(--border);border-radius:7px;padding:9px 11px;margin-bottom:6px;cursor:pointer'>"
+        + "<div style='display:flex;align-items:center;gap:8px'>"
+        + "<input type='radio' name='ex25-base' value='" + b + "'" + (i === 0 ? " checked" : "") + ">"
+        + "<span style='font-weight:700;font-size:.84rem;color:#1a3a5c'>" + escH(REPORT_BASES[b].label) + "</span>"
+        + "<span style='margin-left:auto;font-weight:800;color:#15803d'>" + fmt(getMontantReport(b)) + " FC</span></div>"
+        + "<div style='font-size:.73rem;color:#6b88a4;margin-left:24px;margin-top:3px'>" + escH(REPORT_BASES[b].detail) + "</div>"
+        + "</label>";
+    });
+    h += "<button class='btn btn-g btn-sm' onclick='poserReport2026()'>Poser le report à nouveau</button>";
+  } else {
+    h += "<p style='color:var(--muted);font-size:.82rem'>Aucun report à nouveau posé. Seul l'administrateur peut en poser un.</p>";
+  }
+  h += "</div></div>";
+
+  // Verrouillage
+  var nv = _ex25MoisVerrouilles();
+  h += "<div class='card' style='margin-top:12px'><div class='card-hdr'><h2>Verrouillage de l'exercice</h2></div><div class='card-body'>";
+  h += "<p style='font-size:.8rem;color:#33506e'>" + (nv === 12
+      ? "✓ Les 12 mois de 2025 sont clôturés : aucun culte ne peut y être enregistré."
+      : nv + " mois sur 12 sont clôturés. Tant que l'exercice n'est pas verrouillé, un culte daté de 2025 peut être saisi et contredire l'archive.") + "</p>";
+  if (estAdminUser && nv < 12) h += "<button class='btn btn-g btn-sm' style='margin-top:8px' onclick='verrouillerExercice2025()'>🔒 Verrouiller les 12 mois de 2025</button>";
+  h += "</div></div>";
+
+  // Realisations
+  h += "<div class='card' style='margin-top:12px'><div class='card-hdr'><h2>Commentaires du rapport</h2></div><div class='card-body'>";
+  h += "<ul style='margin:0;padding-left:18px;font-size:.8rem;color:#33506e;line-height:1.7'>";
+  E.realisations.forEach(function(x) { h += "<li>" + escH(x) + "</li>"; });
+  h += "</ul><div style='font-size:.73rem;color:#6b88a4;margin-top:8px'>Signé par : " + E.signataires.map(escH).join(" · ") + "</div>";
+  h += "</div></div>";
+
+  cont.innerHTML = h;
+}
+
+function printExercice2025() {
+  var E = EXERCICE_2025, syn = E.synthese;
+  var tr = _ex25TotalRecettes(), td = _ex25TotalDepenses();
+  var win = _fenetreImpression("width=1000,height=900"); if (!win) return;
+  function lig(lbl, cdf, usd, niveau, fond) {
+    var pad = [8, 18, 30][niveau] || 8;
+    return "<tr style='background:" + (fond || "#fff") + ";border-bottom:1px solid #eef2f6'>"
+      + "<td style='padding:4px 8px;padding-left:" + pad + "px;" + (niveau === 0 ? "font-weight:800" : niveau === 1 ? "font-weight:700" : "") + "'>" + escH(lbl) + "</td>"
+      + "<td style='padding:4px 8px;text-align:right'>" + fmt(cdf) + "</td>"
+      + "<td style='padding:4px 8px;text-align:right'>" + fmt(usd) + "</td>"
+      + "<td style='padding:4px 8px;text-align:right;font-weight:700'>" + fmt(cdf + usd) + "</td></tr>";
+  }
+  win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Exercice 2025</title><style>" + getPrintCSS() + "table{width:100%;border-collapse:collapse;font-size:9px}th{background:#1a3a5c;color:#fff;padding:5px 8px;font-size:9px;text-align:right}th:first-child{text-align:left}</style></head><body>");
+  win.document.write(buildPrintHeader(E.titre));
+  win.document.write("<p style='font-size:9.5px;color:#6b88a4;margin-bottom:8px'>" + escH(E.entite) + " — " + escH(E.source) + " — archive en lecture seule</p>");
+  win.document.write("<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px'>"
+    + "<div style='background:#eef4fb;border-radius:7px;padding:8px;text-align:center'><div style='font-size:8px;color:#6b88a4;font-weight:700'>REPORT 2024</div><div style='font-size:14px;font-weight:800;color:#1a3a5c'>" + fmt(syn.generale.report) + "</div></div>"
+    + "<div style='background:#f0faf4;border-radius:7px;padding:8px;text-align:center'><div style='font-size:8px;color:#6b88a4;font-weight:700'>RECETTES</div><div style='font-size:14px;font-weight:800;color:#15803d'>" + fmt(syn.generale.recettes) + "</div></div>"
+    + "<div style='background:#fdf0ee;border-radius:7px;padding:8px;text-align:center'><div style='font-size:8px;color:#6b88a4;font-weight:700'>DÉPENSES</div><div style='font-size:14px;font-weight:800;color:#c0392b'>" + fmt(syn.generale.depenses) + "</div></div>"
+    + "<div style='background:#eef4fb;border-radius:7px;padding:8px;text-align:center'><div style='font-size:8px;color:#6b88a4;font-weight:700'>SOLDE 31/12</div><div style='font-size:14px;font-weight:800;color:#1a3a5c'>" + fmt(syn.generale.solde) + "</div></div></div>");
+
+  win.document.write("<h3 style='font-size:11px;color:#15803d;border-left:3px solid #15803d;padding-left:8px;margin:14px 0 6px'>A. RECETTES</h3>");
+  win.document.write("<table><tr><th>Compte / libellé</th><th>CDF</th><th>Convers. USD</th><th>Total</th></tr>");
+  E.recettes.forEach(function(c) {
+    var s = _ex25Compte(c);
+    win.document.write(lig(c.compte + " — " + c.libelle, s.cdf, s.usd, 0, "#f8fafd"));
+    c.lignes.forEach(function(l) { win.document.write(lig(l[0], l[1], l[2], 2)); });
+  });
+  win.document.write("<tr style='background:#1a3a5c;color:#fff'><td style='padding:5px 8px;font-weight:800'>TOTAL RECETTES (report inclus)</td><td style='padding:5px 8px;text-align:right;font-weight:800'>" + fmt(tr.cdf) + "</td><td style='padding:5px 8px;text-align:right;font-weight:800'>" + fmt(tr.usd) + "</td><td style='padding:5px 8px;text-align:right;font-weight:800'>" + fmt(tr.total) + "</td></tr></table>");
+
+  win.document.write("<h3 style='font-size:11px;color:#c0392b;border-left:3px solid #c0392b;padding-left:8px;margin:16px 0 6px' class='page-break'>B. DÉPENSES</h3>");
+  win.document.write("<table><tr><th>Rubrique / compte / libellé</th><th>CDF</th><th>Convers. USD</th><th>Total</th></tr>");
+  E.depenses.forEach(function(r) {
+    var s = _ex25Rubrique(r);
+    win.document.write(lig(r.num + ". " + r.titre, s.cdf, s.usd, 0, "#f8fafd"));
+    r.comptes.forEach(function(c) {
+      var sc = _ex25Compte(c);
+      win.document.write(lig(c.compte + " — " + c.libelle, sc.cdf, sc.usd, 1));
+      c.lignes.forEach(function(l) { win.document.write(lig(l[0], l[1], l[2], 2)); });
+    });
+  });
+  win.document.write("<tr style='background:#1a3a5c;color:#fff'><td style='padding:5px 8px;font-weight:800'>TOTAL DÉPENSES</td><td style='padding:5px 8px;text-align:right;font-weight:800'>" + fmt(td.cdf) + "</td><td style='padding:5px 8px;text-align:right;font-weight:800'>" + fmt(td.usd) + "</td><td style='padding:5px 8px;text-align:right;font-weight:800'>" + fmt(td.total) + "</td></tr></table>");
+
+  win.document.write("<h3 style='font-size:11px;color:#1a3a5c;border-left:3px solid #1a3a5c;padding-left:8px;margin:16px 0 6px'>C. SYNTHÈSE PAR PÉRIMÈTRE</h3>");
+  win.document.write("<table><tr><th>Périmètre</th><th>Report 2024</th><th>Recettes</th><th>Dépenses</th><th>Solde</th></tr>");
+  [["Église locale", syn.eLocale], ["Branches", syn.branches], ["Ensemble", syn.generale]].forEach(function(p, i) {
+    var v = p[1];
+    win.document.write("<tr style='" + (i === 2 ? "background:#f0faf4;font-weight:800;" : "") + "border-bottom:1px solid #eef2f6'>"
+      + "<td style='padding:5px 8px'>" + p[0] + "</td><td style='padding:5px 8px;text-align:right'>" + fmt(v.report) + "</td>"
+      + "<td style='padding:5px 8px;text-align:right'>" + fmt(v.recettes) + "</td><td style='padding:5px 8px;text-align:right'>" + fmt(v.depenses) + "</td>"
+      + "<td style='padding:5px 8px;text-align:right'>" + fmt(v.solde) + "</td></tr>");
+  });
+  win.document.write("</table>");
+
+  var ec = _ex25Controles().filter(function(c) { return !c.ok; });
+  win.document.write("<h3 style='font-size:11px;color:#b45309;border-left:3px solid #b45309;padding-left:8px;margin:16px 0 6px'>D. OBSERVATIONS</h3>");
+  win.document.write("<ul style='font-size:9px;color:#33506e;line-height:1.6;padding-left:16px'>");
+  ec.forEach(function(c) { win.document.write("<li><b>" + escH(c.intitule) + "</b> — publié " + escH(String(c.attendu)) + ", recalculé " + escH(String(c.calcule)) + ". " + escH(c.note || "") + "</li>"); });
+  win.document.write("<li>Document daté du 20 janvier 2025 pour l'exercice 2025 : lire 20 janvier 2026.</li>");
+  win.document.write("<li>Taux de conversion USD non indiqué dans le rapport.</li>");
+  win.document.write("<li>Le report 2024 est logé dans les recettes ; ce n'est pas un produit de l'exercice.</li>");
+  win.document.write("<li>Les comptes de classe 2 (" + fmt(_ex25Rubrique(E.depenses[3]).total) + " FC) sont des immobilisations, pas des charges.</li>");
+  win.document.write("<li>La provision de " + fmt(E.provisionNonDecaissee) + " FC n'est pas sortie de caisse : trésorerie réelle " + fmt(syn.generale.solde + E.provisionNonDecaissee) + " FC.</li>");
+  win.document.write("</ul>");
+  win.document.write("<div class='footer'>ECC Kingasani 2 — Archive de l'exercice 2025, éditée le " + new Date().toLocaleDateString("fr-FR") + "</div>");
+  win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#1a3a5c;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>Imprimer / PDF</button></div>");
+  win.document.write("</body></html>"); win.document.close();
+}
+
+function exporterExercice2025() {
+  if (typeof XLSX === "undefined") { showToast("SheetJS non chargé. Vérifiez votre connexion internet et rechargez la page.", "err"); return; }
+  var E = EXERCICE_2025, syn = E.synthese;
+  var tr = _ex25TotalRecettes(), td = _ex25TotalDepenses();
+  var wb = XLSX.utils.book_new();
+  function feuille(nom, entetes, lignes) {
+    var ws = XLSX.utils.aoa_to_sheet([entetes].concat(lignes));
+    var cols = entetes.map(function(h) { return { wch: Math.max(String(h).length, 12) }; });
+    lignes.forEach(function(r) { r.forEach(function(v, i) { var l = String(v == null ? "" : v).length; if (cols[i] && l > cols[i].wch) cols[i].wch = Math.min(l, 46); }); });
+    ws["!cols"] = cols;
+    XLSX.utils.book_append_sheet(wb, ws, nom);
+  }
+  var rec = [];
+  E.recettes.forEach(function(c) {
+    var s = _ex25Compte(c);
+    rec.push([c.compte, c.libelle, "", s.cdf, s.usd, s.total]);
+    c.lignes.forEach(function(l) { rec.push(["", "", l[0], l[1], l[2], l[1] + l[2]]); });
+  });
+  rec.push(["", "TOTAL RECETTES (report inclus)", "", tr.cdf, tr.usd, tr.total]);
+  feuille("Recettes", ["Compte", "Libellé compte", "Ligne de détail", "CDF", "Convers. USD", "Total"], rec);
+
+  var dep = [];
+  E.depenses.forEach(function(r) {
+    var s = _ex25Rubrique(r);
+    dep.push([r.num, r.titre, "", "", s.cdf, s.usd, s.total]);
+    r.comptes.forEach(function(c) {
+      var sc = _ex25Compte(c);
+      dep.push(["", "", c.compte, c.libelle, sc.cdf, sc.usd, sc.total]);
+      c.lignes.forEach(function(l) { dep.push(["", "", "", l[0], l[1], l[2], l[1] + l[2]]); });
+    });
+  });
+  dep.push(["", "TOTAL DÉPENSES", "", "", td.cdf, td.usd, td.total]);
+  feuille("Dépenses", ["Rubrique", "Titre rubrique", "Compte", "Libellé / ligne", "CDF", "Convers. USD", "Total"], dep);
+
+  feuille("Synthèse", ["Périmètre", "Report 2024", "Recettes", "Dépenses", "Solde reporté"], [
+    ["Église locale", syn.eLocale.report, syn.eLocale.recettes, syn.eLocale.depenses, syn.eLocale.solde],
+    ["Branches", syn.branches.report, syn.branches.recettes, syn.branches.depenses, syn.branches.solde],
+    ["Ensemble", syn.generale.report, syn.generale.recettes, syn.generale.depenses, syn.generale.solde]
+  ]);
+
+  var obs = _ex25Controles().map(function(c) {
+    return [c.gravite, c.intitule, String(c.attendu), String(c.calcule), c.ok ? "OK" : "Écart", c.note || ""];
+  });
+  obs.push(["forme", "Date du document", "20/01/2025", "20/01/2026", "Écart", "Exercice 2025 signé en janvier 2026"]);
+  obs.push(["forme", "Taux de conversion USD", "indiqué", "absent", "Écart", "La colonne convers. USD est déjà en francs"]);
+  obs.push(["méthode", "Report 2024 logé en recettes", "hors recettes", "dans 7000000 et 7588000", "Écart", "Un report de trésorerie n'est pas un produit"]);
+  obs.push(["méthode", "Comptes de classe 2 en dépenses", "immobilisations", String(_ex25Rubrique(E.depenses[3]).total) + " FC en rubrique 4", "Écart", "Charges et investissements mélangés"]);
+  obs.push(["méthode", "Provision non décaissée", "0", String(E.provisionNonDecaissee), "Écart", "Trésorerie réelle = " + (syn.generale.solde + E.provisionNonDecaissee) + " FC"]);
+  feuille("Observations", ["Nature", "Contrôle", "Publié", "Recalculé", "Résultat", "Commentaire"], obs);
+
+  XLSX.writeFile(wb, "Exercice_2025_archive.xlsx");
+  showToast("Archive 2025 exportée.", "ok");
+}
+
+
+// ================================================
 // == MODULE BUDGET ==
 // ================================================
 var BUDGET_POSTES = [
@@ -19627,6 +20365,18 @@ function doRapportConsolide(type, periode) {
   win.document.write(kpi('Solde net',fmt(Math.round(soldeGlobal))+' FC',soldeGlobal>=0?'#1e7d52':'#c0392b'));
   win.document.write(kpi('Taux USD',t+' FC','#1a3a5c'));
   win.document.write('</div>');
+
+  // Report a nouveau de l'exercice precedent. Presente en ligne d'ouverture :
+  // l'ajouter aux recettes ferait passer pour un produit de l'exercice ce qui
+  // n'est qu'un solde de tresorerie herite.
+  var _repEnt = (type === 'annee' && typeof getReportEntrant === 'function') ? getReportEntrant(periode) : null;
+  if (_repEnt) {
+    var _baseLbl = ((typeof REPORT_BASES !== 'undefined' && REPORT_BASES[_repEnt.base]) || {}).label || _repEnt.base || '';
+    win.document.write('<div style="background:#eef4fb;border-left:3px solid #1a3a5c;border-radius:0 7px 7px 0;padding:8px 11px;margin:4px 0 10px;font-size:10px;color:#33506e">'
+      + '<b>Solde d\'ouverture repris de l\'exercice ' + escH(String(_repEnt.depuis || '')) + ' : ' + fmt(Math.round(_repEnt.montant)) + ' FC</b>'
+      + ' &mdash; base &laquo;&nbsp;' + escH(_baseLbl) + '&nbsp;&raquo;. Ce montant n\'est pas compt\u00e9 dans les recettes ci-dessus. '
+      + 'Tr\u00e9sorerie th\u00e9orique en fin de p\u00e9riode : <b>' + fmt(Math.round(_repEnt.montant + soldeGlobal)) + ' FC</b>.</div>');
+  }
 
   // Tableau de synthèse par module
   win.document.write('<h3 style="margin:14px 0 6px;font-size:12px;color:#1a3a5c;border-left:3px solid #1a3a5c;padding-left:8px">📊 Synthèse par module</h3>');
@@ -20372,6 +21122,16 @@ function buildRapportHTML(type, periode) {
   html += "<div style='background:#fef2f2;border-radius:8px;padding:9px;text-align:center'><div style='font-size:.62rem;color:#6b88a4;font-weight:700'>DÉPENSES</div><div style='font-family:DM Mono,monospace;font-size:.85rem;font-weight:800;color:#c0392b'>"+fmt(Math.round(totDep))+"</div></div>";
   html += "<div style='background:"+(solde>=0?'#f0faf4':'#fef2f2')+";border-radius:8px;padding:9px;text-align:center'><div style='font-size:.62rem;color:#6b88a4;font-weight:700'>SOLDE</div><div style='font-family:DM Mono,monospace;font-size:.85rem;font-weight:800;color:"+(solde>=0?'#1e7d52':'#c0392b')+"'>"+fmt(Math.round(solde))+"</div></div>";
   html += "</div>";
+
+  // Meme regle que dans le rapport imprime : ligne d'ouverture, pas une recette.
+  var repEnt = (type === 'annee' && typeof getReportEntrant === 'function') ? getReportEntrant(periode) : null;
+  if (repEnt) {
+    var baseLbl = ((typeof REPORT_BASES !== 'undefined' && REPORT_BASES[repEnt.base]) || {}).label || repEnt.base || '';
+    html += "<div style='background:#eef4fb;border-left:3px solid var(--navy);border-radius:0 7px 7px 0;padding:8px 11px;margin-bottom:12px;font-size:.72rem;color:#33506e'>"
+         + "<b>Solde d'ouverture repris de l'exercice " + escH(String(repEnt.depuis || '')) + " : " + fmt(Math.round(repEnt.montant)) + " FC</b>"
+         + " \u2014 base \u00ab " + escH(baseLbl) + " \u00bb. Non compt\u00e9 dans les recettes ci-dessus. "
+         + "Tr\u00e9sorerie th\u00e9orique en fin de p\u00e9riode : <b>" + fmt(Math.round(repEnt.montant + solde)) + " FC</b>.</div>";
+  }
 
   // Tableau par module
   html += "<table style='width:100%;border-collapse:collapse;font-size:.78rem'>";
