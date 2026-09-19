@@ -801,6 +801,14 @@ input:focus, select:focus, textarea:focus{
 }
 
 
+
+/* Tuiles du module Administration */
+.adm-tuile{background:#fff;border:1px solid var(--border,#d7e3ef);border-radius:9px;padding:10px 11px;cursor:pointer;display:flex;flex-direction:column;gap:7px;min-height:74px;transition:border-color .12s,box-shadow .12s,transform .12s}
+.adm-tuile:hover{border-color:#1f6fad;box-shadow:0 2px 10px rgba(26,58,92,.13);transform:translateY(-1px)}
+.adm-tuile:active{transform:translateY(0)}
+.adm-tuile-ko{border-color:#e6b4ad;background:#fdf6f5}
+.adm-tuile-ko:hover{border-color:#c0392b}
+.adm-tuile-lbl{font-size:.76rem;font-weight:700;color:#1a3a5c;line-height:1.28}
 </style>
 
 <style id="ui-v3">
@@ -9018,6 +9026,145 @@ function _carteClotures() {
   return h + '</tbody></table>';
 }
 
+// ══ ADMINISTRATION EN TUILES ═══════════════════════════════════════════════
+// Le module empilait une vingtaine de sections dans une seule page : atteindre
+// le journal d'audit demandait une dizaine d'ecrans de defilement. Le contenu
+// est desormais presente en tuiles, une par section, et on n'affiche qu'une
+// section a la fois. Le decoupage suit les intitules .sec-lbl deja produits
+// par chaque carte : aucune section n'a eu a etre reecrite, et une carte
+// ajoutee plus tard prendra sa tuile toute seule.
+var gAdmSection = null;   // null = grille de tuiles, "*" = tout afficher
+
+var ADM_FAMILLES = [
+  { cle:"acces",  titre:"Comptes et accès",
+    motifs:["comptes utilisateurs","historique des acc","sessions actives","santé des permissions","rôles côté serveur","journal d'audit"] },
+  { cle:"compta", titre:"Contrôles comptables",
+    motifs:["clôture de période","couverture du registre","rapprochement cotisations","séquence des pièces","sycebnl","barème des cotisations","états comptables"] },
+  { cle:"etats",  titre:"États et données",
+    motifs:["tableau de bord","rapport financier","export global","actions"] },
+  { cle:"maint",  titre:"Maintenance des données",
+    motifs:["documents séparés"] },
+  { cle:"config", titre:"Configuration",
+    motifs:["logo et titre","sms"] }
+];
+var ADM_ICONES_MOTS = [
+  ["logo","🎨"], ["barème","💵"], ["comptes","👤"], ["actions","⚙️"],
+  ["historique","🕙"], ["rapport","📑"], ["export","📤"], ["clôture","🔒"],
+  ["sycebnl","📗"]
+];
+
+function _admTexteBrut(h) {
+  return String(h || "").replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+}
+function _admIcone(titre) {
+  var m = String(titre).match(/^([^\w\sÀ-ÿ]+)\s*/);
+  if (m) return m[1];
+  var bas = String(titre).toLowerCase();
+  for (var i = 0; i < ADM_ICONES_MOTS.length; i++) if (bas.indexOf(ADM_ICONES_MOTS[i][0]) >= 0) return ADM_ICONES_MOTS[i][1];
+  return "📄";
+}
+function _admSansIcone(titre) {
+  return String(titre).replace(/^([^\w\sÀ-ÿ]+)\s*/, "").trim() || String(titre);
+}
+function _admFamille(titre) {
+  var bas = String(titre).toLowerCase();
+  for (var i = 0; i < ADM_FAMILLES.length; i++) {
+    var f = ADM_FAMILLES[i];
+    for (var j = 0; j < f.motifs.length; j++) if (bas.indexOf(f.motifs[j]) >= 0) return f;
+  }
+  return { cle: "divers", titre: "Divers" };
+}
+
+// Decoupe le HTML produit par renderAdmin sur ses intitules de section.
+function _admDecouper(html) {
+  var re = /<div class=['"]sec-lbl['"][^>]*>([\s\S]*?)<\/div>/g;
+  var bornes = [], m;
+  while ((m = re.exec(html)) !== null) bornes.push({ debut: m.index, fin: re.lastIndex, brut: m[1] });
+  var res = { preambule: html.slice(0, bornes.length ? bornes[0].debut : html.length), sections: [] };
+  for (var i = 0; i < bornes.length; i++) {
+    var finCorps = (i + 1 < bornes.length) ? bornes[i + 1].debut : html.length;
+    var titre = _admTexteBrut(bornes[i].brut);
+    var corps = html.slice(bornes[i].fin, finCorps);
+    res.sections.push({
+      cle: "s" + i, titre: titre, icone: _admIcone(titre), libelle: _admSansIcone(titre),
+      famille: _admFamille(titre), lbl: html.slice(bornes[i].debut, bornes[i].fin), corps: corps,
+      // Signal d'etat : les cartes de controle marquent deja leurs encadres.
+      // La tuile le reprend, pour qu'on sache quoi ouvrir sans tout ouvrir.
+      alerte: corps.indexOf("ctrl-piece ko") >= 0,
+      bon: corps.indexOf("ctrl-piece ko") < 0 && corps.indexOf("ctrl-piece ok") >= 0
+    });
+  }
+  return res;
+}
+
+function ouvrirSectionAdmin(cle) { gAdmSection = cle; renderAdmin(); _admHaut(); }
+function retourAdminAccueil() { gAdmSection = null; renderAdmin(); _admHaut(); }
+function admToutAfficher() { gAdmSection = "*"; renderAdmin(); _admHaut(); }
+function _admHaut() {
+  var c = document.getElementById("admin-body-mod");
+  if (c && c.scrollIntoView) { try { c.scrollIntoView({ block: "start" }); } catch (e) { c.scrollIntoView(); } }
+}
+
+function _admGrille(d) {
+  var h = d.preambule;
+  h += "<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin:4px 0 10px'>";
+  h += "<div style='font-size:.74rem;color:var(--muted)'>" + d.sections.length + " sections. Ouvrez celle dont vous avez besoin.</div>";
+  h += "<button class='btn btn-o btn-sm' onclick='admToutAfficher()'>Tout afficher</button>";
+  h += "</div>";
+
+  var vues = {};
+  ADM_FAMILLES.concat([{ cle: "divers", titre: "Divers" }]).forEach(function(f) {
+    var lot = d.sections.filter(function(s) { return s.famille.cle === f.cle; });
+    if (!lot.length || vues[f.cle]) return;
+    vues[f.cle] = true;
+    h += "<div class='sec-lbl'>" + escH(f.titre) + "</div>";
+    h += "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:9px;margin-bottom:6px'>";
+    lot.forEach(function(s) {
+      var pastille = s.alerte
+        ? "<span style='width:8px;height:8px;border-radius:50%;background:#c0392b;flex-shrink:0'></span>"
+        : (s.bon ? "<span style='width:8px;height:8px;border-radius:50%;background:#15803d;flex-shrink:0'></span>" : "");
+      h += "<div class='adm-tuile" + (s.alerte ? " adm-tuile-ko" : "") + "' onclick=\"ouvrirSectionAdmin('" + s.cle + "')\">"
+        + "<div style='display:flex;align-items:flex-start;gap:6px'>"
+        + "<span style='font-size:1.25rem;line-height:1'>" + s.icone + "</span>"
+        + "<span style='margin-left:auto'>" + pastille + "</span></div>"
+        + "<div class='adm-tuile-lbl'>" + escH(s.libelle) + "</div></div>";
+    });
+    h += "</div>";
+  });
+  return h;
+}
+
+function _admUneSection(d, cle) {
+  var s = null;
+  for (var i = 0; i < d.sections.length; i++) if (d.sections[i].cle === cle) s = d.sections[i];
+  if (!s) { gAdmSection = null; return _admGrille(d); }
+  var idx = d.sections.indexOf(s);
+  var h = "<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px'>";
+  h += "<button class='btn btn-o btn-sm' onclick='retourAdminAccueil()'>← Administration</button>";
+  h += "<span style='font-size:.78rem;color:var(--muted)'>" + escH(s.famille.titre) + " · <b style='color:var(--blue)'>" + escH(s.libelle) + "</b></span>";
+  h += "<span style='margin-left:auto;display:flex;gap:6px'>";
+  if (idx > 0) h += "<button class='btn btn-o btn-sm' onclick=\"ouvrirSectionAdmin('" + d.sections[idx - 1].cle + "')\" title='" + escH(d.sections[idx - 1].libelle) + "'>‹</button>";
+  if (idx < d.sections.length - 1) h += "<button class='btn btn-o btn-sm' onclick=\"ouvrirSectionAdmin('" + d.sections[idx + 1].cle + "')\" title='" + escH(d.sections[idx + 1].libelle) + "'>›</button>";
+  h += "</span></div>";
+  h += s.lbl + s.corps;
+  return h;
+}
+
+function _admTout(d) {
+  var h = "<div style='margin-bottom:10px'><button class='btn btn-o btn-sm' onclick='retourAdminAccueil()'>← Revenir aux tuiles</button></div>";
+  h += d.preambule;
+  d.sections.forEach(function(s) { h += s.lbl + s.corps; });
+  return h;
+}
+
+function _admRendu(html) {
+  var d = _admDecouper(html);
+  if (!d.sections.length) return html;
+  if (gAdmSection === "*") return _admTout(d);
+  if (gAdmSection) return _admUneSection(d, gAdmSection);
+  return _admGrille(d);
+}
+
 function renderAdmin(){
   if(!gCurrentUser||gCurrentUser.role!=="admin"){
     var ab=document.getElementById("admin-body-mod");
@@ -9200,7 +9347,7 @@ function renderAdmin(){
   html += _carteRapprochementCotis();
   html += _carteControlePieces();
   html += _carteSycebnl();
-  var ab=document.getElementById("admin-body-mod");if(ab)ab.innerHTML=html;
+  var ab=document.getElementById("admin-body-mod");if(ab)ab.innerHTML=_admRendu(html);
 
   // Charger les zones dynamiques après rendu
   setTimeout(function(){
