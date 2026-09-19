@@ -104,6 +104,12 @@ service cloud.firestore {
       allow read:  if request.auth != null;
       allow write: if estAdmin();
     }
+    // Les exercices clos sont des instantanes signes : tout le monde les lit,
+    // seul l'administrateur les ecrit ou les supprime lors d'une reouverture.
+    match /exercices/{doc} {
+      allow read:  if request.auth != null;
+      allow write: if estAdmin();
+    }
     match /notifications/{doc}       { allow read, write: if request.auth != null; }
     match /budget_db/{doc}           { allow read, write: if request.auth != null; }
     match /mutuelle_db/{doc}         { allow read, write: if request.auth != null; }
