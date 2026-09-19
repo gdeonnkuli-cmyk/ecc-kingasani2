@@ -13147,6 +13147,7 @@ function launchApp() {
   chargerSycebnl();
   chargerBareme();
   chargerReports();
+  chargerExercicesClos();
   logConnexion(); // Enregistrer la visite/connexion pour l'historique admin
   document.getElementById("li-btn").textContent = "Se connecter";
   document.getElementById("unm").textContent = gCurrentUser.nom;
@@ -19236,7 +19237,8 @@ var gReports = {};
 var REPORT_BASES = {
   publie:     { label:"Solde du rapport signé", detail:"Le chiffre publié en page 13. Fidèle au document, mais inclut une provision de 530 400 FC qui n'est pas sortie de caisse." },
   tresorerie: { label:"Trésorerie réelle", detail:"Solde publié majoré de la provision non décaissée. C'est l'encaisse effective au 31/12/2025." },
-  eglise:     { label:"Église locale seule", detail:"Hors branches. À retenir si les branches tiennent leur propre caisse en dehors de l'application." }
+  eglise:     { label:"Église locale seule", detail:"Hors branches. À retenir si les branches tiennent leur propre caisse en dehors de l'application." },
+  cloture:    { label:"Clôture de l'exercice", detail:"Solde d'ouverture de l'exercice précédent, augmenté de son résultat, figé à la clôture." }
 };
 function getMontantReport(base) {
   var s = EXERCICE_2025.synthese;
@@ -19344,8 +19346,7 @@ function _ex25LigneHTML(lib, cdf, usd, note) {
     + "<td style='padding:4px 8px;text-align:right'>" + fmt(usd) + "</td>"
     + "<td style='padding:4px 8px;text-align:right;font-weight:700'>" + fmt(cdf + usd) + "</td></tr>";
 }
-function renderExercices() {
-  var cont = document.getElementById("ex-body"); if (!cont) return;
+function _htmlArchive2025() {
   var E = EXERCICE_2025, syn = E.synthese;
   var tr = _ex25TotalRecettes(), td = _ex25TotalDepenses();
   var ctrls = _ex25Controles();
@@ -19517,6 +19518,26 @@ function renderExercices() {
   h += "</ul><div style='font-size:.73rem;color:#6b88a4;margin-top:8px'>Signé par : " + E.signataires.map(escH).join(" · ") + "</div>";
   h += "</div></div>";
 
+  return h;
+}
+
+// Selecteur d'exercice : l'archive 2025, les exercices clos, et l'exercice
+// en cours qui reste calcule a la volee tant qu'il n'est pas fige.
+var gExAffiche = "2025";
+function choisirExercice(a) { gExAffiche = String(a); renderExercices(); }
+function renderExercices() {
+  var cont = document.getElementById("ex-body"); if (!cont) return;
+  var annees = _exAnneesDisponibles();
+  if (annees.indexOf(gExAffiche) < 0) gExAffiche = annees[0] || "2025";
+  var h = "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px'>";
+  annees.forEach(function(a) {
+    var clos = (a === "2025") || _exEstClos(a);
+    var actif = (a === gExAffiche);
+    h += "<button class='btn btn-sm" + (actif ? "" : " btn-o") + "' onclick=\"choisirExercice('" + a + "')\">"
+      + (clos ? "\ud83d\udd12 " : "\u270e ") + a + "</button>";
+  });
+  h += "</div>";
+  h += (gExAffiche === "2025") ? _htmlArchive2025() : _htmlExercice(gExAffiche);
   cont.innerHTML = h;
 }
 
@@ -19643,6 +19664,374 @@ function exporterExercice2025() {
   showToast("Archive 2025 exportée.", "ok");
 }
 
+
+// --- Cloture d'exercice generique ---
+// Un exercice clos doit figer ce que le comite a arrete. Sans instantane, une
+// correction passee en N+1 reecrirait retroactivement des chiffres deja
+// presentes et signes. L'instantane est donc calcule par _agregerPeriode — la
+// meme fonction que le rapport consolide — puis stocke tel quel.
+var gExercicesClos = {};   // { "2026": {…} }
+var EX_TAILLE_MAX = 800000; // marge sous la limite de 1 Mio d'un document
+
+function chargerExercicesClos(cb) {
+  try { gExercicesClos = JSON.parse(localStorage.getItem("ecc_exercices") || "{}"); } catch(e) { gExercicesClos = {}; }
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(); return; }
+  gDb.collection("exercices").get()
+    .then(function(snap) {
+      var out = {};
+      snap.forEach(function(d) { var v = d.data(); if (v && v.exercice) out[String(v.exercice)] = v; });
+      // Un instantane ne disparait pas tout seul : une collection vide cote
+      // serveur est traitee comme une absence de reponse, pas comme un effacement.
+      if (Object.keys(out).length || !Object.keys(gExercicesClos).length) {
+        gExercicesClos = out;
+        try { localStorage.setItem("ecc_exercices", JSON.stringify(gExercicesClos)); } catch(e) {}
+      }
+      if (cb) cb();
+    })
+    .catch(function() { if (cb) cb(); });
+}
+
+function _exAnneesDisponibles() {
+  var set = { "2025": true };
+  Object.keys(gExercicesClos).forEach(function(a) { set[a] = true; });
+  // Une annee qui a recu un solde d'ouverture merite son onglet, meme si
+  // aucune operation n'y est encore saisie : c'est la qu'on verifie ou le
+  // report a atterri.
+  Object.keys(gReports).forEach(function(a) { set[a] = true; });
+  var courante = new Date().getFullYear();
+  for (var a = 2026; a <= courante; a++) set[String(a)] = true;
+  return Object.keys(set).sort().reverse();
+}
+function _exEstClos(annee) { return !!gExercicesClos[String(annee)]; }
+function _exMoisVerrouilles(annee) {
+  var n = 0;
+  for (var m = 1; m <= 12; m++) { if (gClotures[annee + "-" + (m < 10 ? "0" : "") + m]) n++; }
+  return n;
+}
+
+// Instantane : uniquement des nombres et des listes, rien de recalcule a la
+// lecture.
+function _instantaneExercice(annee) {
+  var A = _agregerPeriode("annee", String(annee));
+  var rep = getReportEntrant(annee);
+  var entrant = rep ? Math.round(rep.montant) : 0;
+  var inst = {
+    exercice: String(annee),
+    fige: true,
+    tauxUSD: A.taux,
+    reportEntrant: entrant,
+    reportEntrantBase: rep ? (rep.base || "") : "",
+    modules: {
+      finances:  { rec: Math.round(A.finRec),   dep: Math.round(A.finDep), nb: (A.finCultes || []).length },
+      loyer:     { rec: Math.round(A.loyTotal), dep: 0 },
+      seminaire: { rec: Math.round(A.semRec),   dep: Math.round(A.semDep) },
+      ecodim:    { rec: Math.round(A.ecoRec),   dep: Math.round(A.ecoDep) },
+      membres:   { rec: Math.round(A.membTotal),dep: 0 },
+      social:    { rec: 0, dep: Math.round(A.socTotal) },
+      projets:   { rec: 0, dep: Math.round(A.projTotal) }
+    },
+    totalRecettes: Math.round(A.totalRecettes),
+    totalDepenses: Math.round(A.totalDepenses),
+    resultat: Math.round(A.soldeGlobal),
+    soldeSortant: entrant + Math.round(A.soldeGlobal),
+    detail: {
+      cultes:    A.finCultes   || [],
+      loyer:     A.loyLignes   || [],
+      social:    A.socLignes   || [],
+      projets:   A.projLignes  || [],
+      seminaire: A.semSessions || [],
+      ecodim:    A.ecoSessions || [],
+      membres:   A.membDetails || []
+    }
+  };
+  // Un exercice charge peut depasser la taille d'un document. Les totaux, eux,
+  // tiennent toujours : on prefere un instantane sans detail a un echec
+  // d'enregistrement.
+  try {
+    if (JSON.stringify(inst).length > EX_TAILLE_MAX) {
+      inst.detail = null;
+      inst.detailTronque = true;
+    }
+  } catch (e) {}
+  return inst;
+}
+
+var EX_MODULES_LBL = {
+  finances:"💰 Finances (cultes)", loyer:"🏠 Loyer", seminaire:"📚 Séminaire",
+  ecodim:"⛪ ECODIM", membres:"👥 Membres (cotisations)", social:"❤️ Social", projets:"🏗️ Projets"
+};
+var EX_MODULES_ORDRE = ["finances","loyer","seminaire","ecodim","membres","social","projets"];
+
+function apercuCloture(annee) {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.", "err"); return; }
+  annee = String(annee);
+  if (_exEstClos(annee)) { showToast("L'exercice " + annee + " est déjà clos.", "err"); return; }
+  var courante = new Date().getFullYear();
+  if (parseInt(annee, 10) > courante) { showToast("On ne clôture pas un exercice à venir.", "err"); return; }
+
+  var inst = _instantaneExercice(annee);
+  var suivante = String(parseInt(annee, 10) + 1);
+  var h = "<div style='font-size:.84rem;color:#33506e'>";
+  h += "<p style='margin-bottom:10px'>Les chiffres ci-dessous seront <b>figés</b>. Toute correction postérieure sur " + annee + " ne les changera plus.</p>";
+  h += "<table style='width:100%;border-collapse:collapse;font-size:.8rem;margin-bottom:10px'>";
+  if (inst.reportEntrant) {
+    h += "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:4px 6px'>Solde d'ouverture</td><td style='padding:4px 6px;text-align:right;font-weight:700'>" + fmt(inst.reportEntrant) + "</td></tr>";
+  }
+  h += "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:4px 6px'>Recettes</td><td style='padding:4px 6px;text-align:right;font-weight:700;color:#15803d'>" + fmt(inst.totalRecettes) + "</td></tr>";
+  h += "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:4px 6px'>Dépenses</td><td style='padding:4px 6px;text-align:right;font-weight:700;color:#c0392b'>" + fmt(inst.totalDepenses) + "</td></tr>";
+  h += "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:4px 6px'>Résultat de l'exercice</td><td style='padding:4px 6px;text-align:right;font-weight:800'>" + fmt(inst.resultat) + "</td></tr>";
+  h += "<tr style='background:#f0faf4'><td style='padding:6px'><b>Solde reporté sur " + suivante + "</b></td><td style='padding:6px;text-align:right;font-weight:800;color:#15803d'>" + fmt(inst.soldeSortant) + "</td></tr>";
+  h += "</table>";
+  h += "<div style='background:#eef4fb;border-radius:7px;padding:8px 10px;font-size:.76rem'>La clôture va&nbsp;:<ul style='margin:5px 0 0;padding-left:16px;line-height:1.6'>";
+  h += "<li>enregistrer cet instantané" + (inst.detailTronque ? " (totaux seuls : le détail dépasse la taille d'un document)" : " avec son détail par module") + "&nbsp;;</li>";
+  h += "<li>verrouiller les 12 mois de " + annee + "&nbsp;;</li>";
+  h += "<li>poser <b>" + fmt(inst.soldeSortant) + " FC</b> en solde d'ouverture de " + suivante + ".</li>";
+  h += "</ul></div>";
+  var nv = _exMoisVerrouilles(annee);
+  if (parseInt(annee, 10) === courante) {
+    h += "<div style='background:#fff8e1;border-left:3px solid #f0a500;border-radius:0 6px 6px 0;padding:7px 10px;margin-top:8px;font-size:.75rem;color:#b45309'>⚠️ " + annee + " est l'exercice en cours. Ne le clôturez que si toutes les opérations de l'année sont saisies.</div>";
+  }
+  if (nv && nv < 12) {
+    h += "<div style='font-size:.73rem;color:#6b88a4;margin-top:6px'>" + nv + " mois de " + annee + " étaient déjà clôturés ; les autres le seront.</div>";
+  }
+  h += "</div>";
+  showModalHTML("Clôturer l'exercice " + annee, h, function() { _executerCloture(annee, inst); }, "Clôturer définitivement");
+}
+
+function _executerCloture(annee, inst) {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.", "err"); return; }
+  annee = String(annee);
+  if (_exEstClos(annee)) { showToast("L'exercice " + annee + " est déjà clos.", "err"); return; }
+  var suivante = String(parseInt(annee, 10) + 1);
+  inst.cloturePar = gCurrentUser.email || "";
+  inst.clotureLe = new Date().toISOString();
+
+  gExercicesClos[annee] = inst;
+  try { localStorage.setItem("ecc_exercices", JSON.stringify(gExercicesClos)); } catch(e) {}
+
+  for (var m = 1; m <= 12; m++) {
+    var ym = annee + "-" + (m < 10 ? "0" : "") + m;
+    if (!gClotures[ym]) gClotures[ym] = { le: inst.clotureLe, par: inst.cloturePar };
+  }
+  gReports[suivante] = { base: "cloture", montant: inst.soldeSortant, depuis: annee,
+                         poseLe: inst.clotureLe, posePar: inst.cloturePar };
+
+  function fini() {
+    closeModal();
+    gExAffiche = annee;
+    showToast("Exercice " + annee + " clôturé. " + fmt(inst.soldeSortant) + " FC reportés sur " + suivante + ".", "ok");
+    if (typeof logAudit === "function") {
+      logAudit("CLOTURE_EXERCICE", "Finances",
+        "Clôture " + annee + " : recettes " + inst.totalRecettes + ", dépenses " + inst.totalDepenses
+        + ", report sur " + suivante + " = " + inst.soldeSortant);
+    }
+    renderExercices();
+  }
+  if (!IS_CONFIGURED || !gDb) { _enregistrerClotures(); _enregistrerReports(); fini(); return; }
+  gDb.collection("exercices").doc("ex_" + annee).set(inst)
+    .then(function() { _enregistrerClotures(function() { _enregistrerReports(fini); }); })
+    .catch(function(e) {
+      // L'instantane n'est pas parti : on ne verrouille pas, on ne reporte pas.
+      delete gExercicesClos[annee];
+      for (var m2 = 1; m2 <= 12; m2++) { var y2 = annee + "-" + (m2 < 10 ? "0" : "") + m2; if (gClotures[y2] && gClotures[y2].le === inst.clotureLe) delete gClotures[y2]; }
+      delete gReports[suivante];
+      try { localStorage.setItem("ecc_exercices", JSON.stringify(gExercicesClos)); } catch(e2) {}
+      closeModal();
+      showSyncError(e, "clôture de l'exercice " + annee);
+      renderExercices();
+    });
+}
+
+function rouvrirExercice(annee) {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.", "err"); return; }
+  annee = String(annee);
+  if (!_exEstClos(annee)) { showToast("Cet exercice n'est pas clos.", "err"); return; }
+  var suivante = String(parseInt(annee, 10) + 1);
+  showModal("Rouvrir l'exercice " + annee + " ?",
+    "L'instantané sera supprimé, les 12 mois rouverts, et le solde d'ouverture de " + suivante
+    + " retiré. Les chiffres redeviendront calculés à la volée : ceux déjà présentés au comité pourront changer. L'opération est inscrite au journal d'audit.",
+    function() {
+      delete gExercicesClos[annee];
+      for (var m = 1; m <= 12; m++) delete gClotures[annee + "-" + (m < 10 ? "0" : "") + m];
+      if (gReports[suivante] && gReports[suivante].depuis === annee) delete gReports[suivante];
+      try { localStorage.setItem("ecc_exercices", JSON.stringify(gExercicesClos)); } catch(e) {}
+      function fini() {
+        closeModal();
+        gExAffiche = annee;
+        showToast("Exercice " + annee + " rouvert.", "warn");
+        if (typeof logAudit === "function") logAudit("REOUVERTURE_EXERCICE", "Finances", "Réouverture de l'exercice " + annee);
+        renderExercices();
+      }
+      if (!IS_CONFIGURED || !gDb) { _enregistrerClotures(); _enregistrerReports(); fini(); return; }
+      gDb.collection("exercices").doc("ex_" + annee).delete()
+        .then(function() { _enregistrerClotures(function() { _enregistrerReports(fini); }); })
+        .catch(function(e) { closeModal(); showSyncError(e, "réouverture de l'exercice " + annee); });
+    });
+}
+
+// --- Restitution d'un exercice clos (ou en cours) ---
+function _htmlExercice(annee) {
+  annee = String(annee);
+  var clos = _exEstClos(annee);
+  var inst = clos ? gExercicesClos[annee] : _instantaneExercice(annee);
+  var estAdminUser = !!(gCurrentUser && gCurrentUser.role === "admin");
+  var suivante = String(parseInt(annee, 10) + 1);
+  var h = "";
+
+  h += "<div class='card'><div class='card-hdr' style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px'>";
+  h += "<h2>Exercice " + escH(annee) + (clos ? " — clos" : " — en cours") + "</h2>";
+  h += "<div style='display:flex;gap:6px;flex-wrap:wrap'>";
+  h += "<button class='btn btn-o btn-sm' onclick=\"printExercice('" + annee + "')\">🖨️ Imprimer</button>";
+  h += "<button class='btn btn-o btn-sm' onclick=\"exporterExercice('" + annee + "')\">📊 Excel</button>";
+  h += "</div></div><div class='card-body'>";
+  if (clos) {
+    h += "<div style='background:#f0faf4;border-radius:7px;padding:9px 11px;font-size:.76rem;color:#33506e;margin-bottom:10px'>";
+    h += "✓ <b>Chiffres figés</b> le " + escH(String(inst.clotureLe || "").slice(0, 10)) + (inst.cloturePar ? " par " + escH(inst.cloturePar) : "") + ". ";
+    h += "Une correction postérieure sur " + escH(annee) + " ne les modifie plus.";
+    if (inst.detailTronque) h += " Le détail par opération n'a pas été conservé : il dépassait la taille d'un document.";
+    h += "</div>";
+  } else {
+    h += "<div style='background:#fff8e1;border-left:3px solid #f0a500;border-radius:0 6px 6px 0;padding:8px 11px;font-size:.76rem;color:#b45309;margin-bottom:10px'>";
+    h += "⚠️ <b>Exercice non clos.</b> Ces chiffres sont recalculés à chaque affichage : ils changeront à la moindre correction. Clôturez pour les figer.";
+    h += "</div>";
+  }
+  h += "<div class='stat-grid'>";
+  h += "<div class='stat'><div class='stat-lbl'>Ouverture</div><div class='stat-val' style='color:#6b88a4'>" + fmt(inst.reportEntrant || 0) + "</div></div>";
+  h += "<div class='stat'><div class='stat-lbl'>Recettes</div><div class='stat-val' style='color:#15803d'>" + fmt(inst.totalRecettes) + "</div></div>";
+  h += "<div class='stat'><div class='stat-lbl'>Dépenses</div><div class='stat-val' style='color:#c0392b'>" + fmt(inst.totalDepenses) + "</div></div>";
+  h += "<div class='stat'><div class='stat-lbl'>Solde reporté</div><div class='stat-val' style='color:#1a3a5c'>" + fmt(inst.soldeSortant) + "</div></div>";
+  h += "</div></div></div>";
+
+  h += "<div class='card' style='margin-top:12px'><div class='card-hdr'><h2>Synthèse par module</h2></div><div class='card-body'>";
+  h += "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:.8rem'>";
+  h += "<tr style='background:var(--pale)'><th style='padding:6px 8px;text-align:left'>Module</th><th style='padding:6px 8px;text-align:right'>Recettes</th><th style='padding:6px 8px;text-align:right'>Dépenses</th><th style='padding:6px 8px;text-align:right'>Solde</th></tr>";
+  EX_MODULES_ORDRE.forEach(function(k, i) {
+    var mo = (inst.modules || {})[k] || { rec: 0, dep: 0 };
+    h += "<tr style='border-bottom:1px solid #eef2f6;background:" + (i % 2 === 0 ? "#fff" : "#f8fafd") + "'>"
+      + "<td style='padding:6px 8px;font-weight:600'>" + EX_MODULES_LBL[k] + "</td>"
+      + "<td style='padding:6px 8px;text-align:right'>" + (mo.rec ? fmt(mo.rec) : "—") + "</td>"
+      + "<td style='padding:6px 8px;text-align:right'>" + (mo.dep ? fmt(mo.dep) : "—") + "</td>"
+      + "<td style='padding:6px 8px;text-align:right;font-weight:700;color:" + (mo.rec - mo.dep >= 0 ? "#15803d" : "#c0392b") + "'>" + fmt(mo.rec - mo.dep) + "</td></tr>";
+  });
+  h += "<tr style='background:#1a3a5c;color:#fff;font-weight:800'><td style='padding:7px 8px'>TOTAL</td>"
+    + "<td style='padding:7px 8px;text-align:right'>" + fmt(inst.totalRecettes) + "</td>"
+    + "<td style='padding:7px 8px;text-align:right'>" + fmt(inst.totalDepenses) + "</td>"
+    + "<td style='padding:7px 8px;text-align:right'>" + fmt(inst.resultat) + "</td></tr>";
+  h += "</table></div>";
+  h += "<div style='margin-top:10px;font-size:.75rem;color:#6b88a4;line-height:1.55'>La ligne Finances porte les cultes, donc aussi ce que les autres modules y ont injecté ; les lignes des modules ne comptent que ce qui n'a pas été porté en culte. Taux USD retenu : <b>" + fmt(inst.tauxUSD || 0) + "</b>.</div>";
+  h += "</div></div>";
+
+  h += "<div class='card' style='margin-top:12px'><div class='card-hdr'><h2>Enchaînement des soldes</h2></div><div class='card-body'>";
+  h += "<table style='width:100%;border-collapse:collapse;font-size:.82rem'>";
+  h += "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:5px 8px'>Solde d'ouverture" + (inst.reportEntrantBase ? " (" + escH(((typeof REPORT_BASES !== "undefined" && REPORT_BASES[inst.reportEntrantBase]) || {}).label || inst.reportEntrantBase) + ")" : "") + "</td><td style='padding:5px 8px;text-align:right;font-weight:700'>" + fmt(inst.reportEntrant || 0) + "</td></tr>";
+  h += "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:5px 8px'>+ Recettes de l'exercice</td><td style='padding:5px 8px;text-align:right;color:#15803d'>" + fmt(inst.totalRecettes) + "</td></tr>";
+  h += "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:5px 8px'>− Dépenses de l'exercice</td><td style='padding:5px 8px;text-align:right;color:#c0392b'>" + fmt(inst.totalDepenses) + "</td></tr>";
+  h += "<tr style='background:#f0faf4;font-weight:800'><td style='padding:6px 8px'>= Solde reporté sur " + escH(suivante) + "</td><td style='padding:6px 8px;text-align:right;color:#15803d'>" + fmt(inst.soldeSortant) + "</td></tr>";
+  h += "</table></div></div>";
+
+  h += "<div class='card' style='margin-top:12px'><div class='card-hdr'><h2>Clôture</h2></div><div class='card-body'>";
+  var nv = _exMoisVerrouilles(annee);
+  if (clos) {
+    h += "<p style='font-size:.8rem;color:#33506e'>Exercice clos, " + nv + " mois sur 12 verrouillés, solde d'ouverture de " + escH(suivante) + " posé à " + fmt(inst.soldeSortant) + " FC.</p>";
+    if (estAdminUser) h += "<button class='btn btn-d btn-sm' style='margin-top:8px' onclick=\"rouvrirExercice('" + annee + "')\">Rouvrir l'exercice</button>";
+  } else if (estAdminUser) {
+    h += "<p style='font-size:.8rem;color:#33506e;margin-bottom:8px'>Clôturer fige ces chiffres, verrouille les 12 mois de " + escH(annee) + " et pose le solde d'ouverture de " + escH(suivante) + ".</p>";
+    h += "<button class='btn btn-g btn-sm' onclick=\"apercuCloture('" + annee + "')\">🔒 Clôturer l'exercice " + escH(annee) + "</button>";
+  } else {
+    h += "<p style='color:var(--muted);font-size:.82rem'>Exercice non clos. Seul l'administrateur peut le clôturer.</p>";
+  }
+  h += "</div></div>";
+  return h;
+}
+
+function printExercice(annee) {
+  annee = String(annee);
+  if (annee === "2025") { printExercice2025(); return; }
+  var clos = _exEstClos(annee);
+  var inst = clos ? gExercicesClos[annee] : _instantaneExercice(annee);
+  var suivante = String(parseInt(annee, 10) + 1);
+  var win = _fenetreImpression("width=950,height=900"); if (!win) return;
+  win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Exercice " + annee + "</title><style>" + getPrintCSS() + "table{width:100%;border-collapse:collapse;font-size:10px}th{background:#1a3a5c;color:#fff;padding:6px 9px;text-align:right}th:first-child{text-align:left}</style></head><body>");
+  win.document.write(buildPrintHeader("Exercice " + annee + (clos ? " — clos" : " — en cours")));
+  win.document.write(clos
+    ? "<p style='font-size:9.5px;color:#6b88a4;margin-bottom:8px'>Chiffres figés le " + escH(String(inst.clotureLe || "").slice(0, 10)) + (inst.cloturePar ? " par " + escH(inst.cloturePar) : "") + ". Taux USD retenu : " + fmt(inst.tauxUSD || 0) + ".</p>"
+    : "<p style='font-size:9.5px;color:#b45309;margin-bottom:8px'>Exercice non clos : ces chiffres sont recalculés à chaque édition et peuvent encore changer.</p>");
+  win.document.write("<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px'>"
+    + "<div style='background:#eef4fb;border-radius:7px;padding:8px;text-align:center'><div style='font-size:8px;color:#6b88a4;font-weight:700'>OUVERTURE</div><div style='font-size:14px;font-weight:800;color:#1a3a5c'>" + fmt(inst.reportEntrant || 0) + "</div></div>"
+    + "<div style='background:#f0faf4;border-radius:7px;padding:8px;text-align:center'><div style='font-size:8px;color:#6b88a4;font-weight:700'>RECETTES</div><div style='font-size:14px;font-weight:800;color:#15803d'>" + fmt(inst.totalRecettes) + "</div></div>"
+    + "<div style='background:#fdf0ee;border-radius:7px;padding:8px;text-align:center'><div style='font-size:8px;color:#6b88a4;font-weight:700'>DÉPENSES</div><div style='font-size:14px;font-weight:800;color:#c0392b'>" + fmt(inst.totalDepenses) + "</div></div>"
+    + "<div style='background:#eef4fb;border-radius:7px;padding:8px;text-align:center'><div style='font-size:8px;color:#6b88a4;font-weight:700'>REPORT " + suivante + "</div><div style='font-size:14px;font-weight:800;color:#1a3a5c'>" + fmt(inst.soldeSortant) + "</div></div></div>");
+  var rows = "";
+  EX_MODULES_ORDRE.forEach(function(k, i) {
+    var mo = (inst.modules || {})[k] || { rec: 0, dep: 0 };
+    rows += "<tr style='background:" + (i % 2 === 0 ? "#fff" : "#f8fafd") + ";border-bottom:1px solid #eef2f6'>"
+      + "<td style='padding:5px 9px'>" + EX_MODULES_LBL[k] + "</td>"
+      + "<td style='padding:5px 9px;text-align:right'>" + (mo.rec ? fmt(mo.rec) : "—") + "</td>"
+      + "<td style='padding:5px 9px;text-align:right'>" + (mo.dep ? fmt(mo.dep) : "—") + "</td>"
+      + "<td style='padding:5px 9px;text-align:right;font-weight:700'>" + fmt(mo.rec - mo.dep) + "</td></tr>";
+  });
+  win.document.write("<table><tr><th>Module</th><th>Recettes</th><th>Dépenses</th><th>Solde</th></tr>" + rows
+    + "<tr style='background:#1a3a5c;color:#fff;font-weight:800'><td style='padding:6px 9px'>TOTAL</td><td style='padding:6px 9px;text-align:right'>" + fmt(inst.totalRecettes)
+    + "</td><td style='padding:6px 9px;text-align:right'>" + fmt(inst.totalDepenses) + "</td><td style='padding:6px 9px;text-align:right'>" + fmt(inst.resultat) + "</td></tr></table>");
+  win.document.write("<h3 style='font-size:11px;color:#1a3a5c;border-left:3px solid #1a3a5c;padding-left:8px;margin:16px 0 6px'>Enchaînement des soldes</h3>");
+  win.document.write("<table>"
+    + "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:5px 9px'>Solde d'ouverture</td><td style='padding:5px 9px;text-align:right'>" + fmt(inst.reportEntrant || 0) + "</td></tr>"
+    + "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:5px 9px'>+ Recettes</td><td style='padding:5px 9px;text-align:right'>" + fmt(inst.totalRecettes) + "</td></tr>"
+    + "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:5px 9px'>− Dépenses</td><td style='padding:5px 9px;text-align:right'>" + fmt(inst.totalDepenses) + "</td></tr>"
+    + "<tr style='background:#f0faf4;font-weight:800'><td style='padding:6px 9px'>= Solde reporté sur " + suivante + "</td><td style='padding:6px 9px;text-align:right'>" + fmt(inst.soldeSortant) + "</td></tr></table>");
+  win.document.write("<div class='footer'>ECC Kingasani 2 — Exercice " + annee + ", édité le " + new Date().toLocaleDateString("fr-FR") + "</div>");
+  win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#1a3a5c;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>Imprimer / PDF</button></div>");
+  win.document.write("</body></html>"); win.document.close();
+}
+
+function exporterExercice(annee) {
+  annee = String(annee);
+  if (annee === "2025") { exporterExercice2025(); return; }
+  if (typeof XLSX === "undefined") { showToast("SheetJS non chargé. Vérifiez votre connexion internet et rechargez la page.", "err"); return; }
+  var clos = _exEstClos(annee);
+  var inst = clos ? gExercicesClos[annee] : _instantaneExercice(annee);
+  var suivante = String(parseInt(annee, 10) + 1);
+  var wb = XLSX.utils.book_new();
+  function feuille(nom, entetes, lignes) {
+    if (!lignes.length) return;
+    var ws = XLSX.utils.aoa_to_sheet([entetes].concat(lignes));
+    var cols = entetes.map(function(e) { return { wch: Math.max(String(e).length, 12) }; });
+    lignes.forEach(function(r) { r.forEach(function(v, i) { var l = String(v == null ? "" : v).length; if (cols[i] && l > cols[i].wch) cols[i].wch = Math.min(l, 44); }); });
+    ws["!cols"] = cols;
+    XLSX.utils.book_append_sheet(wb, ws, nom);
+  }
+  feuille("Synthèse", ["Rubrique", "Montant FC"], [
+    ["État", clos ? "Clos le " + String(inst.clotureLe || "").slice(0, 10) : "En cours — chiffres non figés"],
+    ["Taux USD retenu", inst.tauxUSD || 0],
+    ["Solde d'ouverture", inst.reportEntrant || 0],
+    ["Recettes", inst.totalRecettes],
+    ["Dépenses", inst.totalDepenses],
+    ["Résultat de l'exercice", inst.resultat],
+    ["Solde reporté sur " + suivante, inst.soldeSortant]
+  ]);
+  feuille("Modules", ["Module", "Recettes FC", "Dépenses FC", "Solde FC"],
+    EX_MODULES_ORDRE.map(function(k) {
+      var mo = (inst.modules || {})[k] || { rec: 0, dep: 0 };
+      return [EX_MODULES_LBL[k].replace(/^\S+\s/, ""), mo.rec, mo.dep, mo.rec - mo.dep];
+    }));
+  var d = inst.detail || {};
+  feuille("Cultes", ["Date", "Responsable", "Recettes FC", "Dépenses FC", "Solde FC"],
+    (d.cultes || []).map(function(c) { return [c.date || "", c.resp || "", Math.round(c.rec || 0), Math.round(c.dep || 0), Math.round(c.solde || 0)]; }));
+  feuille("Loyer", ["Date", "Contributeur", "Montant FC", "Porté en culte"],
+    (d.loyer || []).map(function(l) { return [l.date || "", l.contrib || "", Math.round(l.montant || 0), l.porte ? "oui" : "non"]; }));
+  feuille("Social", ["Date", "Bénéficiaire", "Type", "Montant FC"],
+    (d.social || []).map(function(a) { return [a.date || "", a.nom || "", a.type || "", Math.round(a.montant || 0)]; }));
+  feuille("Projets", ["Date", "Projet", "Type", "Désignation", "Montant FC", "Porté en culte"],
+    (d.projets || []).map(function(l) { return [l.date || "", l.projet || "", l.type || "", l.lib || "", Math.round(l.montant || 0), l.porte ? "oui" : "non"]; }));
+  feuille("Séminaire", ["Date", "Titre", "Recettes FC", "Dépenses FC", "Porté en culte"],
+    (d.seminaire || []).map(function(x) { return [x.date || "", x.titre || "", x.rec || 0, x.dep || 0, x.porte ? "oui" : "non"]; }));
+  feuille("ECODIM", ["Date", "Enfants", "Recettes FC", "Dépenses FC", "Porté en culte"],
+    (d.ecodim || []).map(function(x) { return [x.date || "", x.enfants || 0, x.rec || 0, x.dep || 0, x.porte ? "oui" : "non"]; }));
+  feuille("Membres", ["Mois", "Cotisations encaissées FC"],
+    (d.membres || []).map(function(x) { return [x.ym || "", Math.round(x.montant || 0)]; }));
+  XLSX.writeFile(wb, "Exercice_" + annee + (clos ? "_clos" : "_en_cours") + ".xlsx");
+  showToast("Exercice " + annee + " exporté.", "ok");
+}
 
 // ================================================
 // == MODULE BUDGET ==
@@ -20327,22 +20716,18 @@ function printRapportConsolide() {
   }, 'Générer le rapport');
 }
 
-function doRapportConsolide(type, periode) {
+// Agregation d'une periode, extraite du rapport consolide pour que la cloture
+// d'exercice fige exactement les chiffres que le rapport a presentes. Deux
+// implementations auraient fini par diverger.
+function _agregerPeriode(type, periode) {
   var t = getTaux();
-  // Déterminer la plage de mois à couvrir
   var moisList = [];
-  var MOIS_NOMS = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
-  if(type==='mois'){
+  if (type === 'mois') {
     moisList = [periode];
   } else {
     var yr = parseInt(periode);
-    for(var m=1;m<=12;m++) moisList.push(yr+'-'+(m<10?'0':'')+m);
+    for (var m = 1; m <= 12; m++) moisList.push(yr + '-' + (m < 10 ? '0' : '') + m);
   }
-
-  // Titre de la période
-  var titreP = type==='mois'
-    ? (function(){ var p=periode.split('-'); return MOIS_NOMS[parseInt(p[1])-1]+' '+p[0]; })()
-    : 'Année '+periode;
 
   // ---- AGRÉGER PAR MODULE ----
   function inPeriode(dateStr){ return moisList.indexOf((dateStr||'').substring(0,7))>=0; }
@@ -20434,6 +20819,37 @@ function doRapportConsolide(type, periode) {
   // ---- TOTAUX GLOBAUX ----
   var totalRecettes  = finRec + loyTotal + semRec + ecoRec + membTotal;
   var totalDepenses  = finDep + socTotal + projTotal + semDep + ecoDep;
+  var soldeGlobal = totalRecettes - totalDepenses;
+
+  return {
+    type: type, periode: String(periode), taux: t, moisList: moisList,
+    finRec: finRec, finDep: finDep, finCultes: finCultes,
+    loyTotal: loyTotal, loyLignes: loyLignes,
+    socTotal: socTotal, socLignes: socLignes,
+    projTotal: projTotal, projLignes: projLignes,
+    semRec: semRec, semDep: semDep, semSessions: semSessions,
+    ecoRec: ecoRec, ecoDep: ecoDep, ecoSessions: ecoSessions,
+    membTotal: membTotal, membDetails: membDetails,
+    totalRecettes: totalRecettes, totalDepenses: totalDepenses, soldeGlobal: soldeGlobal
+  };
+}
+
+function doRapportConsolide(type, periode) {
+  var MOIS_NOMS = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+  var titreP = type==='mois'
+    ? (function(){ var p=periode.split('-'); return MOIS_NOMS[parseInt(p[1])-1]+' '+p[0]; })()
+    : 'Année '+periode;
+
+  var A = _agregerPeriode(type, periode);
+  var t = A.taux;
+  var finRec=A.finRec, finDep=A.finDep, finCultes=A.finCultes;
+  var loyTotal=A.loyTotal, loyLignes=A.loyLignes;
+  var socTotal=A.socTotal, socLignes=A.socLignes;
+  var projTotal=A.projTotal, projLignes=A.projLignes;
+  var semRec=A.semRec, semDep=A.semDep, semSessions=A.semSessions;
+  var ecoRec=A.ecoRec, ecoDep=A.ecoDep, ecoSessions=A.ecoSessions;
+  var membTotal=A.membTotal, membDetails=A.membDetails;
+  var totalRecettes=A.totalRecettes, totalDepenses=A.totalDepenses;
   var soldeGlobal    = totalRecettes - totalDepenses;
 
   // ---- CONSTRUCTION HTML ----
