@@ -3123,14 +3123,45 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
     </div>
   </div>
   <div class="card" style="margin-top:12px">
-    <div class="card-hdr" style="display:flex;justify-content:space-between;align-items:center">
-      <h2>Liste des visiteurs</h2>
-      <div style="display:flex;gap:6px">
-        <input type="text" id="vis-search" placeholder="Rechercher..." style="font-size:.78rem;padding:4px 8px;border:1px solid var(--border);border-radius:5px" oninput="renderVisiteurs()">
+    <div class="card-hdr" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+      <h2>Historique des visites</h2>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-o btn-sm" onclick="printVisiteurs()">🖨️ Imprimer</button>
+        <button class="btn btn-o btn-sm" onclick="exporterVisiteurs()">📊 Excel</button>
       </div>
     </div>
-    <div class="card-body" id="vis-liste"><p style="color:var(--muted);font-size:.82rem">Aucun visiteur enregistré.</p></div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:8px;margin-bottom:10px">
+        <div class="fg"><label style="font-size:.7rem">Du</label><input type="date" id="vis-f-du" onchange="renderVisiteurs()"></div>
+        <div class="fg"><label style="font-size:.7rem">Au</label><input type="date" id="vis-f-au" onchange="renderVisiteurs()"></div>
+        <div class="fg"><label style="font-size:.7rem">Catégorie</label>
+          <select id="vis-f-cat" onchange="renderVisiteurs()">
+            <option value="">Toutes</option>
+            <option value="adherant">Membre adhérant</option>
+            <option value="passager">Passager</option>
+            <option value="temporaire">Temporaire</option>
+            <option value="invite">Invité spécial</option>
+            <option value="touriste">Touriste</option>
+          </select>
+        </div>
+        <div class="fg"><label style="font-size:.7rem">Culte</label>
+          <select id="vis-f-culte" onchange="renderVisiteurs()">
+            <option value="">Tous</option>
+            <option value="CF">CF</option>
+            <option value="CL">CL</option>
+            <option value="Les deux">Les deux</option>
+          </select>
+        </div>
+        <div class="fg"><label style="font-size:.7rem">Recherche</label><input type="text" id="vis-search" placeholder="Nom ou téléphone" oninput="renderVisiteurs()"></div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+        <button class="btn btn-sm" id="vis-vue-visites" onclick="setVueVisiteurs('visites')">📅 Par visite</button>
+        <button class="btn btn-o btn-sm" id="vis-vue-personnes" onclick="setVueVisiteurs('personnes')">👤 Par personne</button>
+        <button class="btn btn-o btn-sm" onclick="reinitFiltresVisiteurs()">↺ Réinitialiser</button>
+      </div>
+      <div id="vis-stats"></div>
+      <div id="vis-liste"><p style="color:var(--muted);font-size:.82rem">Aucun visiteur enregistré.</p></div>
+    </div>
   </div>
 </div>
 
@@ -18632,25 +18663,145 @@ function saveVisiteur(){
   renderVisiteurs(); showToast("Visiteur enregistré.","ok");
   notifyAdmin("🙋","Nouveau visiteur",nom+" ("+(VIS_CATS[cat]||cat)+")","effectif");
 }
+var gVisVue = "visites";
+function _visNorm(s){
+  return (s||"").toString().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim();
+}
+function _visTelNorm(t){ return (t||"").replace(/[^0-9]/g,""); }
+function _visCleIdentite(v){
+  var tel=_visTelNorm(v.tel);
+  if(tel.length>=8) return "t:"+tel.slice(-9);
+  return "n:"+_visNorm(v.nom);
+}
+function _visDateFr(d){ if(!d) return "-"; var p=String(d).split("-"); return p.length===3?p[2]+"/"+p[1]+"/"+p[0]:String(d); }
+function _visFiltre(){
+  function val(id){ var e=document.getElementById(id); return e?(e.value||""):""; }
+  var du=val("vis-f-du"), au=val("vis-f-au"), cat=val("vis-f-cat"), culte=val("vis-f-culte");
+  var brut=val("vis-search"), q=_visNorm(brut), qt=_visTelNorm(brut);
+  var liste=(EFFDB.visiteurs||[]).filter(function(v){
+    var d=v.date||"";
+    if((du||au) && !d) return false;
+    if(du && d<du) return false;
+    if(au && d>au) return false;
+    if(cat && (v.cat||"")!==cat) return false;
+    if(culte && (v.culte||"")!==culte) return false;
+    if(q){
+      var okNom=_visNorm(v.nom).indexOf(q)>=0;
+      var okTel=qt.length>=3 && _visTelNorm(v.tel).indexOf(qt)>=0;
+      if(!okNom && !okTel) return false;
+    }
+    return true;
+  }).slice().sort(function(a,b){ return (b.date||"").localeCompare(a.date||""); });
+  var parts=[];
+  if(du||au) parts.push("P\u00e9riode : "+(du?_visDateFr(du):"origine")+" \u2192 "+(au?_visDateFr(au):"ce jour"));
+  if(cat) parts.push("Cat\u00e9gorie : "+(VIS_CATS[cat]||cat));
+  if(culte) parts.push("Culte : "+culte);
+  if(brut.trim()) parts.push("Recherche : \u00ab "+brut.trim()+" \u00bb");
+  return { liste:liste, filtre:!!parts.length, libelle:parts.length?parts.join(" \u00b7 "):"Toutes les visites enregistr\u00e9es" };
+}
+function _visParPersonne(liste){
+  var map={}, ordre=[];
+  for(var i=0;i<liste.length;i++){
+    var v=liste[i], k=_visCleIdentite(v);
+    if(!map[k]){ map[k]={cle:k,nom:v.nom||"",tel:v.tel||"",adresse:v.adresse||"",cat:v.cat||"",cultes:{},visites:[],premiere:"",derniere:"",notes:""}; ordre.push(k); }
+    var p=map[k];
+    p.visites.push(v);
+    if(!p.tel && v.tel) p.tel=v.tel;
+    if(!p.adresse && v.adresse) p.adresse=v.adresse;
+    if(v.culte) p.cultes[v.culte]=(p.cultes[v.culte]||0)+1;
+    if(v.date){
+      if(!p.derniere || v.date>p.derniere){ p.derniere=v.date; p.cat=v.cat||p.cat; p.nom=v.nom||p.nom; if(v.notes) p.notes=v.notes; }
+      if(!p.premiere || v.date<p.premiere) p.premiere=v.date;
+    }
+  }
+  var out=ordre.map(function(k){ return map[k]; });
+  out.sort(function(a,b){
+    if(b.visites.length!==a.visites.length) return b.visites.length-a.visites.length;
+    return (b.derniere||"").localeCompare(a.derniere||"");
+  });
+  return out;
+}
+function _visStats(liste){
+  var pers=_visParPersonne(liste), revenus=0, uniques=0;
+  for(var i=0;i<pers.length;i++){ if(pers[i].visites.length>1) revenus++; else uniques++; }
+  var parCat={};
+  for(var j=0;j<liste.length;j++){ var c=liste[j].cat||"passager"; parCat[c]=(parCat[c]||0)+1; }
+  return { visites:liste.length, personnes:pers.length, revenus:revenus, uniques:uniques, parCat:parCat };
+}
+function _visStatsHTML(st){
+  function tuile(lbl,val,col,fond){
+    return "<div style='background:"+fond+";border-radius:7px;padding:8px;text-align:center'><div style='font-size:9px;color:#6b88a4;font-weight:700;text-transform:uppercase'>"+lbl+"</div><div style='font-size:16px;font-weight:800;color:"+col+"'>"+val+"</div></div>";
+  }
+  var h="<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px'>";
+  h+=tuile("Visites",st.visites,"#1a3a5c","#eef4fb");
+  h+=tuile("Personnes",st.personnes,"#1a3a5c","#eef4fb");
+  h+=tuile("Revenues",st.revenus,"#15803d","#f0faf4");
+  h+=tuile("Une seule fois",st.uniques,"#e67e22","#fdf6ee");
+  h+="</div>";
+  var cats=Object.keys(st.parCat);
+  if(cats.length){
+    h+="<div style='font-size:10px;color:#6b88a4;margin-bottom:10px'>"+cats.map(function(c){
+      return "<b style='color:#1a3a5c'>"+st.parCat[c]+"</b> "+escH(VIS_CATS[c]||c);
+    }).join(" &middot; ")+"</div>";
+  }
+  return h;
+}
+function setVueVisiteurs(v){ gVisVue=(v==="personnes")?"personnes":"visites"; renderVisiteurs(); }
+function reinitFiltresVisiteurs(){
+  ["vis-f-du","vis-f-au","vis-f-cat","vis-f-culte","vis-search"].forEach(function(id){
+    var e=document.getElementById(id); if(e) e.value="";
+  });
+  renderVisiteurs();
+}
+var VIS_COULEURS={adherant:"#15803d",invite:"#8e44ad",touriste:"#e67e22",passager:"#6b88a4",temporaire:"#6b88a4"};
 function renderVisiteurs(){
   var cont=document.getElementById("vis-liste"); if(!cont) return;
-  var search=((document.getElementById("vis-search")||{}).value||"").toLowerCase();
-  var list=(EFFDB.visiteurs||[]).filter(function(v){
-    return !search||(v.nom||"").toLowerCase().indexOf(search)>=0||(v.tel||"").indexOf(search)>=0;
-  });
-  if(!list.length){cont.innerHTML="<p style='color:var(--muted);font-size:.82rem'>Aucun visiteur.</p>";return;}
-  var catColors={adherant:"#15803d",invite:"#8e44ad",touriste:"#e67e22",passager:"#6b88a4",temporaire:"#6b88a4"};
-  var html="<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:.78rem'>";
-  html+="<tr style='background:var(--pale)'><th style='padding:6px 8px;text-align:left'>Date</th><th style='padding:6px 8px;text-align:left'>Nom</th><th style='padding:6px 8px;text-align:left'>Téléphone</th><th style='padding:6px 8px;text-align:left'>Adresse</th><th style='padding:6px 8px;text-align:center'>Culte</th><th style='padding:6px 8px;text-align:left'>Catégorie</th><th></th></tr>";
-  for(var i=0;i<list.length;i++){
-    var v=list[i],cc=catColors[v.cat]||"#6b88a4";
-    html+="<tr style='border-bottom:1px solid #eef2f6'><td style='padding:6px 8px'>"+escH(v.date||"")+"</td><td style='padding:6px 8px;font-weight:700'>"+escH(v.nom||"")+"</td><td style='padding:6px 8px'>"+escH(v.tel||"-")+"</td><td style='padding:6px 8px;color:var(--muted)'>"+escH(v.adresse||"-")+"</td><td style='padding:6px 8px;text-align:center;font-weight:700;color:#1a3a5c'>"+escH(v.culte||"")+"</td><td style='padding:6px 8px;font-size:.72rem;font-weight:700;color:"+cc+"'>"+escH(VIS_CATS[v.cat]||v.cat||"-")+"</td><td style='padding:4px'><button class='btn btn-d btn-sm' onclick=\"delVisiteur('"+v.id+"')\" style='padding:2px 8px'>✕</button></td></tr>";
+  var bv=document.getElementById("vis-vue-visites"), bp=document.getElementById("vis-vue-personnes");
+  if(bv) bv.className="btn btn-sm"+(gVisVue==="visites"?"":" btn-o");
+  if(bp) bp.className="btn btn-sm"+(gVisVue==="personnes"?"":" btn-o");
+  var f=_visFiltre(), list=f.liste;
+  var zs=document.getElementById("vis-stats");
+  if(zs) zs.innerHTML=list.length?_visStatsHTML(_visStats(list)):"";
+  if(!list.length){
+    cont.innerHTML="<p style='color:var(--muted);font-size:.82rem'>"+(f.filtre?"Aucune visite ne correspond \u00e0 ces crit\u00e8res.":"Aucun visiteur enregistr\u00e9.")+"</p>";
+    return;
   }
-  html+="</table></div>"; cont.innerHTML=html;
+  var html="";
+  if(gVisVue==="personnes"){
+    var pers=_visParPersonne(list);
+    html+="<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:.78rem'>";
+    html+="<tr style='background:var(--pale)'><th style='padding:6px 8px;text-align:left'>Nom</th><th style='padding:6px 8px;text-align:center'>Visites</th><th style='padding:6px 8px;text-align:left'>1\u00e8re</th><th style='padding:6px 8px;text-align:left'>Derni\u00e8re</th><th style='padding:6px 8px;text-align:left'>T\u00e9l\u00e9phone</th><th style='padding:6px 8px;text-align:left'>Adresse</th><th style='padding:6px 8px;text-align:center'>Cultes</th><th style='padding:6px 8px;text-align:left'>Cat\u00e9gorie</th></tr>";
+    for(var p=0;p<pers.length;p++){
+      var pr=pers[p], cc=VIS_COULEURS[pr.cat]||"#6b88a4";
+      var cultes=Object.keys(pr.cultes).map(function(c){ return escH(c)+" \u00d7"+pr.cultes[c]; }).join(", ");
+      var nb=pr.visites.length;
+      html+="<tr style='border-bottom:1px solid #eef2f6;background:"+(p%2===0?"#fff":"#f8fafd")+"'>"
+        +"<td style='padding:6px 8px;font-weight:700'>"+escH(pr.nom||"-")+"</td>"
+        +"<td style='padding:6px 8px;text-align:center;font-weight:800;color:"+(nb>1?"#15803d":"#6b88a4")+"'>"+nb+"</td>"
+        +"<td style='padding:6px 8px'>"+_visDateFr(pr.premiere)+"</td>"
+        +"<td style='padding:6px 8px;font-weight:700'>"+_visDateFr(pr.derniere)+"</td>"
+        +"<td style='padding:6px 8px'>"+escH(pr.tel||"-")+"</td>"
+        +"<td style='padding:6px 8px;color:var(--muted)'>"+escH(pr.adresse||"-")+"</td>"
+        +"<td style='padding:6px 8px;text-align:center;font-size:.72rem'>"+(cultes||"-")+"</td>"
+        +"<td style='padding:6px 8px;font-size:.72rem;font-weight:700;color:"+cc+"'>"+escH(VIS_CATS[pr.cat]||pr.cat||"-")+"</td></tr>";
+    }
+    html+="</table></div>";
+  } else {
+    html+="<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:.78rem'>";
+    html+="<tr style='background:var(--pale)'><th style='padding:6px 8px;text-align:left'>Date</th><th style='padding:6px 8px;text-align:left'>Nom</th><th style='padding:6px 8px;text-align:left'>T\u00e9l\u00e9phone</th><th style='padding:6px 8px;text-align:left'>Adresse</th><th style='padding:6px 8px;text-align:center'>Culte</th><th style='padding:6px 8px;text-align:left'>Cat\u00e9gorie</th><th></th></tr>";
+    for(var i=0;i<list.length;i++){
+      var v=list[i], c2=VIS_COULEURS[v.cat]||"#6b88a4";
+      html+="<tr style='border-bottom:1px solid #eef2f6'><td style='padding:6px 8px'>"+_visDateFr(v.date)+"</td><td style='padding:6px 8px;font-weight:700'>"+escH(v.nom||"")+"</td><td style='padding:6px 8px'>"+escH(v.tel||"-")+"</td><td style='padding:6px 8px;color:var(--muted)'>"+escH(v.adresse||"-")+"</td><td style='padding:6px 8px;text-align:center;font-weight:700;color:#1a3a5c'>"+escH(v.culte||"")+"</td><td style='padding:6px 8px;font-size:.72rem;font-weight:700;color:"+c2+"'>"+escH(VIS_CATS[v.cat]||v.cat||"-")+"</td><td style='padding:4px'><button class='btn btn-d btn-sm' onclick=\"delVisiteur('"+v.id+"')\" style='padding:2px 8px'>\u2715</button></td></tr>";
+    }
+    html+="</table></div>";
+  }
+  cont.innerHTML=html;
 }
 function delVisiteur(id){
-  EFFDB.visiteurs=(EFFDB.visiteurs||[]).filter(function(v){return v.id!==id;});
-  saveEffDB(EFFDB); renderVisiteurs(); showToast("Visiteur supprimé.","");
+  var v=(EFFDB.visiteurs||[]).filter(function(x){return x.id===id;})[0];
+  if(v && !confirm("Supprimer d\u00e9finitivement la visite de "+(v.nom||"?")+" du "+_visDateFr(v.date)+" ?")) return;
+  EFFDB.visiteurs=(EFFDB.visiteurs||[]).filter(function(x){return x.id!==id;});
+  saveEffDB(EFFDB); renderVisiteurs(); showToast("Visiteur supprim\u00e9.","");
 }
 function renderEffHistorique(){
   var cont=document.getElementById("eff-hist-cont"); if(!cont) return;
@@ -18682,17 +18833,76 @@ function printEffHistorique(){
   win.document.write("</body></html>"); win.document.close();
 }
 function printVisiteurs(){
-  var list=(EFFDB.visiteurs||[]).slice().sort(function(a,b){return (b.date||"").localeCompare(a.date||"");});
+  var f=_visFiltre(), list=f.liste;
+  if(!list.length){ showToast("Aucune visite \u00e0 imprimer avec ces filtres.","err"); return; }
+  var st=_visStats(list), parPersonne=(gVisVue==="personnes");
   var rows="";
-  for(var i=0;i<list.length;i++){var v=list[i]; rows+="<tr style='border-bottom:1px solid #e5eaf0;background:"+(i%2===0?"#fff":"#f8fafd")+"'><td style='padding:5px 8px'>"+escH(v.date||"")+"</td><td style='padding:5px 8px;font-weight:700'>"+escH(v.nom||"")+"</td><td style='padding:5px 8px'>"+escH(v.tel||"-")+"</td><td style='padding:5px 8px'>"+escH(v.adresse||"-")+"</td><td style='padding:5px 8px;text-align:center'>"+escH(v.culte||"")+"</td><td style='padding:5px 8px'>"+escH(VIS_CATS[v.cat]||v.cat||"-")+"</td><td style='padding:5px 8px;color:#6b88a4'>"+escH(v.notes||"-")+"</td></tr>";}
-  var win=window.open("","_blank","width=900,height=900"); if(!win){showToast("Autorisez les pop-ups.","err");return;}
-  win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Visiteurs</title><style>"+getPrintCSS()+"</style></head><body>");
-  win.document.write(buildPrintHeader("Liste des Visiteurs"));
-  win.document.write("<p style='font-size:10px;color:#6b88a4;margin-bottom:10px'>"+list.length+" visiteur(s)</p>");
-  win.document.write("<table style='width:100%;border-collapse:collapse;font-size:9.5px'><tr style='background:#1a3a5c;color:#fff'><th style='padding:5px 8px;text-align:left'>Date</th><th style='padding:5px 8px;text-align:left'>Nom</th><th style='padding:5px 8px;text-align:left'>Téléphone</th><th style='padding:5px 8px;text-align:left'>Adresse</th><th style='padding:5px 8px'>Culte</th><th style='padding:5px 8px;text-align:left'>Catégorie</th><th style='padding:5px 8px;text-align:left'>Notes</th></tr>"+rows+"</table>");
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Visiteurs générés le "+new Date().toLocaleDateString("fr-FR")+"</div>");
+  if(parPersonne){
+    var pers=_visParPersonne(list);
+    for(var p=0;p<pers.length;p++){
+      var pr=pers[p];
+      var cultes=Object.keys(pr.cultes).map(function(c){ return escH(c)+" \u00d7"+pr.cultes[c]; }).join(", ");
+      rows+="<tr style='border-bottom:1px solid #e5eaf0;background:"+(p%2===0?"#fff":"#f8fafd")+"'>"
+        +"<td style='padding:5px 8px;font-weight:700'>"+escH(pr.nom||"-")+"</td>"
+        +"<td style='padding:5px 8px;text-align:center;font-weight:800'>"+pr.visites.length+"</td>"
+        +"<td style='padding:5px 8px'>"+_visDateFr(pr.premiere)+"</td>"
+        +"<td style='padding:5px 8px'>"+_visDateFr(pr.derniere)+"</td>"
+        +"<td style='padding:5px 8px'>"+escH(pr.tel||"-")+"</td>"
+        +"<td style='padding:5px 8px'>"+escH(pr.adresse||"-")+"</td>"
+        +"<td style='padding:5px 8px;text-align:center'>"+(cultes||"-")+"</td>"
+        +"<td style='padding:5px 8px'>"+escH(VIS_CATS[pr.cat]||pr.cat||"-")+"</td></tr>";
+    }
+  } else {
+    for(var i=0;i<list.length;i++){
+      var v=list[i];
+      rows+="<tr style='border-bottom:1px solid #e5eaf0;background:"+(i%2===0?"#fff":"#f8fafd")+"'><td style='padding:5px 8px'>"+_visDateFr(v.date)+"</td><td style='padding:5px 8px;font-weight:700'>"+escH(v.nom||"")+"</td><td style='padding:5px 8px'>"+escH(v.tel||"-")+"</td><td style='padding:5px 8px'>"+escH(v.adresse||"-")+"</td><td style='padding:5px 8px;text-align:center'>"+escH(v.culte||"")+"</td><td style='padding:5px 8px'>"+escH(VIS_CATS[v.cat]||v.cat||"-")+"</td><td style='padding:5px 8px;color:#6b88a4'>"+escH(v.notes||"-")+"</td></tr>";
+    }
+  }
+  var entetes = parPersonne
+    ? "<th style='padding:5px 8px;text-align:left'>Nom</th><th style='padding:5px 8px'>Visites</th><th style='padding:5px 8px;text-align:left'>1\u00e8re visite</th><th style='padding:5px 8px;text-align:left'>Derni\u00e8re</th><th style='padding:5px 8px;text-align:left'>T\u00e9l\u00e9phone</th><th style='padding:5px 8px;text-align:left'>Adresse</th><th style='padding:5px 8px'>Cultes</th><th style='padding:5px 8px;text-align:left'>Cat\u00e9gorie</th>"
+    : "<th style='padding:5px 8px;text-align:left'>Date</th><th style='padding:5px 8px;text-align:left'>Nom</th><th style='padding:5px 8px;text-align:left'>T\u00e9l\u00e9phone</th><th style='padding:5px 8px;text-align:left'>Adresse</th><th style='padding:5px 8px'>Culte</th><th style='padding:5px 8px;text-align:left'>Cat\u00e9gorie</th><th style='padding:5px 8px;text-align:left'>Notes</th>";
+  var win=_fenetreImpression("width=900,height=900"); if(!win) return;
+  win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Historique des visites</title><style>"+getPrintCSS()+"</style></head><body>");
+  win.document.write(buildPrintHeader(parPersonne?"Historique des visites \u2014 par personne":"Historique des visites"));
+  win.document.write("<p style='font-size:10px;color:#6b88a4;margin-bottom:10px'>"+escH(f.libelle)+"</p>");
+  win.document.write(_visStatsHTML(st));
+  win.document.write("<table style='width:100%;border-collapse:collapse;font-size:9.5px'><tr style='background:#1a3a5c;color:#fff'>"+entetes+"</tr>"+rows+"</table>");
+  win.document.write("<div class='footer'>ECC Kingasani 2 \u2014 Historique des visites g\u00e9n\u00e9r\u00e9 le "+new Date().toLocaleDateString("fr-FR")+"</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#1a3a5c;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>Imprimer / PDF</button></div>");
   win.document.write("</body></html>"); win.document.close();
+}
+function exporterVisiteurs(){
+  if(typeof XLSX==="undefined"){ showToast("SheetJS non charg\u00e9. V\u00e9rifiez votre connexion internet et rechargez la page.","err"); return; }
+  var f=_visFiltre(), list=f.liste;
+  if(!list.length){ showToast("Aucune visite \u00e0 exporter avec ces filtres.","err"); return; }
+  var st=_visStats(list), pers=_visParPersonne(list);
+  var wb=XLSX.utils.book_new();
+  function feuille(nom, entetes, lignes){
+    var ws=XLSX.utils.aoa_to_sheet([entetes].concat(lignes));
+    var cols=entetes.map(function(h){ return {wch:Math.max(String(h).length,12)}; });
+    lignes.forEach(function(r){ r.forEach(function(val,i){ var l=String(val==null?"":val).length; if(cols[i]&&l>cols[i].wch) cols[i].wch=Math.min(l,40); }); });
+    ws["!cols"]=cols;
+    XLSX.utils.book_append_sheet(wb, ws, nom);
+  }
+  feuille("Synth\u00e8se", ["Indicateur","Valeur"], [
+    ["Filtre appliqu\u00e9", f.libelle],
+    ["Visites", st.visites],
+    ["Personnes distinctes", st.personnes],
+    ["Personnes revenues (2 visites et +)", st.revenus],
+    ["Personnes venues une seule fois", st.uniques],
+    ["", ""],
+    ["R\u00e9partition par cat\u00e9gorie", ""]
+  ].concat(Object.keys(st.parCat).map(function(c){ return [VIS_CATS[c]||c, st.parCat[c]]; })));
+  feuille("Visites", ["Date","Nom","T\u00e9l\u00e9phone","Adresse","Culte","Cat\u00e9gorie","Notes","Saisi par"],
+    list.map(function(v){ return [v.date||"", v.nom||"", v.tel||"", v.adresse||"", v.culte||"", VIS_CATS[v.cat]||v.cat||"", v.notes||"", v.par||""]; }));
+  feuille("Personnes", ["Nom","Nb visites","1\u00e8re visite","Derni\u00e8re visite","T\u00e9l\u00e9phone","Adresse","Cultes","Cat\u00e9gorie","Derni\u00e8re note"],
+    pers.map(function(p){
+      return [p.nom||"", p.visites.length, p.premiere||"", p.derniere||"", p.tel||"", p.adresse||"",
+              Object.keys(p.cultes).map(function(c){ return c+" x"+p.cultes[c]; }).join(", "),
+              VIS_CATS[p.cat]||p.cat||"", p.notes||""];
+    }));
+  XLSX.writeFile(wb, "Historique_visites_"+getTodayStr().replace(/-/g,"")+".xlsx");
+  showToast(st.visites+" visite(s) / "+st.personnes+" personne(s) export\u00e9es.","ok");
 }
 
 
