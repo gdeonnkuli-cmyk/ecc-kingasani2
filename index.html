@@ -20402,7 +20402,9 @@ function _jsCollecter(debut, fin) {
     ["cf", "cl"].forEach(function(k) {
       (h[k] || []).forEach(function(r) {
         if (!r) return;
-        var lbl = r.l || r.lib || "", note = r.note || "";
+        // L'historique stocke la note sous la cle « n » ; « note » n'existe
+        // que dans les lignes du formulaire en cours.
+        var lbl = r.l || r.lib || "", note = r.note || r.n || "";
         if (!_jsEstJournee(lbl) && !_jsEstJournee(note)) return;
         var mt = (parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux;
         if (mt <= 0) return;
@@ -20467,6 +20469,30 @@ function _jsCollecter(debut, fin) {
   return out;
 }
 
+// Ce que le module lit reellement sur la periode : sert a expliquer un
+// resultat vide plutot qu'a laisser chercher.
+function _jsDiagnostic(debut, fin) {
+  var cultes = 0, lignes = [];
+  (gHistCache || []).forEach(function(h) {
+    var date = (h.meta && h.meta.date) || "";
+    if (!date) return;
+    if (debut && date < debut) return;
+    if (fin && date > fin) return;
+    cultes++;
+    var taux = parseFloat(h.meta && h.meta.taux) || getTaux();
+    ["cf", "cl"].forEach(function(k) {
+      (h[k] || []).forEach(function(r) {
+        if (!r) return;
+        var lbl = r.l || r.lib || "", note = r.note || r.n || "";
+        var mt = (parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux;
+        if (!lbl && !mt) return;
+        lignes.push({ date: date, lbl: lbl, note: note, montant: mt });
+      });
+    });
+  });
+  return { cultes: cultes, lignes: lignes };
+}
+
 // ── Restitution ───────────────────────────────────────────────────────────
 function _jsPeriode() {
   function v(id) { var e = document.getElementById(id); return e ? (e.value || "") : ""; }
@@ -20496,9 +20522,29 @@ function renderJourneesSpeciales() {
   h += "</div></div>";
 
   if (!evts.length) {
-    h += "<div class='card' style='margin-top:12px'><div class='card-body'><p style='color:var(--muted);font-size:.82rem'>"
-       + "Aucune journée spéciale trouvée sur cette période. Vérifiez que la mention figure dans le libellé ou la note d'une recette."
-       + "</p></div></div>";
+    // Un ecran vide sans explication ne dit pas si le probleme vient de la
+    // periode, de la saisie, ou d'un culte pas encore enregistre. On montre
+    // donc ce que le module a reellement lu.
+    var scan = _jsDiagnostic(p.debut, p.fin);
+    h += "<div class='card' style='margin-top:12px'><div class='card-body'>";
+    h += "<p style='color:var(--muted);font-size:.82rem'>Aucune journ\u00e9e sp\u00e9ciale trouv\u00e9e sur cette p\u00e9riode.</p>";
+    if (!scan.cultes) {
+      h += "<p style='font-size:.78rem;color:#b45309'><b>Aucun culte enregistr\u00e9 sur cette p\u00e9riode.</b> "
+         + "Un culte en cours de saisie n'est pas encore dans l'historique : enregistrez-le d'abord.</p>";
+    } else {
+      h += "<p style='font-size:.78rem;color:#33506e'>" + scan.cultes + " culte(s) examin\u00e9(s), "
+         + scan.lignes.length + " ligne(s) de recette, aucune ne mentionnant \u00ab journ\u00e9e sp\u00e9ciale \u00bb :</p>";
+      h += "<div style='max-height:260px;overflow:auto'><table style='width:100%;border-collapse:collapse;font-size:.74rem'>";
+      h += "<tr style='background:var(--pale)'><th style='padding:4px 7px;text-align:left'>Date</th><th style='padding:4px 7px;text-align:left'>Libell\u00e9</th><th style='padding:4px 7px;text-align:left'>Note</th><th style='padding:4px 7px;text-align:right'>Montant</th></tr>";
+      scan.lignes.forEach(function(l) {
+        h += "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:4px 7px'>" + _visDateFr(l.date) + "</td>"
+          + "<td style='padding:4px 7px'>" + escH(l.lbl || "\u2014") + "</td>"
+          + "<td style='padding:4px 7px;color:#6b88a4'>" + escH(l.note || "\u2014") + "</td>"
+          + "<td style='padding:4px 7px;text-align:right;font-family:DM Mono,monospace'>" + fmt(l.montant) + "</td></tr>";
+      });
+      h += "</table></div>";
+    }
+    h += "</div></div>";
     cont.innerHTML = h; return;
   }
 
