@@ -1946,7 +1946,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
   <button class="tab" id="tab-btn-dashboard" onclick="showTab('dashboard')">Dashboard</button>
   <button class="tab" id="tab-btn-export" onclick="showTab('export')">Export</button>
   <button class="tab" id="tab-btn-exercices" onclick="showTab('exercices')">📚 Exercices clos</button>
-  <button class="tab" id="tab-btn-journees" onclick="showTab('journees')">🌟 Journées spéciales</button>
+  <button class="tab" id="tab-btn-etats" onclick="showTab('etats')">📊 États</button>
   <button class="tab" id="tab-btn-budget" onclick="showTab('budget')">💰 Budget</button>
 </nav>
 <div class="main" id="fin-main" style="display:none">
@@ -2251,8 +2251,8 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
 
 <!-- ADMIN -->
 <!-- ========== PAGE BUDGET ========== -->
-<div class="page" id="page-journees" style="display:none">
-  <div id="js-body"><p style="color:var(--muted);font-size:.82rem">Chargement…</p></div>
+<div class="page" id="page-etats" style="display:none">
+  <div id="et-body"><p style="color:var(--muted);font-size:.82rem">Chargement…</p></div>
 </div>
 
 <div class="page" id="page-exercices" style="display:none">
@@ -6394,7 +6394,7 @@ function clearHist() {
 function showTab(name) {
   var finMain = document.getElementById("fin-main");
   if (finMain && finMain.style.display === "none") finMain.style.display = "block";
-  var pages=["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","journees","budget","admin"];
+  var pages=["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","etats","budget","admin"];
   for(var i=0;i<pages.length;i++){
     var pg=document.getElementById("page-"+pages[i]);
     var tb=document.getElementById("tab-btn-"+pages[i]);
@@ -6421,7 +6421,7 @@ function showTab(name) {
   if(name==="distrib")calcDistrib();
   if(name==="admin")renderAdmin();
   if(name==="exercices") renderExercices();
-  if(name==="journees") renderJourneesSpeciales();
+  if(name==="etats") renderEtats();
   if(name==="budget") initBudgetPage();
   recalc();
 }
@@ -9483,14 +9483,14 @@ var FINANCE_TABS = [
   {key:"dashboard",  label:"Dashboard"},
   {key:"export",     label:"Export"},
   {key:"exercices",  label:"Exercices clos"},
-  {key:"journees",   label:"Journées spéciales"}
+  {key:"etats",      label:"États"}
 ];
 
 // Permissions par defaut selon role legacy
 function getDefaultPerms(role) {
-  if(role==="admin")    return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","journees"], projTabs:["achat","travaux","mo"]};
-  if(role==="finances") return {modules:["finances","social","seminaire","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","journees"]};
-  if(role==="tresorier") return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer","budget"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","journees"], readOnly:true};
+  if(role==="admin")    return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","etats"], projTabs:["achat","travaux","mo"]};
+  if(role==="finances") return {modules:["finances","social","seminaire","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","etats"]};
+  if(role==="tresorier") return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer","budget"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","etats"], readOnly:true};
   return {modules:["finances","eb","annonces","projets"], financeTabs:["recettes","depenses"]};
 }
 
@@ -9520,7 +9520,9 @@ function _normaliserPerms(perms, role) {
   }
   var r = {
     modules:     liste(out.modules,     def.modules || []),
-    financeTabs: liste(out.financeTabs, def.financeTabs || []),
+    // L'onglet « journees » a ete renomme « etats » : un compte enregistre
+    // avant ce changement conserve son acces.
+    financeTabs: liste(out.financeTabs, def.financeTabs || []).map(function(t){ return t === "journees" ? "etats" : t; }),
     projTabs:    liste(out.projTabs,    def.projTabs || ["achat","travaux","mo"])
   };
   // Les autorisations de saisie ne sont pas des listes : on les reprend telles.
@@ -9533,7 +9535,7 @@ function _normaliserPerms(perms, role) {
 // Recuperer les permissions effectives d un compte
 function getPerms(ac) {
   if(!ac) return _normaliserPerms(null, "");
-  if(ac.role==="admin") return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","journees"], projTabs:["achat","travaux","mo"]};
+  if(ac.role==="admin") return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","etats"], projTabs:["achat","travaux","mo"]};
   if(ac.perms) return _normaliserPerms(ac.perms, ac.role);
   return _normaliserPerms(getDefaultPerms(ac.role), ac.role);
 }
@@ -20372,26 +20374,6 @@ function getRealiseMois(ym, key) {
   return Math.round(total);
 }
 
-// ══ JOURNÉES SPÉCIALES ═════════════════════════════════════════════════════
-// La répartition d'une journée spéciale existait déjà — quatre rubriques,
-// clés 20/20/20/40, base B4 — mais elle ne se déclenchait pratiquement jamais :
-// la collecte est saisie sous « Collecte Enveloppe » et la mention de la
-// journée vit dans la note, que le calcul des bases ne lisait pas. Et quand
-// elle était bien dans le libellé, l'accent de « Journée Spéciale » suffisait
-// à la rendre invisible. Les deux sont corrigés ; ce module en tire le
-// rapport.
-var JS_CLES = [
-  { rub:"District QP Journee Speciale", label:"QP District",              cle:0.20 },
-  { rub:"Region QP Journee Speciale",   label:"QP Secrétariat Régional", cle:0.20 },
-  { rub:"SG QP Journee Speciale",       label:"QP Secrétariat Général",  cle:0.20 },
-  { rub:"Liberation Journee Speciale",  label:"QP Bureau Église locale", cle:0.40 }
-];
-
-function _jsEstJournee(txt) {
-  return normStr(txt).indexOf("journee speciale") >= 0;
-}
-// Ce qui suit « journée spéciale » nomme l'événement : « de la femme »,
-// « des jeunes »… Sans précision, la journée reste anonyme mais reste comptée.
 function _jsDesignation(txt) {
   var m = String(txt || "").match(/journ[eé]+e?\s*sp[eé]ciale\s*(.*)$/i);
   if (!m) return "";
@@ -20407,111 +20389,224 @@ function _jsLibelleEvenement(d) {
   return d ? "Journée spéciale — " + d : "Journée spéciale (sans précision)";
 }
 
-// Recense les journées spéciales de l'historique : la collecte d'un côté, ce
-// qui a réellement été porté en dépense de l'autre.
-function _jsCollecter(debut, fin) {
-  var hist = (gHistCache || []).slice();
-  var evts = {};
-  hist.forEach(function(h) {
-    var date = (h.meta && h.meta.date) || "";
-    if (!date) return;
-    if (debut && date < debut) return;
-    if (fin && date > fin) return;
-    var taux = parseFloat(h.meta && h.meta.taux) || getTaux();
-    var piece = (h.meta && h.meta.piece) || "";
-    var resp = (h.meta && h.meta.resp) || "";
 
-    // 1. La collecte : toute ligne de recette dont le libellé OU la note
-    //    mentionne la journée.
+// ══ ÉTATS ══════════════════════════════════════════════════════════════════
+// Trois collectes obéissent à une clé de répartition fixe : la journée
+// spéciale, les dîmes et la ration des pasteurs. Chacune se lit de la même
+// façon — ce qui est entré, ce qui aurait dû être reversé, ce qui l'a été, et
+// l'écart. Un seul moteur les sert donc tous les trois.
+//
+// Deux libellés divergent entre la table de distribution et les rubriques
+// réellement saisies au culte (« Part Ration BP » contre « Part Ration
+// Mensuelle BP », « Budget District Dime » contre « Budget District Dime
+// District »). Chaque part accepte donc plusieurs écritures.
+var ETATS_DEF = [
+  {
+    key: "journees", label: "Journées spéciales", icon: "🌟", base: "b4",
+    groupe: "evenement", lireNote: true,
+    intro: "Repérée dès que le <b>libellé ou la note</b> d'une recette mentionne « journée spéciale » — y compris sur une ligne « Collecte Enveloppe ».",
+    parts: [
+      { label: "QP District",                      cle: 0.20, rubs: ["District QP Journee Speciale"] },
+      { label: "QP Secrétariat Régional", cle: 0.20, rubs: ["Region QP Journee Speciale"] },
+      { label: "QP Secrétariat Général", cle: 0.20, rubs: ["SG QP Journee Speciale"] },
+      { label: "QP Bureau Église locale",      cle: 0.40, rubs: ["Liberation Journee Speciale"] }
+    ]
+  },
+  {
+    key: "dimes", label: "Dîmes", icon: "💰", base: "b5",
+    groupe: "mois",
+    intro: "Toute recette dont le libellé mentionne « dîmes ». La part reversée est de <b>76,3 %</b> ; le solde reste en caisse de l'église locale.",
+    parts: [
+      { label: "Bureau Pastoral",  cle: 0.60,  rubs: ["Part Dimes Bureau Pastoral"] },
+      { label: "Budget District",  cle: 0.10,  rubs: ["Budget District Dime District", "Budget District Dime"] },
+      { label: "Secrétaires", cle: 0.033, rubs: ["Part Dimes Secretaires"] },
+      { label: "Financiers",       cle: 0.03,  rubs: ["Part Dimes Financiers"] }
+    ],
+    reste: { label: "Reste en caisse — église locale", cle: 0.237 }
+  },
+  {
+    key: "ration", label: "Ration des pasteurs", icon: "🍲", base: "b6",
+    groupe: "mois",
+    intro: "Toute recette dont le libellé mentionne « cotisation ration ». La totalité est reversée.",
+    parts: [
+      { label: "Bureau Pastoral",  cle: 0.85, rubs: ["Part Ration Mensuelle BP", "Part Ration BP"] },
+      { label: "Secrétaires", cle: 0.09, rubs: ["Part Ration Secretaires"] },
+      { label: "Financiers",       cle: 0.06, rubs: ["Part Ration Financiers"] }
+    ]
+  }
+];
+function _etatDef(key) {
+  for (var i = 0; i < ETATS_DEF.length; i++) if (ETATS_DEF[i].key === key) return ETATS_DEF[i];
+  return ETATS_DEF[0];
+}
+
+// Quelle base porte cette ligne de recette. On reprend exactement l'ordre de
+// getBases : une enveloppe collectee pour une journee speciale appartient a la
+// journee, pas a l'enveloppe. Ainsi aucun etat ne compte deux fois la meme
+// ligne, et tous restent d'accord avec l'onglet Distribution.
+function _etatBaseLigne(lbl, note) {
+  if (matchAny(lbl, BASE4_L) || matchAny(note, BASE4_L)) return "b4";
+  if (matchAny(lbl, BASE_ENV_L)) return "benv";
+  if (matchAny(lbl, BASE7_L)) return "b7";
+  if (matchAny(lbl, BASE1_L)) return "b1";
+  if (matchAny(lbl, BASE2_L)) return "b2";
+  if (matchAny(lbl, BASE5_L)) return "b5";
+  if (matchAny(lbl, BASE6_L)) return "b6";
+  return "";
+}
+function _etatRubMatch(lbl, rubs) {
+  var a = normStr(lbl);
+  for (var i = 0; i < rubs.length; i++) {
+    var b = normStr(rubs[i]);
+    if (a === b || a.indexOf(b) === 0 || b.indexOf(a) === 0) return true;
+  }
+  return false;
+}
+// Ce qui a ete porte en depense sur ce culte, part par part.
+function _etatVerses(def, h, taux) {
+  var out = {};
+  def.parts.forEach(function(p) { out[p.label] = 0; });
+  ["cm", "fr", "co", "ot"].forEach(function(k) {
+    (h[k] || []).forEach(function(r) {
+      if (!r) return;
+      var lbl = r.l || r.lib || "";
+      def.parts.forEach(function(p) {
+        if (_etatRubMatch(lbl, p.rubs)) out[p.label] += (parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux;
+      });
+    });
+  });
+  return out;
+}
+function _etatCultes(debut, fin) {
+  return (gHistCache || []).filter(function(h) {
+    var d = (h.meta && h.meta.date) || "";
+    if (!d) return false;
+    if (debut && d < debut) return false;
+    if (fin && d > fin) return false;
+    return true;
+  });
+}
+function _etatFinaliser(def, e) {
+  e.parts = def.parts.map(function(p) {
+    var du = e.collecte * p.cle, fait = e.verses[p.label] || 0;
+    return { label: p.label, cle: p.cle, du: du, fait: fait, ecart: fait - du };
+  });
+  if (def.reste) e.reste = { label: def.reste.label, cle: def.reste.cle, du: e.collecte * def.reste.cle };
+  e.totalDu = e.parts.reduce(function(s, p) { return s + p.du; }, 0);
+  e.totalFait = e.parts.reduce(function(s, p) { return s + p.fait; }, 0);
+  e.ecart = e.totalFait - e.totalDu;
+  e.complet = e.parts.every(function(p) { return Math.abs(p.ecart) < 1; });
+  return e;
+}
+
+// Journee speciale : un evenement, nomme, qui peut porter sur plusieurs cultes
+// du meme jour.
+function _etatCollecterEvenement(def, debut, fin) {
+  var evts = {};
+  _etatCultes(debut, fin).forEach(function(h) {
+    var date = (h.meta && h.meta.date) || "";
+    var taux = parseFloat(h.meta && h.meta.taux) || getTaux();
     var collectes = [];
     ["cf", "cl"].forEach(function(k) {
       (h[k] || []).forEach(function(r) {
         if (!r) return;
-        // L'historique stocke la note sous la cle « n » ; « note » n'existe
-        // que dans les lignes du formulaire en cours.
         var lbl = r.l || r.lib || "", note = r.note || r.n || "";
-        if (!_jsEstJournee(lbl) && !_jsEstJournee(note)) return;
+        if (_etatBaseLigne(lbl, note) !== def.base) return;
         var mt = (parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux;
         if (mt <= 0) return;
-        var des = _jsDesignation(note) || _jsDesignation(lbl);
-        collectes.push({ culte: k.toUpperCase(), rubrique: lbl, note: note, montant: mt, designation: des });
+        collectes.push({ culte: k.toUpperCase(), rubrique: lbl, note: note, montant: mt,
+                         designation: _jsDesignation(note) || _jsDesignation(lbl) });
       });
     });
     if (!collectes.length) return;
-
-    // 2. Ce qui a été porté en dépense sur ce culte, rubrique par rubrique.
-    var verses = {};
-    JS_CLES.forEach(function(c) { verses[c.rub] = 0; });
-    ["cm", "fr", "co", "ot"].forEach(function(k) {
-      (h[k] || []).forEach(function(r) {
-        if (!r) return;
-        var lbl = r.l || r.lib || "";
-        JS_CLES.forEach(function(c) {
-          if (normStr(lbl) === normStr(c.rub)) {
-            verses[c.rub] += (parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux;
-          }
-        });
-      });
-    });
-
-    // Une même date peut porter plusieurs journées si les désignations
-    // diffèrent ; les versements, eux, appartiennent au culte et sont
-    // rattachés à la première.
+    var verses = _etatVerses(def, h, taux);
     var parDes = {};
-    collectes.forEach(function(c) {
-      var d = c.designation || "";
-      if (!parDes[d]) parDes[d] = [];
-      parDes[d].push(c);
-    });
+    collectes.forEach(function(c) { (parDes[c.designation || ""] = parDes[c.designation || ""] || []).push(c); });
     var premier = true;
     Object.keys(parDes).forEach(function(d) {
       var cle = date + "|" + _jsCleGroupe(d);
       if (!evts[cle]) {
-        evts[cle] = { date: date, designation: d, libelle: _jsLibelleEvenement(d),
-                      piece: piece, resp: resp, collecte: 0, lignes: [], verses: {}, tauxUSD: taux };
-        JS_CLES.forEach(function(c) { evts[cle].verses[c.rub] = 0; });
+        evts[cle] = { titre: _jsLibelleEvenement(d), sousTitre: _visDateFr(date), date: date,
+                      piece: (h.meta && h.meta.piece) || "", resp: (h.meta && h.meta.resp) || "",
+                      collecte: 0, lignes: [], verses: {}, tauxUSD: taux };
+        def.parts.forEach(function(p) { evts[cle].verses[p.label] = 0; });
       }
       var e = evts[cle];
-      parDes[d].forEach(function(c) { e.collecte += c.montant; e.lignes.push({ date: date, culte: c.culte, rubrique: c.rubrique, note: c.note, montant: c.montant }); });
-      if (premier) { JS_CLES.forEach(function(c) { e.verses[c.rub] += verses[c.rub]; }); premier = false; }
+      parDes[d].forEach(function(c) {
+        e.collecte += c.montant;
+        e.lignes.push({ date: date, culte: c.culte, rubrique: c.rubrique, note: c.note, montant: c.montant });
+      });
+      if (premier) { def.parts.forEach(function(p) { e.verses[p.label] += verses[p.label]; }); premier = false; }
     });
   });
-
   var out = [];
-  for (var k in evts) {
-    var e = evts[k];
-    e.parts = JS_CLES.map(function(c) {
-      var du = e.collecte * c.cle, fait = e.verses[c.rub] || 0;
-      return { rub: c.rub, label: c.label, cle: c.cle, du: du, fait: fait, ecart: fait - du };
-    });
-    e.totalDu = e.collecte;
-    e.totalFait = e.parts.reduce(function(s, p) { return s + p.fait; }, 0);
-    e.ecart = e.totalFait - e.totalDu;
-    e.complet = e.parts.every(function(p) { return Math.abs(p.ecart) < 1; });
-    out.push(e);
-  }
+  for (var k in evts) out.push(_etatFinaliser(def, evts[k]));
   out.sort(function(a, b) { return (b.date || "").localeCompare(a.date || ""); });
   return out;
 }
 
+// Dimes et ration : une collecte recurrente, qu'on lit mois par mois.
+function _etatCollecterMois(def, debut, fin) {
+  var MOIS = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
+  var parMois = {};
+  _etatCultes(debut, fin).forEach(function(h) {
+    var date = (h.meta && h.meta.date) || "", ym = date.substring(0, 7);
+    var taux = parseFloat(h.meta && h.meta.taux) || getTaux();
+    var collecte = 0, lignes = [];
+    ["cf", "cl"].forEach(function(k) {
+      (h[k] || []).forEach(function(r) {
+        if (!r) return;
+        var lbl = r.l || r.lib || "", note = r.note || r.n || "";
+        if (_etatBaseLigne(lbl, note) !== def.base) return;
+        var mt = (parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux;
+        if (mt <= 0) return;
+        collecte += mt;
+        lignes.push({ date: date, culte: k.toUpperCase(), rubrique: lbl, note: note, montant: mt });
+      });
+    });
+    var verses = _etatVerses(def, h, taux);
+    var aVerse = def.parts.some(function(p) { return verses[p.label] > 0; });
+    if (!collecte && !aVerse) return;
+    if (!parMois[ym]) {
+      var p = ym.split("-");
+      parMois[ym] = { titre: (MOIS[parseInt(p[1], 10) - 1] || ym) + " " + p[0], sousTitre: "", date: ym + "-01",
+                      piece: "", resp: "", collecte: 0, lignes: [], verses: {}, tauxUSD: taux, nbCultes: 0 };
+      def.parts.forEach(function(x) { parMois[ym].verses[x.label] = 0; });
+    }
+    var e = parMois[ym];
+    e.collecte += collecte;
+    e.nbCultes++;
+    lignes.forEach(function(l) { e.lignes.push(l); });
+    def.parts.forEach(function(x) { e.verses[x.label] += verses[x.label]; });
+  });
+  var out = [];
+  for (var k in parMois) {
+    var e = parMois[k];
+    e.sousTitre = e.nbCultes + " culte(s)";
+    out.push(_etatFinaliser(def, e));
+  }
+  out.sort(function(a, b) { return (b.date || "").localeCompare(a.date || ""); });
+  return out;
+}
+function _etatCollecter(def, debut, fin) {
+  return def.groupe === "evenement" ? _etatCollecterEvenement(def, debut, fin) : _etatCollecterMois(def, debut, fin);
+}
+
 // Ce que le module lit reellement sur la periode : sert a expliquer un
 // resultat vide plutot qu'a laisser chercher.
-function _jsDiagnostic(debut, fin) {
+function _etatDiagnostic(debut, fin) {
   var cultes = 0, lignes = [];
-  (gHistCache || []).forEach(function(h) {
-    var date = (h.meta && h.meta.date) || "";
-    if (!date) return;
-    if (debut && date < debut) return;
-    if (fin && date > fin) return;
+  _etatCultes(debut, fin).forEach(function(h) {
     cultes++;
     var taux = parseFloat(h.meta && h.meta.taux) || getTaux();
+    var date = (h.meta && h.meta.date) || "";
     ["cf", "cl"].forEach(function(k) {
       (h[k] || []).forEach(function(r) {
         if (!r) return;
         var lbl = r.l || r.lib || "", note = r.note || r.n || "";
         var mt = (parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux;
         if (!lbl && !mt) return;
-        lignes.push({ date: date, lbl: lbl, note: note, montant: mt });
+        lignes.push({ date: date, lbl: lbl, note: note, montant: mt, base: _etatBaseLigne(lbl, note) });
       });
     });
   });
@@ -20519,76 +20614,110 @@ function _jsDiagnostic(debut, fin) {
 }
 
 // ── Restitution ───────────────────────────────────────────────────────────
-function _jsPeriode() {
+var gEtatAffiche = null;   // null = grille de tuiles
+function choisirEtat(k) { gEtatAffiche = k; renderEtats(); }
+function retourEtats() { gEtatAffiche = null; renderEtats(); }
+function _etatPeriode() {
   function v(id) { var e = document.getElementById(id); return e ? (e.value || "") : ""; }
-  return { debut: v("js-du"), fin: v("js-au") };
+  return { debut: v("et-du"), fin: v("et-au") };
 }
-function renderJourneesSpeciales() {
-  var cont = document.getElementById("js-body"); if (!cont) return;
-  var p = _jsPeriode();
-  var evts = _jsCollecter(p.debut, p.fin);
+function _etatBarrePeriode(p) {
+  return "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px'>"
+    + "<div class='fg'><label style='font-size:.7rem'>Du</label><input type='date' id='et-du' value='" + escH(p.debut) + "' onchange='renderEtats()'></div>"
+    + "<div class='fg'><label style='font-size:.7rem'>Au</label><input type='date' id='et-au' value='" + escH(p.fin) + "' onchange='renderEtats()'></div>"
+    + "</div>";
+}
+
+function renderEtats() {
+  var cont = document.getElementById("et-body"); if (!cont) return;
+  var p = _etatPeriode();
   var h = "";
 
+  if (!gEtatAffiche) {
+    h += "<div class='card'><div class='card-hdr'><h2>📊 États</h2></div><div class='card-body'>";
+    h += "<div style='background:#eef4fb;border-radius:7px;padding:9px 11px;font-size:.76rem;color:#33506e;margin-bottom:10px'>"
+       + "Chaque état rapproche ce qui a été collecté de ce qui a été reversé, selon la clé de répartition en vigueur. "
+       + "Il montre les périodes dont le reversement n'a pas été passé.</div>";
+    h += _etatBarrePeriode(p);
+    h += "<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:9px;margin-top:12px'>";
+    ETATS_DEF.forEach(function(def) {
+      var evts = _etatCollecter(def, p.debut, p.fin);
+      var aRegul = evts.filter(function(e) { return !e.complet; }).length;
+      var total = evts.reduce(function(s, e) { return s + e.collecte; }, 0);
+      h += "<div class='adm-tuile" + (aRegul ? " adm-tuile-ko" : "") + "' onclick=\"choisirEtat('" + def.key + "')\">"
+        + "<div style='display:flex;align-items:flex-start;gap:6px'><span style='font-size:1.25rem;line-height:1'>" + def.icon + "</span>"
+        + "<span style='margin-left:auto'>" + (aRegul
+            ? "<span style='width:8px;height:8px;border-radius:50%;background:#c0392b;display:inline-block'></span>"
+            : (evts.length ? "<span style='width:8px;height:8px;border-radius:50%;background:#15803d;display:inline-block'></span>" : "")) + "</span></div>"
+        + "<div class='adm-tuile-lbl'>" + escH(def.label) + "</div>"
+        + "<div style='font-size:.68rem;color:#6b88a4'>" + (evts.length
+            ? evts.length + " période(s) · " + fmt(total) + " FC" + (aRegul ? " · " + aRegul + " à régulariser" : "")
+            : "aucune donnée") + "</div></div>";
+    });
+    h += "</div></div></div>";
+    cont.innerHTML = h;
+    return;
+  }
+
+  var def = _etatDef(gEtatAffiche);
+  var evts = _etatCollecter(def, p.debut, p.fin);
+
   h += "<div class='card'><div class='card-hdr' style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px'>";
-  h += "<h2>🌟 Journées spéciales</h2>";
+  h += "<h2>" + def.icon + " " + escH(def.label) + "</h2>";
   h += "<div style='display:flex;gap:6px;flex-wrap:wrap'>"
-     + "<button class='btn btn-o btn-sm' onclick='printJourneesSpeciales()'>🖨️ Imprimer</button>"
-     + "<button class='btn btn-o btn-sm' onclick='exporterJourneesSpeciales()'>📊 Excel</button></div>";
+     + "<button class='btn btn-o btn-sm' onclick='retourEtats()'>← États</button>"
+     + "<button class='btn btn-o btn-sm' onclick=\"printEtat('" + def.key + "')\">🖨️ Imprimer</button>"
+     + "<button class='btn btn-o btn-sm' onclick=\"exporterEtat('" + def.key + "')\">📊 Excel</button></div>";
   h += "</div><div class='card-body'>";
-  h += "<div style='background:#eef4fb;border-radius:7px;padding:9px 11px;font-size:.76rem;color:#33506e;margin-bottom:10px'>";
-  h += "Une journée spéciale est repérée dès que le <b>libellé ou la note</b> d'une recette mentionne « journée spéciale » — "
-     + "y compris sur une ligne « Collecte Enveloppe ». La clé de répartition est de "
-     + JS_CLES.map(function(c) { return "<b>" + Math.round(c.cle * 100) + " %</b> " + escH(c.label); }).join(", ") + ".";
-  h += "</div>";
-  h += "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:6px'>"
-     + "<div class='fg'><label style='font-size:.7rem'>Du</label><input type='date' id='js-du' value='" + escH(p.debut) + "' onchange='renderJourneesSpeciales()'></div>"
-     + "<div class='fg'><label style='font-size:.7rem'>Au</label><input type='date' id='js-au' value='" + escH(p.fin) + "' onchange='renderJourneesSpeciales()'></div>"
-     + "</div>";
+  h += "<div style='background:#eef4fb;border-radius:7px;padding:9px 11px;font-size:.76rem;color:#33506e;margin-bottom:10px'>" + def.intro
+     + " Clé : " + def.parts.map(function(x) { return "<b>" + _etatPct(x.cle) + "</b> " + escH(x.label); }).join(", ")
+     + (def.reste ? ", <b>" + _etatPct(def.reste.cle) + "</b> " + escH(def.reste.label) : "") + ".</div>";
+  h += _etatBarrePeriode(p);
   h += "</div></div>";
 
   if (!evts.length) {
-    // Un ecran vide sans explication ne dit pas si le probleme vient de la
-    // periode, de la saisie, ou d'un culte pas encore enregistre. On montre
-    // donc ce que le module a reellement lu.
-    var scan = _jsDiagnostic(p.debut, p.fin);
+    var scan = _etatDiagnostic(p.debut, p.fin);
     h += "<div class='card' style='margin-top:12px'><div class='card-body'>";
-    h += "<p style='color:var(--muted);font-size:.82rem'>Aucune journ\u00e9e sp\u00e9ciale trouv\u00e9e sur cette p\u00e9riode.</p>";
+    h += "<p style='color:var(--muted);font-size:.82rem'>Aucune donnée pour cet état sur la période.</p>";
     if (!scan.cultes) {
-      h += "<p style='font-size:.78rem;color:#b45309'><b>Aucun culte enregistr\u00e9 sur cette p\u00e9riode.</b> "
+      h += "<p style='font-size:.78rem;color:#b45309'><b>Aucun culte enregistré sur cette période.</b> "
          + "Un culte en cours de saisie n'est pas encore dans l'historique : enregistrez-le d'abord.</p>";
     } else {
-      h += "<p style='font-size:.78rem;color:#33506e'>" + scan.cultes + " culte(s) examin\u00e9(s), "
-         + scan.lignes.length + " ligne(s) de recette, aucune ne mentionnant \u00ab journ\u00e9e sp\u00e9ciale \u00bb :</p>";
+      h += "<p style='font-size:.78rem;color:#33506e'>" + scan.cultes + " culte(s) examiné(s), "
+         + scan.lignes.length + " ligne(s) de recette. Voici ce que l'application a lu :</p>";
       h += "<div style='max-height:260px;overflow:auto'><table style='width:100%;border-collapse:collapse;font-size:.74rem'>";
-      h += "<tr style='background:var(--pale)'><th style='padding:4px 7px;text-align:left'>Date</th><th style='padding:4px 7px;text-align:left'>Libell\u00e9</th><th style='padding:4px 7px;text-align:left'>Note</th><th style='padding:4px 7px;text-align:right'>Montant</th></tr>";
+      h += "<tr style='background:var(--pale)'><th style='padding:4px 7px;text-align:left'>Date</th><th style='padding:4px 7px;text-align:left'>Libellé</th><th style='padding:4px 7px;text-align:left'>Note</th><th style='padding:4px 7px;text-align:right'>Montant</th><th style='padding:4px 7px;text-align:center'>Base</th></tr>";
       scan.lignes.forEach(function(l) {
         h += "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:4px 7px'>" + _visDateFr(l.date) + "</td>"
-          + "<td style='padding:4px 7px'>" + escH(l.lbl || "\u2014") + "</td>"
-          + "<td style='padding:4px 7px;color:#6b88a4'>" + escH(l.note || "\u2014") + "</td>"
-          + "<td style='padding:4px 7px;text-align:right;font-family:DM Mono,monospace'>" + fmt(l.montant) + "</td></tr>";
+          + "<td style='padding:4px 7px'>" + escH(l.lbl || "—") + "</td>"
+          + "<td style='padding:4px 7px;color:#6b88a4'>" + escH(l.note || "—") + "</td>"
+          + "<td style='padding:4px 7px;text-align:right;font-family:DM Mono,monospace'>" + fmt(l.montant) + "</td>"
+          + "<td style='padding:4px 7px;text-align:center;font-weight:700;color:" + (l.base === def.base ? "#15803d" : "#9ca3af") + "'>" + (l.base || "—").toUpperCase() + "</td></tr>";
       });
       h += "</table></div>";
+      h += "<p style='font-size:.72rem;color:#6b88a4;margin-top:6px'>Cet état ne retient que les lignes de base <b>" + def.base.toUpperCase() + "</b>.</p>";
     }
     h += "</div></div>";
-    cont.innerHTML = h; return;
+    cont.innerHTML = h;
+    return;
   }
 
   var totColl = 0, totFait = 0, nbIncomplets = 0;
   evts.forEach(function(e) { totColl += e.collecte; totFait += e.totalFait; if (!e.complet) nbIncomplets++; });
   h += "<div class='card' style='margin-top:12px'><div class='card-body'><div class='stat-grid'>"
-     + "<div class='stat'><div class='stat-lbl'>Journées</div><div class='stat-val' style='color:#1a3a5c'>" + evts.length + "</div></div>"
+     + "<div class='stat'><div class='stat-lbl'>" + (def.groupe === "mois" ? "Mois" : "Journées") + "</div><div class='stat-val' style='color:#1a3a5c'>" + evts.length + "</div></div>"
      + "<div class='stat'><div class='stat-lbl'>Collecté</div><div class='stat-val' style='color:#15803d'>" + fmt(totColl) + "</div></div>"
-     + "<div class='stat'><div class='stat-lbl'>Réparti</div><div class='stat-val' style='color:#1a3a5c'>" + fmt(totFait) + "</div></div>"
+     + "<div class='stat'><div class='stat-lbl'>Reversé</div><div class='stat-val' style='color:#1a3a5c'>" + fmt(totFait) + "</div></div>"
      + "<div class='stat'><div class='stat-lbl'>À régulariser</div><div class='stat-val' style='color:" + (nbIncomplets ? "#c0392b" : "#15803d") + "'>" + nbIncomplets + "</div></div>"
      + "</div></div></div>";
 
   evts.forEach(function(e) {
     h += "<div class='card' style='margin-top:12px'><div class='card-hdr' style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px'>";
-    h += "<h2>" + escH(e.libelle) + "</h2>";
+    h += "<h2>" + escH(e.titre) + "</h2>";
     h += "<span style='font-size:.74rem;color:" + (e.complet ? "#15803d" : "#c0392b") + ";font-weight:700'>"
-       + (e.complet ? "✓ Répartition conforme" : "⚠️ À régulariser") + "</span>";
+       + (e.complet ? "✓ Reversement conforme" : "⚠️ À régulariser") + "</span>";
     h += "</div><div class='card-body'>";
-    h += "<div style='font-size:.76rem;color:#6b88a4;margin-bottom:9px'>" + _visDateFr(e.date)
+    h += "<div style='font-size:.76rem;color:#6b88a4;margin-bottom:9px'>" + escH(e.sousTitre)
        + (e.piece ? " · pièce " + escH(e.piece) : "") + (e.resp ? " · " + escH(e.resp) : "")
        + " · taux retenu " + fmt(e.tauxUSD) + "</div>";
     h += "<div style='background:#f0faf4;border-radius:7px;padding:9px 11px;margin-bottom:10px'>"
@@ -20600,67 +20729,88 @@ function renderJourneesSpeciales() {
     e.parts.forEach(function(pt, i) {
       var ok = Math.abs(pt.ecart) < 1;
       h += "<tr style='border-bottom:1px solid #eef2f6;background:" + (i % 2 === 0 ? "#fff" : "#f8fafd") + "'>"
-        + "<td style='padding:6px 8px;font-weight:600'>" + escH(pt.label) + "<div style='font-size:.66rem;color:#9ca3af'>" + escH(pt.rub) + "</div></td>"
-        + "<td style='padding:6px 8px;text-align:center'><span class='ctag'>" + Math.round(pt.cle * 100) + " %</span></td>"
+        + "<td style='padding:6px 8px;font-weight:600'>" + escH(pt.label) + "</td>"
+        + "<td style='padding:6px 8px;text-align:center'><span class='ctag'>" + _etatPct(pt.cle) + "</span></td>"
         + "<td style='padding:6px 8px;text-align:right;font-family:DM Mono,monospace;font-weight:700'>" + fmt(pt.du) + "</td>"
         + "<td style='padding:6px 8px;text-align:right;font-family:DM Mono,monospace'>" + fmt(pt.fait) + "</td>"
         + "<td style='padding:6px 8px;text-align:right;font-family:DM Mono,monospace;font-weight:700;color:" + (ok ? "#15803d" : "#c0392b") + "'>"
         + (ok ? "✓" : fmt(pt.ecart)) + "</td></tr>";
     });
-    h += "<tr style='background:#1a3a5c;color:#fff;font-weight:800'><td style='padding:7px 8px'>TOTAL</td><td style='padding:7px 8px;text-align:center'>100 %</td>"
+    h += "<tr style='background:#1a3a5c;color:#fff;font-weight:800'><td style='padding:7px 8px'>TOTAL REVERSÉ</td>"
+       + "<td style='padding:7px 8px;text-align:center'>" + _etatPct(def.parts.reduce(function(s, x) { return s + x.cle; }, 0)) + "</td>"
        + "<td style='padding:7px 8px;text-align:right'>" + fmt(e.totalDu) + "</td>"
        + "<td style='padding:7px 8px;text-align:right'>" + fmt(e.totalFait) + "</td>"
        + "<td style='padding:7px 8px;text-align:right'>" + (Math.abs(e.ecart) < 1 ? "✓" : fmt(e.ecart)) + "</td></tr>";
+    if (e.reste) {
+      h += "<tr style='background:#f6fbff'><td style='padding:6px 8px;font-weight:600;color:#33506e'>" + escH(e.reste.label) + "</td>"
+        + "<td style='padding:6px 8px;text-align:center'><span class='ctag'>" + _etatPct(e.reste.cle) + "</span></td>"
+        + "<td style='padding:6px 8px;text-align:right;font-family:DM Mono,monospace;font-weight:700;color:#1a3a5c'>" + fmt(e.reste.du) + "</td>"
+        + "<td colspan='2' style='padding:6px 8px;font-size:.72rem;color:#6b88a4'>Ne sort pas de caisse</td></tr>";
+    }
     h += "</table></div>";
-    h += "<div style='margin-top:9px;font-size:.73rem;color:#6b88a4'>Collecté sur : "
-       + e.lignes.map(function(l) { return escH(l.culte) + " — " + escH(l.rubrique) + (l.note ? " (" + escH(l.note) + ")" : "") + " : " + fmt(l.montant); }).join(" · ")
-       + "</div>";
+    if (e.lignes.length) {
+      h += "<div style='margin-top:9px;font-size:.73rem;color:#6b88a4'>Collecté sur : "
+         + e.lignes.map(function(l) { return escH(l.culte) + " — " + escH(l.rubrique) + (l.note ? " (" + escH(l.note) + ")" : "") + " : " + fmt(l.montant); }).join(" · ")
+         + "</div>";
+    }
     h += "</div></div>";
   });
   cont.innerHTML = h;
 }
+function _etatPct(c) {
+  var v = c * 100;
+  return (Math.abs(v - Math.round(v)) < 0.01 ? Math.round(v) : v.toFixed(1).replace(".", ",")) + " %";
+}
 
-function printJourneesSpeciales() {
-  var p = _jsPeriode(), evts = _jsCollecter(p.debut, p.fin);
-  if (!evts.length) { showToast("Aucune journée spéciale sur cette période.", "err"); return; }
+function printEtat(key) {
+  var def = _etatDef(key), p = _etatPeriode(), evts = _etatCollecter(def, p.debut, p.fin);
+  if (!evts.length) { showToast("Aucune donnée pour cet état sur la période.", "err"); return; }
   var win = _fenetreImpression("width=900,height=900"); if (!win) return;
   var totColl = 0; evts.forEach(function(e) { totColl += e.collecte; });
-  win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Journées spéciales</title><style>" + getPrintCSS()
+  win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>État — " + escH(def.label) + "</title><style>" + getPrintCSS()
     + "table{width:100%;border-collapse:collapse;font-size:10px;margin-bottom:12px}th{background:#1a3a5c;color:#fff;padding:5px 8px;text-align:right}th:first-child{text-align:left}</style></head><body>");
-  win.document.write(buildPrintHeader("Rapport des journées spéciales"));
+  win.document.write(buildPrintHeader("État des reversements — " + def.label));
   win.document.write("<p style='font-size:9.5px;color:#6b88a4;margin-bottom:10px'>"
     + (p.debut || p.fin ? "Période : " + (p.debut ? _visDateFr(p.debut) : "origine") + " → " + (p.fin ? _visDateFr(p.fin) : "ce jour") + " · " : "")
-    + evts.length + " journée(s) · " + fmt(totColl) + " FC collectés · répartition "
-    + JS_CLES.map(function(c) { return Math.round(c.cle * 100) + " % " + c.label; }).join(" / ") + "</p>");
+    + evts.length + " période(s) · " + fmt(totColl) + " FC collectés · clé "
+    + def.parts.map(function(c) { return _etatPct(c.cle) + " " + c.label; }).join(" / ")
+    + (def.reste ? " / " + _etatPct(def.reste.cle) + " " + def.reste.label : "") + "</p>");
   evts.forEach(function(e) {
     win.document.write("<h3 style='font-size:11px;color:#1a3a5c;border-left:3px solid #1a3a5c;padding-left:8px;margin:14px 0 5px'>"
-      + escH(e.libelle) + " — " + _visDateFr(e.date) + (e.piece ? " (pièce " + escH(e.piece) + ")" : "") + "</h3>");
+      + escH(e.titre) + (e.sousTitre ? " — " + escH(e.sousTitre) : "") + (e.piece ? " (pièce " + escH(e.piece) + ")" : "") + "</h3>");
     win.document.write("<p style='font-size:9.5px;color:#6b88a4;margin:0 0 5px'>Collecté : <b>" + fmt(e.collecte) + " FC</b>"
-      + (e.complet ? "" : " — répartition incomplète") + "</p>");
+      + (e.complet ? "" : " — reversement incomplet") + "</p>");
     var rows = "";
     e.parts.forEach(function(pt, i) {
       var ok = Math.abs(pt.ecart) < 1;
       rows += "<tr style='background:" + (i % 2 === 0 ? "#fff" : "#f8fafd") + ";border-bottom:1px solid #eef2f6'>"
         + "<td style='padding:5px 8px'>" + escH(pt.label) + "</td>"
-        + "<td style='padding:5px 8px;text-align:center'>" + Math.round(pt.cle * 100) + " %</td>"
+        + "<td style='padding:5px 8px;text-align:center'>" + _etatPct(pt.cle) + "</td>"
         + "<td style='padding:5px 8px;text-align:right'>" + fmt(pt.du) + "</td>"
         + "<td style='padding:5px 8px;text-align:right'>" + fmt(pt.fait) + "</td>"
         + "<td style='padding:5px 8px;text-align:right;color:" + (ok ? "#15803d" : "#c0392b") + "'>" + (ok ? "✓" : fmt(pt.ecart)) + "</td></tr>";
     });
+    if (e.reste) {
+      rows += "<tr style='background:#f6fbff'><td style='padding:5px 8px'>" + escH(e.reste.label) + "</td>"
+        + "<td style='padding:5px 8px;text-align:center'>" + _etatPct(e.reste.cle) + "</td>"
+        + "<td style='padding:5px 8px;text-align:right'>" + fmt(e.reste.du) + "</td>"
+        + "<td colspan='2' style='padding:5px 8px;color:#6b88a4'>Ne sort pas de caisse</td></tr>";
+    }
     win.document.write("<table><tr><th>Bénéficiaire</th><th>Clé</th><th>Dû</th><th>Porté</th><th>Écart</th></tr>" + rows
-      + "<tr style='background:#1a3a5c;color:#fff;font-weight:800'><td style='padding:5px 8px'>TOTAL</td><td style='padding:5px 8px;text-align:center'>100 %</td>"
+      + "<tr style='background:#1a3a5c;color:#fff;font-weight:800'><td style='padding:5px 8px'>TOTAL REVERSÉ</td>"
+      + "<td style='padding:5px 8px;text-align:center'>" + _etatPct(def.parts.reduce(function(s, x) { return s + x.cle; }, 0)) + "</td>"
       + "<td style='padding:5px 8px;text-align:right'>" + fmt(e.totalDu) + "</td><td style='padding:5px 8px;text-align:right'>" + fmt(e.totalFait) + "</td>"
       + "<td style='padding:5px 8px;text-align:right'>" + (Math.abs(e.ecart) < 1 ? "✓" : fmt(e.ecart)) + "</td></tr></table>");
   });
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Journées spéciales, édité le " + new Date().toLocaleDateString("fr-FR") + "</div>");
+  win.document.write("<div class='footer'>ECC Kingasani 2 — État " + escH(def.label) + ", édité le " + new Date().toLocaleDateString("fr-FR") + "</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#1a3a5c;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>Imprimer / PDF</button></div>");
   win.document.write("</body></html>"); win.document.close();
 }
 
-function exporterJourneesSpeciales() {
+function exporterEtat(key) {
   if (typeof XLSX === "undefined") { showToast("SheetJS non chargé. Vérifiez votre connexion internet et rechargez la page.", "err"); return; }
-  var p = _jsPeriode(), evts = _jsCollecter(p.debut, p.fin);
-  if (!evts.length) { showToast("Aucune journée spéciale sur cette période.", "err"); return; }
+  var def = _etatDef(key), p = _etatPeriode(), evts = _etatCollecter(def, p.debut, p.fin);
+  if (!evts.length) { showToast("Aucune donnée pour cet état sur la période.", "err"); return; }
   var wb = XLSX.utils.book_new();
   function feuille(nom, entetes, lignes) {
     var ws = XLSX.utils.aoa_to_sheet([entetes].concat(lignes));
@@ -20669,20 +20819,19 @@ function exporterJourneesSpeciales() {
     ws["!cols"] = cols;
     XLSX.utils.book_append_sheet(wb, ws, nom);
   }
-  feuille("Synthèse", ["Date", "Journée", "Pièce", "Collecté FC", "Réparti FC", "Écart FC", "État"],
-    evts.map(function(e) { return [e.date, e.libelle, e.piece || "", Math.round(e.collecte), Math.round(e.totalFait), Math.round(e.ecart), e.complet ? "conforme" : "à régulariser"]; }));
+  feuille("Synthèse", ["Période", "Détail", "Collecté FC", "Reversé FC", "Écart FC", "État"],
+    evts.map(function(e) { return [e.titre, e.sousTitre, Math.round(e.collecte), Math.round(e.totalFait), Math.round(e.ecart), e.complet ? "conforme" : "à régulariser"]; }));
   var det = [];
   evts.forEach(function(e) {
-    e.parts.forEach(function(pt) {
-      det.push([e.date, e.libelle, pt.label, pt.rub, Math.round(pt.cle * 100) + " %", Math.round(pt.du), Math.round(pt.fait), Math.round(pt.ecart)]);
-    });
+    e.parts.forEach(function(pt) { det.push([e.titre, pt.label, _etatPct(pt.cle), Math.round(pt.du), Math.round(pt.fait), Math.round(pt.ecart)]); });
+    if (e.reste) det.push([e.titre, e.reste.label, _etatPct(e.reste.cle), Math.round(e.reste.du), "", ""]);
   });
-  feuille("Répartition", ["Date", "Journée", "Bénéficiaire", "Rubrique comptable", "Clé", "Dû FC", "Porté FC", "Écart FC"], det);
+  feuille("Répartition", ["Période", "Bénéficiaire", "Clé", "Dû FC", "Porté FC", "Écart FC"], det);
   var col = [];
-  evts.forEach(function(e) { e.lignes.forEach(function(l) { col.push([l.date, e.libelle, l.culte, l.rubrique, l.note || "", Math.round(l.montant)]); }); });
-  feuille("Collectes", ["Date", "Journée", "Culte", "Rubrique saisie", "Note", "Montant FC"], col);
-  XLSX.writeFile(wb, "Journees_speciales_" + getTodayStr().replace(/-/g, "") + ".xlsx");
-  showToast(evts.length + " journée(s) exportée(s).", "ok");
+  evts.forEach(function(e) { e.lignes.forEach(function(l) { col.push([l.date, e.titre, l.culte, l.rubrique, l.note || "", Math.round(l.montant)]); }); });
+  feuille("Collectes", ["Date", "Période", "Culte", "Rubrique saisie", "Note", "Montant FC"], col);
+  XLSX.writeFile(wb, "Etat_" + def.key + "_" + getTodayStr().replace(/-/g, "") + ".xlsx");
+  showToast("État " + def.label + " exporté.", "ok");
 }
 
 // ── Recettes budgetisees ──────────────────────────────────────────────────
