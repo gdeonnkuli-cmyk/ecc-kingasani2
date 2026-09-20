@@ -1749,7 +1749,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
   <div style="text-align:center">
     <div style="font-size:.82rem;font-weight:700;color:#1a3a5c;margin-bottom:3px">📋 Consulter ma fiche</div>
     <p style="font-size:.7rem;color:#6b88a4;margin-bottom:10px">Entrez le code figurant sur votre fiche</p>
-    <div class="lf"><input type="text" id="check-code" placeholder="KG-0000-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" oninput="_formaterChampCode(this)" style="text-transform:uppercase;text-align:center;letter-spacing:.08em;font-family:DM Mono,monospace"></div>
+    <div class="lf"><input type="text" id="check-code" placeholder="KG-0000-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" oninput="_saisieCodeFiche(this)" style="text-transform:uppercase;text-align:center;letter-spacing:.08em;font-family:DM Mono,monospace"></div>
     <button class="btn-login" id="check-btn" onclick="checkMemberCard()" style="background:linear-gradient(135deg,#1a7a4c,#27ae60)">Voir ma fiche</button>
     <div class="login-err" id="check-err"></div>
   </div>
@@ -11800,16 +11800,43 @@ function _formaterChampCode(el) {
   try { el.setSelectionRange(i, i); } catch (e) {}
 }
 
+// La zone de message est masquee par defaut et n'apparait qu'avec la classe
+// « show ». checkMemberCard n'ecrivait que le texte : le message existait,
+// invisible, et l'utilisateur croyait qu'il ne se passait rien.
+function _messageFiche(msg) {
+  var el = document.getElementById("check-err");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.className = "login-err" + (msg ? " show" : "");
+  // Sur telephone le clavier occupe le bas de l'ecran : sans ce recadrage le
+  // message s'afficherait hors de vue.
+  if (msg && el.scrollIntoView) {
+    try { el.scrollIntoView({ block: "nearest" }); } catch (e) { el.scrollIntoView(); }
+  }
+}
+// Toute correction du code efface le message precedent : un « introuvable »
+// qui persiste pendant qu'on retape induit en erreur.
+function _saisieCodeFiche(el) {
+  _formaterChampCode(el);
+  _messageFiche("");
+}
+
 function checkMemberCard() {
   var codeEl = document.getElementById("check-code");
-  var errEl = document.getElementById("check-err");
   var btn = document.getElementById("check-btn");
   // Le code peut arriver sans tirets, en minuscules, avec des espaces : c'est
   // la meme fiche.
   var code = _normaliserCodeFiche(codeEl.value);
-  errEl.textContent = "";
-  if (!code) { errEl.textContent = "Entrez votre code."; return; }
-  if (!IS_CONFIGURED || !gDb) { errEl.textContent = "Service indisponible hors connexion."; return; }
+  _messageFiche("");
+  if (!code) { _messageFiche("Entrez le code figurant sur votre fiche."); return; }
+  // Un code trop court n'a pas besoin d'aller interroger la base : on le dit
+  // tout de suite, et on distingue « incomplet » de « introuvable ».
+  var utiles = code.replace(/-/g, "").length;
+  if (utiles < 10) {
+    _messageFiche("Code incomplet : " + utiles + " caract\u00e8re(s) sur 10. Exemple : KG-0063-EDHD.");
+    return;
+  }
+  if (!IS_CONFIGURED || !gDb) { _messageFiche("Service indisponible hors connexion."); return; }
 
   gConsultationFiche = true;  // Bloquer l'auto-signOut pendant la consultation
 
@@ -11823,13 +11850,13 @@ function checkMemberCard() {
     clearTimeout(timer);
     btn.textContent = "Voir ma fiche";
     btn.disabled = false;
-    if (msg) { gConsultationFiche = false; errEl.textContent = msg; return; }
+    if (msg) { gConsultationFiche = false; _messageFiche(msg); return; }
     try {
       renderPublicFiche(membre, cotis || []);
       logConsultation(code, membre);
     } catch(e) {
       console.error("renderPublicFiche erreur:", e);
-      errEl.textContent = "Erreur d'affichage : " + (e.message || e);
+      _messageFiche("Erreur d'affichage : " + (e.message || e));
     }
   }
 
@@ -11843,7 +11870,7 @@ function checkMemberCard() {
     gDb.collection("fiches_publiques").doc(code).get()
       .then(function(doc){
         console.log("checkMemberCard: réponse reçue, exists =", doc.exists);
-        if (!doc.exists) { finish("Code introuvable. Vérifiez votre fiche."); return; }
+        if (!doc.exists) { finish("Code introuvable. Vérifiez la saisie, ou demandez au service des finances de republier votre fiche."); return; }
         var data = doc.data();
         finish(null, data.membre, data.cotisations || []);
       })
