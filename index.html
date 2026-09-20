@@ -6667,11 +6667,11 @@ var DISTRIB_ITEMS=[
   {label:"Region QP Journee Speciale",cle:0.20,base:4,sec:"Base 4"},
   {label:"SG QP Journee Speciale",cle:0.20,base:4,sec:"Base 4"},
   {label:"Part Dimes Bureau Pastoral",cle:0.60,base:5,sec:"Base 5 - Dimes (60% BP / 10% District / 30% caisse)"},
-  {label:"Budget District Dime",cle:0.10,base:5,sec:"Base 5 - Dimes (60% BP / 10% District / 30% caisse)"},
+  {label:"Budget District Dime District",cle:0.10,base:5,sec:"Base 5 - Dimes (60% BP / 10% District / 30% caisse)"},
   {label:"Part Dimes Financiers",cle:0.03,base:5,sec:"Base 5 - Dimes (60% BP / 10% District / 30% caisse)"},
   {label:"Part Dimes Secretaires",cle:0.033,base:5,sec:"Base 5 - Dimes (60% BP / 10% District / 30% caisse)"},
   {label:"Reste en caisse Dimes",cle:0.237,base:5,sec:"Base 5 - Dimes (60% BP / 10% District / 30% caisse)",info:true},
-  {label:"Part Ration BP",cle:0.85,base:6,sec:"Base 6 - Ration Pasteurs (85% BP / 15% partage)"},
+  {label:"Part Ration Mensuelle BP",cle:0.85,base:6,sec:"Base 6 - Ration Pasteurs (85% BP / 15% partage)"},
   {label:"Part Ration Secretaires",cle:0.09,base:6,sec:"Base 6 - Ration Pasteurs (85% BP / 15% partage)"},
   {label:"Part Ration Financiers",cle:0.06,base:6,sec:"Base 6 - Ration Pasteurs (85% BP / 15% partage)"},
   {label:"Part Appel Fonds Orateur",cle:null,base:0,sec:"Manuel"}
@@ -6811,17 +6811,17 @@ var DEP_MAP={
   "District QP Journee Speciale":{cont:"dep-co",cle:"0,20"},
   "Region QP Journee Speciale":{cont:"dep-co",cle:"0,20"},
   "SG QP Journee Speciale":{cont:"dep-co",cle:"0,20"},
-  "Part Dimes Bureau Pastoral":{cont:"dep-co",cle:"0,60"},
-  "Part Dimes Secretaires":{cont:"dep-co",cle:"0,033"},
-  "Part Dimes Financiers":{cont:"dep-co",cle:"0,03"},
-  "Budget District Dime":{cont:"dep-co",cle:"0,10"},
-  "Part Ration BP":{cont:"dep-cm",cle:"0,85"},
+  "Part Dimes Bureau Pastoral":{cont:"dep-cm",cle:"0,60"},
+  "Part Dimes Secretaires":{cont:"dep-cm",cle:"0,033"},
+  "Part Dimes Financiers":{cont:"dep-cm",cle:"0,03"},
+  "Budget District Dime District":{cont:"dep-co",cle:"0,10"},
+  "Part Ration Mensuelle BP":{cont:"dep-cm",cle:"0,85"},
   "Part Ration Financiers":{cont:"dep-cm",cle:"0,06"},
   "Part Ration Secretaires":{cont:"dep-cm",cle:"0,09"},
   "Part Appel Fonds Orateur":{cont:"dep-cm",cle:"0,10"}
 };
 
-var DEP_ALIASES={"orateurs prophetes 90pct":["orateurs","orateur"],"moderateurs 10pct":["moderateurs","moderateur"]};
+var DEP_ALIASES={"orateurs prophetes 90pct":["orateurs","orateur"],"moderateurs 10pct":["moderateurs","moderateur"],"part ration mensuelle bp":["part ration bp"],"budget district dime district":["budget district dime"]};
 function depLabelMatch(rowLbl,itemLbl){
   var a=normStr(rowLbl),b=normStr(itemLbl);
   if(a===b)return true;
@@ -6830,7 +6830,7 @@ function depLabelMatch(rowLbl,itemLbl){
   return false;
 }
 function injectDep(){
-  dedupDepRows("dep-cm");
+  ["dep-cm","dep-fr","dep-co","dep-ot"].forEach(dedupDepRows);
   var b={b1:parseFloat(document.getElementById("base-b1").value)||0,b2:parseFloat(document.getElementById("base-b2").value)||0,b4:parseFloat(document.getElementById("base-b4").value)||0,b5:parseFloat(document.getElementById("base-b5").value)||0,b6:parseFloat(document.getElementById("base-b6").value)||0};
   var injected=0,skipped=0;
   for(var i=0;i<DISTRIB_ITEMS.length;i++){
@@ -27467,6 +27467,19 @@ function lancerImpressionPlage() {
 // == RÉCAPITULATIF MENSUEL — LOYER / DÎMES / SNEL / REGIDESO ==
 // ================================================
 
+// Libelle de reference d'une rubrique de depense, avec sa casse exacte :
+// « BP » ne doit pas devenir « Bp », sans quoi la correspondance SYCEBNL,
+// qui s'appuie sur le libelle, ne retrouve plus son compte.
+var _DEP_CANON = null;
+function _depLibelleCanon(cle){
+  if(!_DEP_CANON){
+    _DEP_CANON = {};
+    [CM_DEF, FR_DEF, CO_DEF].forEach(function(arr){ arr.forEach(function(o){ if(o&&o.l) _DEP_CANON[normStr(o.l)] = o.l; }); });
+    DISTRIB_ITEMS.forEach(function(it){ if(it&&it.label) _DEP_CANON[normStr(it.label)] = it.label; });
+  }
+  return _DEP_CANON[cle] || cle.replace(/\b\w/g, function(ch){ return ch.toUpperCase(); });
+}
+
 // Dédoublonner les lignes de dépenses équivalentes (ex: "Moderateurs" et "Moderateurs 10pct")
 function dedupDepRows(contId){
   var cont=document.getElementById(contId); if(!cont) return;
@@ -27475,7 +27488,7 @@ function dedupDepRows(contId){
     var li=rows[i].querySelector("input.li"); if(!li) continue;
     var key=normStr(li.value);
     // Normaliser les alias vers le libellé canonique
-    for(var canon in DEP_ALIASES){ if(DEP_ALIASES[canon].indexOf(key)>=0){ key=canon; li.value=canon.replace(/\b\w/g,function(ch){return ch.toUpperCase();}); } }
+    for(var canon in DEP_ALIASES){ if(DEP_ALIASES[canon].indexOf(key)>=0){ key=canon; li.value=_depLibelleCanon(canon); } }
     if(!key) continue;
     if(seen[key]){
       // Garder la ligne qui a un montant ; fusionner sinon
