@@ -1954,6 +1954,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
 <!-- RECETTES -->
 <div class="page active" id="page-recettes">
   <div id="presence-bar" style="display:none;background:#eef4fb;border-radius:7px;padding:6px 11px;margin-bottom:10px;border:1px solid #c5d8ed;flex-wrap:wrap;gap:6px;align-items:center"></div>
+  <div id="brouillon-bar" style="display:none;border-radius:7px;padding:9px 12px;margin-bottom:10px;font-size:.79rem"></div>
   <div class="val-panel" id="val-top"></div>
   <div class="card">
     <div class="card-hdr"><h2>Informations du Culte</h2><span class="badge">Obligatoire</span></div>
@@ -4923,6 +4924,116 @@ function initSyncBadge() {
 }
 
 // == FIRESTORE SYNC ==
+// == BROUILLON DE TRAVAIL PARTAGE ==
+// Le document cultes/culte_AAAAMMJJ est le formulaire en cours, partage entre
+// les appareils : c'est lui qui permet a deux tresoriers de saisir le meme
+// culte. Il n'etait jamais referme. Une fois le culte archive dans historique/,
+// ce brouillon survivait avec tout son contenu, et chaque ouverture de
+// l'application le redeposait en silence dans le formulaire. On voyait donc
+// apparaitre une saisie qu'on n'avait pas faite ce jour-la.
+
+// Le document existe-t-il deja cote serveur ? Une sauvegarde automatique a le
+// droit de mettre a jour une piece existante, jamais d'en creer une.
+var gCulteDocExiste = false;
+var gPremierSnapshot = true;
+
+// Un formulaire ne devient une piece comptable que s'il porte des montants ou
+// une mention ecrite. Une date, un effectif ou un nom de responsable ne
+// comptent pas : ce sont des traces de navigation, pas une saisie.
+function _saisieAUnContenu(data) {
+  if (!data) return false;
+  var sections = ["cf", "cl", "cm", "fr", "co", "ot"];
+  for (var i = 0; i < sections.length; i++) {
+    var arr = data[sections[i]] || [];
+    for (var j = 0; j < arr.length; j++) {
+      var r = arr[j] || {};
+      if ((parseFloat(r.cdf) || 0) !== 0) return true;
+      if ((parseFloat(r.usd) || 0) !== 0) return true;
+      if ((r.n || "").toString().trim()) return true;
+    }
+  }
+  var m = data.meta || {};
+  var champs = ["repCDF", "repUSD", "cntCDF", "cntUSD", "justifEcart"];
+  for (var k = 0; k < champs.length; k++) {
+    if ((m[champs[k]] || "").toString().trim()) return true;
+  }
+  return false;
+}
+
+// Refermer le brouillon partage : le culte est archive, ou il etait vide. Sans
+// cela il reapparait a chaque ouverture. L'echec n'est pas signale : c'est un
+// menage, pas une operation comptable.
+function _fermerBrouillonPartage(docId) {
+  if (!IS_CONFIGURED || !gDb) return;
+  try { gDb.collection("cultes").doc(docId || getDocId()).delete().catch(function(){}); } catch(e) {}
+  gCulteDocExiste = false;
+  _masquerBandeauBrouillon();
+}
+
+function _masquerBandeauBrouillon() {
+  var bar = document.getElementById("brouillon-bar");
+  if (bar) { bar.style.display = "none"; bar.innerHTML = ""; }
+}
+
+// Le formulaire peut se remplir tout seul : au lancement, ou quand un autre
+// appareil enregistre. Sans indication, impossible de savoir d'ou vient ce
+// qu'on lit. Le bandeau nomme l'auteur et l'heure, et laisse repartir a blanc.
+function _bandeauBrouillon(data, docId, conflit) {
+  var bar = document.getElementById("brouillon-bar");
+  if (!bar) return;
+  var qui = (data && data.lastEditBy) || "";
+  var quand = "";
+  try {
+    if (data && data.lastEditAt) quand = new Date(data.lastEditAt).toLocaleString("fr-FR");
+  } catch(e) {}
+  var date = (data && data.meta && data.meta.date) || "";
+  var origine = "Saisie en cours partag\u00e9e"
+    + (date ? " pour le culte du " + escH(_visDateFr(date)) : "")
+    + (qui ? ", derni\u00e8re modification par <b>" + escH(qui) + "</b>" : "")
+    + (quand ? " \u00e0 " + escH(quand) : "") + ".";
+  if (conflit) {
+    bar.style.background = "#fff4e5"; bar.style.border = "1px solid #f0c48a"; bar.style.color = "#8a5a12";
+    bar.innerHTML = "\u26a0\ufe0f <b>Un autre appareil vient d'enregistrer ce culte.</b> "
+      + "Votre saisie en cours n'a pas \u00e9t\u00e9 remplac\u00e9e. " + origine
+      + " <button class='btn btn-o btn-sm' style='margin-left:6px' onclick='chargerBrouillonPartage()'>Charger leur version</button>";
+  } else {
+    bar.style.background = "#eef4fb"; bar.style.border = "1px solid #c5d8ed"; bar.style.color = "#33506e";
+    bar.innerHTML = "\u2139\ufe0f " + origine
+      + " Ce n'est pas encore un culte enregistr\u00e9 : il reste \u00e0 valider et \u00e0 sauvegarder."
+      + " <button class='btn btn-o btn-sm' style='margin-left:6px' onclick='abandonnerBrouillonPartage()'>Repartir d'un formulaire vierge</button>";
+  }
+  bar.style.display = "block";
+}
+
+// Charger volontairement la version du serveur, apres l'avoir refusee.
+function chargerBrouillonPartage() {
+  if (!IS_CONFIGURED || !gDb) return;
+  gDb.collection("cultes").doc(getDocId()).get().then(function(snap) {
+    if (!snap.exists) { _masquerBandeauBrouillon(); return; }
+    var data = snap.data();
+    restoreState(data);
+    gIsDirty = false;
+    _bandeauBrouillon(data, getDocId(), false);
+    showToast("Version du serveur charg\u00e9e.", "ok");
+  }).catch(function(){ showToast("Chargement impossible.", "err"); });
+}
+
+// Jeter le brouillon partage : il disparait pour tout le monde, puisqu'il
+// n'appartient a personne tant qu'il n'est pas enregistre.
+function abandonnerBrouillonPartage() {
+  showModal("Repartir d'un formulaire vierge ?",
+    "La saisie en cours sera effac\u00e9e sur tous les appareils. "
+    + "Les cultes d\u00e9j\u00e0 enregistr\u00e9s dans l'historique ne sont pas touch\u00e9s.",
+    function() {
+      var docId = getDocId();
+      _fermerBrouillonPartage(docId);
+      clearDraft();
+      resetFormAfterSave();
+      gIsDirty = false;
+      showToast("Formulaire vierge.", "ok");
+    });
+}
+
 function getDocId() {
   var d = document.getElementById("meta-date").value || getTodayStr();
   return "culte_" + d.replace(/-/g, "");
@@ -4931,16 +5042,41 @@ function getDocId() {
 function subscribeToDoc(docId) {
   if (gUnsubDoc) gUnsubDoc();
   setSyncStatus("ok", "Connexion...");
+  gPremierSnapshot = true;
+  gCulteDocExiste = false;
   gUnsubDoc = gDb.collection("cultes").doc(docId)
     .onSnapshot(function(snap) {
-      if (snap.exists && !gSyncing) {
-        restoreState(snap.data());
-        var now = new Date();
-        var hh = now.getHours(), mm = now.getMinutes();
-        setSyncStatus("ok", "Sync " + (hh<10?"0"+hh:hh) + ":" + (mm<10?"0"+mm:mm));
-      } else if (!snap.exists) {
+      var premier = gPremierSnapshot;
+      gPremierSnapshot = false;
+      if (!snap.exists) {
+        gCulteDocExiste = false;
+        _masquerBandeauBrouillon();
         setSyncStatus("ok", "Nouveau document");
+        return;
       }
+      gCulteDocExiste = true;
+      if (gSyncing) return;   // notre propre ecriture qui revient
+      var data = snap.data();
+      // Un brouillon sans montant n'a rien a dire. On le referme au lieu de le
+      // recopier dans le formulaire : c'est lui qui faisait apparaitre une
+      // saisie que personne n'avait faite.
+      if (!_saisieAUnContenu(data)) {
+        _fermerBrouillonPartage(docId);
+        setSyncStatus("ok", "Nouveau document");
+        return;
+      }
+      // Ne jamais ecraser une saisie en cours par ce qui arrive du reseau :
+      // ce qui est en train d'etre tape serait perdu sans un mot.
+      if (gIsDirty && !premier) {
+        _bandeauBrouillon(data, docId, true);
+        return;
+      }
+      restoreState(data);
+      gIsDirty = false;
+      _bandeauBrouillon(data, docId, false);
+      var now = new Date();
+      var hh = now.getHours(), mm = now.getMinutes();
+      setSyncStatus("ok", "Sync " + (hh<10?"0"+hh:hh) + ":" + (mm<10?"0"+mm:mm));
     }, function(e) {
       setSyncStatus("dirty", "Erreur sync");
     });
@@ -4963,16 +5099,27 @@ function _signalerAttenteReseau(p, quoi, ms) {
 function saveToFirestore() {
   if (!IS_CONFIGURED) { saveToStorage(); setSyncStatus("local","Sauvegarde locale"); return; }
   var docId = getDocId();
+  var data = captureState();
+  // Une sauvegarde automatique met a jour une piece, elle n'en cree pas. Tant
+  // que le formulaire ne porte aucun montant, choisir une date ou taper un nom
+  // ne doit pas faire naitre cultes/<date> : ce document fantome serait
+  // recharge a la prochaine ouverture comme s'il avait ete saisi.
+  if (!_saisieAUnContenu(data) && !gCulteDocExiste) {
+    gIsDirty = false;
+    setSyncStatus("ok", "Rien \u00e0 enregistrer");
+    return;
+  }
   gSyncing = true;
   setSyncStatus("saving", "Sauvegarde...");
-  var data = captureState();
   data.lastEditBy    = gCurrentUser ? gCurrentUser.nom : "";
   data.lastEditEmail = gCurrentUser ? gCurrentUser.email : "";
+  data.lastEditAt    = new Date().toISOString();
   var _pCulte = gDb.collection("cultes").doc(docId).set(data, {merge: true});
   _signalerAttenteReseau(_pCulte, "Culte enregistré");
   _pCulte
     .then(function() {
       gSyncing = false; gIsDirty = false;
+      gCulteDocExiste = true;
       var now = new Date();
       var hh = now.getHours(), mm = now.getMinutes();
       setSyncStatus("ok", "Sync " + (hh<10?"0"+hh:hh) + ":" + (mm<10?"0"+mm:mm));
@@ -5229,6 +5376,10 @@ function _saveToHistoryFinal(data, histId, wasExisting) {
         showToast("✅ Sauvegardé dans Firebase — visible sur tous les appareils", "ok");
       }
       clearDraft();
+      // Le culte est archive : le brouillon partage n'a plus de raison d'etre.
+      // Le laisser vivant, c'est le voir revenir dans le formulaire a chaque
+      // ouverture, comme une saisie du jour.
+      _fermerBrouillonPartage("culte_" + String((data.meta && data.meta.date) || "").replace(/-/g, ""));
       _marquerCotisInjectees(data);
       renderHistory();
       gSocFinCache = {cdf:0, usd:0, count:0, loaded:false};
@@ -27986,7 +28137,9 @@ function onDateChangeFin() {
   } else {
     _afficherRubriquesFin();
   }
-  dirty(); recalc();
+  // Choisir une date n'est pas une saisie : ne pas marquer le formulaire
+  // modifie, sans quoi la sauvegarde automatique creerait un culte vide.
+  recalc();
 }
 
 function _afficherRubriquesFin(){
