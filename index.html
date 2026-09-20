@@ -20552,15 +20552,28 @@ function _etatCultes(debut, fin) {
     return true;
   });
 }
+// Le du n'est pas la cle appliquee au total de la periode : c'est la somme
+// des quotes-parts reellement decaissables, culte par culte. Une QP se paie
+// en billets : elle est arrondie au multiple de 50 FC inferieur, exactement
+// comme la distribution l'injecte en depense. Calculer 0,60 x 98 258 donnerait
+// 58 955 FC, un montant qu'aucun caissier ne peut sortir, et l'ecart de 5 FC
+// ferait apparaitre le mois comme non regularise alors qu'il l'est.
 function _etatFinaliser(def, e) {
   e.parts = def.parts.map(function(p) {
-    var du = e.collecte * p.cle, fait = e.verses[p.label] || 0;
+    var du = (e.du && e.du[p.label] != null) ? e.du[p.label] : arrondi(e.collecte * p.cle);
+    var fait = e.verses[p.label] || 0;
     return { label: p.label, cle: p.cle, du: du, fait: fait, ecart: fait - du };
   });
-  if (def.reste) e.reste = { label: def.reste.label, cle: def.reste.cle, du: e.collecte * def.reste.cle };
   e.totalDu = e.parts.reduce(function(s, p) { return s + p.du; }, 0);
   e.totalFait = e.parts.reduce(function(s, p) { return s + p.fait; }, 0);
   e.ecart = e.totalFait - e.totalDu;
+  // Le reste n'est pas une cle de plus : c'est ce qui demeure en caisse une
+  // fois les reversements sortis. Il absorbe donc les centimes d'arrondi, et
+  // vaut toujours un peu plus que la cle theorique.
+  if (def.reste) {
+    var reel = e.collecte - e.totalDu, theo = e.collecte * def.reste.cle;
+    e.reste = { label: def.reste.label, cle: def.reste.cle, du: reel, arrondis: reel - theo };
+  }
   e.complet = e.parts.every(function(p) { return Math.abs(p.ecart) < 1; });
   return e;
 }
@@ -20578,7 +20591,7 @@ function _etatCollecterEvenement(def, debut, fin) {
         if (!r) return;
         var lbl = r.l || r.lib || "", note = r.note || r.n || "";
         if (_etatBaseLigne(lbl, note) !== def.base) return;
-        var mt = (parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux;
+        var mt = arrondi((parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux);
         if (mt <= 0) return;
         collectes.push({ culte: k.toUpperCase(), rubrique: lbl, note: note, montant: mt,
                          designation: _jsDesignation(note) || _jsDesignation(lbl) });
@@ -20594,14 +20607,16 @@ function _etatCollecterEvenement(def, debut, fin) {
       if (!evts[cle]) {
         evts[cle] = { titre: _jsLibelleEvenement(d), sousTitre: _visDateFr(date), date: date,
                       piece: (h.meta && h.meta.piece) || "", resp: (h.meta && h.meta.resp) || "",
-                      collecte: 0, lignes: [], verses: {}, tauxUSD: taux };
-        def.parts.forEach(function(p) { evts[cle].verses[p.label] = 0; });
+                      collecte: 0, lignes: [], verses: {}, du: {}, tauxUSD: taux };
+        def.parts.forEach(function(p) { evts[cle].verses[p.label] = 0; evts[cle].du[p.label] = 0; });
       }
-      var e = evts[cle];
+      var e = evts[cle], sousTotal = 0;
       parDes[d].forEach(function(c) {
         e.collecte += c.montant;
+        sousTotal += c.montant;
         e.lignes.push({ date: date, culte: c.culte, rubrique: c.rubrique, note: c.note, montant: c.montant });
       });
+      def.parts.forEach(function(p) { e.du[p.label] += arrondi(sousTotal * p.cle); });
       if (premier) { def.parts.forEach(function(p) { e.verses[p.label] += verses[p.label]; }); premier = false; }
     });
   });
@@ -20624,7 +20639,7 @@ function _etatCollecterMois(def, debut, fin) {
         if (!r) return;
         var lbl = r.l || r.lib || "", note = r.note || r.n || "";
         if (_etatBaseLigne(lbl, note) !== def.base) return;
-        var mt = (parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux;
+        var mt = arrondi((parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux);
         if (mt <= 0) return;
         collecte += mt;
         lignes.push({ date: date, culte: k.toUpperCase(), rubrique: lbl, note: note, montant: mt });
@@ -20636,14 +20651,14 @@ function _etatCollecterMois(def, debut, fin) {
     if (!parMois[ym]) {
       var p = ym.split("-");
       parMois[ym] = { titre: (MOIS[parseInt(p[1], 10) - 1] || ym) + " " + p[0], sousTitre: "", date: ym + "-01",
-                      piece: "", resp: "", collecte: 0, lignes: [], verses: {}, tauxUSD: taux, nbCultes: 0 };
-      def.parts.forEach(function(x) { parMois[ym].verses[x.label] = 0; });
+                      piece: "", resp: "", collecte: 0, lignes: [], verses: {}, du: {}, tauxUSD: taux, nbCultes: 0 };
+      def.parts.forEach(function(x) { parMois[ym].verses[x.label] = 0; parMois[ym].du[x.label] = 0; });
     }
     var e = parMois[ym];
     e.collecte += collecte;
     e.nbCultes++;
     lignes.forEach(function(l) { e.lignes.push(l); });
-    def.parts.forEach(function(x) { e.verses[x.label] += verses[x.label]; });
+    def.parts.forEach(function(x) { e.verses[x.label] += verses[x.label]; e.du[x.label] += arrondi(collecte * x.cle); });
   });
   var out = [];
   for (var k in parMois) {
@@ -20670,7 +20685,7 @@ function _etatDiagnostic(debut, fin) {
       (h[k] || []).forEach(function(r) {
         if (!r) return;
         var lbl = r.l || r.lib || "", note = r.note || r.n || "";
-        var mt = (parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux;
+        var mt = arrondi((parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux);
         if (!lbl && !mt) return;
         lignes.push({ date: date, lbl: lbl, note: note, montant: mt, base: _etatBaseLigne(lbl, note) });
       });
@@ -20737,7 +20752,8 @@ function renderEtats() {
   h += "</div><div class='card-body'>";
   h += "<div style='background:#eef4fb;border-radius:7px;padding:9px 11px;font-size:.76rem;color:#33506e;margin-bottom:10px'>" + def.intro
      + " Clé : " + def.parts.map(function(x) { return "<b>" + _etatPct(x.cle) + "</b> " + escH(x.label); }).join(", ")
-     + (def.reste ? ", <b>" + _etatPct(def.reste.cle) + "</b> " + escH(def.reste.label) : "") + ".</div>";
+     + (def.reste ? ", <b>" + _etatPct(def.reste.cle) + "</b> " + escH(def.reste.label) : "") + " "
+     + "Chaque quote-part est arrondie au multiple de 50 FC inférieur, culte par culte : le montant affiché est celui qui sort réellement de caisse.</div>";
   h += _etatBarrePeriode(p);
   h += "</div></div>";
 
@@ -20811,7 +20827,8 @@ function renderEtats() {
       h += "<tr style='background:#f6fbff'><td style='padding:6px 8px;font-weight:600;color:#33506e'>" + escH(e.reste.label) + "</td>"
         + "<td style='padding:6px 8px;text-align:center'><span class='ctag'>" + _etatPct(e.reste.cle) + "</span></td>"
         + "<td style='padding:6px 8px;text-align:right;font-family:DM Mono,monospace;font-weight:700;color:#1a3a5c'>" + fmt(e.reste.du) + "</td>"
-        + "<td colspan='2' style='padding:6px 8px;font-size:.72rem;color:#6b88a4'>Ne sort pas de caisse</td></tr>";
+        + "<td colspan='2' style='padding:6px 8px;font-size:.72rem;color:#6b88a4'>Ne sort pas de caisse"
+        + (e.reste.arrondis >= 1 ? " \u00b7 dont " + fmt(e.reste.arrondis) + " FC d'arrondis" : "") + "</td></tr>";
     }
     h += "</table></div>";
     if (e.lignes.length) {
@@ -20860,7 +20877,8 @@ function printEtat(key) {
       rows += "<tr style='background:#f6fbff'><td style='padding:5px 8px'>" + escH(e.reste.label) + "</td>"
         + "<td style='padding:5px 8px;text-align:center'>" + _etatPct(e.reste.cle) + "</td>"
         + "<td style='padding:5px 8px;text-align:right'>" + fmt(e.reste.du) + "</td>"
-        + "<td colspan='2' style='padding:5px 8px;color:#6b88a4'>Ne sort pas de caisse</td></tr>";
+        + "<td colspan='2' style='padding:5px 8px;color:#6b88a4'>Ne sort pas de caisse"
+        + (e.reste.arrondis >= 1 ? " \u00b7 dont " + fmt(e.reste.arrondis) + " FC d'arrondis" : "") + "</td></tr>";
     }
     win.document.write("<table><tr><th>Bénéficiaire</th><th>Clé</th><th>Dû</th><th>Porté</th><th>Écart</th></tr>" + rows
       + "<tr style='background:#1a3a5c;color:#fff;font-weight:800'><td style='padding:5px 8px'>TOTAL REVERSÉ</td>"
