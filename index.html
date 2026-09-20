@@ -1749,7 +1749,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
   <div style="text-align:center">
     <div style="font-size:.82rem;font-weight:700;color:#1a3a5c;margin-bottom:3px">📋 Consulter ma fiche</div>
     <p style="font-size:.7rem;color:#6b88a4;margin-bottom:10px">Entrez le code figurant sur votre fiche</p>
-    <div class="lf"><input type="text" id="check-code" placeholder="KG-0000-XXXX" style="text-transform:uppercase;text-align:center;letter-spacing:.08em;font-family:DM Mono,monospace"></div>
+    <div class="lf"><input type="text" id="check-code" placeholder="KG-0000-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" oninput="_formaterChampCode(this)" style="text-transform:uppercase;text-align:center;letter-spacing:.08em;font-family:DM Mono,monospace"></div>
     <button class="btn-login" id="check-btn" onclick="checkMemberCard()" style="background:linear-gradient(135deg,#1a7a4c,#27ae60)">Voir ma fiche</button>
     <div class="login-err" id="check-err"></div>
   </div>
@@ -10225,7 +10225,7 @@ function restoreLoginLogo() {
     var codeParam = params.get("code");
     if(codeParam){
       var el = document.getElementById("check-code");
-      if(el){ el.value = codeParam.toUpperCase(); }
+      if(el){ el.value = _normaliserCodeFiche(codeParam); }
       // Déclencher la consultation automatiquement après chargement de Firebase
       setTimeout(function(){ checkMemberCard(); }, 1500);
     }
@@ -11763,11 +11763,50 @@ function deleteFichePublique(code) {
 }
 
 // Le membre tape son code → lecture du SEUL document correspondant (pas toute la base)
+// Le code de fiche s'ecrit KG-0000-XXXX. Il est rarement saisi ainsi : on le
+// recopie d'une carte, on le dicte, on le colle depuis un message — souvent
+// sans les traits d'union. Le champ les pose donc lui-meme pendant la frappe,
+// et la recherche normalise de toute facon ce qu'elle recoit.
+function _normaliserCodeFiche(v) {
+  var t = String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  // Le prefixe est toujours KG : une saisie qui commence par un chiffre est
+  // un code ampute, pas un autre format.
+  if (/^[0-9]/.test(t)) t = "KG" + t;
+  t = t.slice(0, 10);
+  if (t.length <= 2) return t;
+  if (t.length <= 6) return t.slice(0, 2) + "-" + t.slice(2);
+  return t.slice(0, 2) + "-" + t.slice(2, 6) + "-" + t.slice(6);
+}
+function _formaterChampCode(el) {
+  if (!el) return;
+  var avant = el.value, pos = el.selectionStart;
+  var apres = _normaliserCodeFiche(avant);
+  if (apres === avant) return;
+  // On conserve le nombre de caracteres utiles a gauche du curseur, pas sa
+  // position brute : sans cela le curseur saute des qu'un tiret s'insere.
+  var utiles = -1;
+  if (typeof pos === "number") {
+    utiles = avant.slice(0, pos).toUpperCase().replace(/[^A-Z0-9]/g, "").length;
+    if (/^[0-9]/.test(String(avant).toUpperCase().replace(/[^A-Z0-9]/g, ""))) utiles += 2;
+  }
+  el.value = apres;
+  if (utiles < 0 || typeof el.setSelectionRange !== "function") return;
+  var n = 0, i = 0;
+  while (i < apres.length && n < utiles) {
+    if (/[A-Z0-9]/.test(apres.charAt(i))) n++;
+    i++;
+  }
+  while (i < apres.length && apres.charAt(i) === "-") i++;
+  try { el.setSelectionRange(i, i); } catch (e) {}
+}
+
 function checkMemberCard() {
   var codeEl = document.getElementById("check-code");
   var errEl = document.getElementById("check-err");
   var btn = document.getElementById("check-btn");
-  var code = (codeEl.value||"").trim().toUpperCase();
+  // Le code peut arriver sans tirets, en minuscules, avec des espaces : c'est
+  // la meme fiche.
+  var code = _normaliserCodeFiche(codeEl.value);
   errEl.textContent = "";
   if (!code) { errEl.textContent = "Entrez votre code."; return; }
   if (!IS_CONFIGURED || !gDb) { errEl.textContent = "Service indisponible hors connexion."; return; }
