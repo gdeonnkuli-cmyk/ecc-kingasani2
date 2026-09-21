@@ -4633,54 +4633,27 @@ function doLogin() {
       gCurrentUser = { email: email, nom: info.nom, role: info.role, label: info.label, uid: cred.user.uid };
       // Apply perms from USER_ROLES if defined
       if(info.perms) gCurrentUser.perms = info.perms;
-      // Charger les permissions depuis Firestore (overrides USER_ROLES)
+      // Ce chemin rechargeait les permissions pour son compte, en doublon de
+      // loadUserPermsFromFirestore — et sans jamais regarder si le compte
+      // etait desactive. Un compte ferme par l'administrateur se connectait
+      // donc normalement en passant par le formulaire. Les deux chemins
+      // partagent desormais le meme controle.
       if(gDb) {
-        gDb.collection("accounts").where("email","==",email).limit(1).get()
-          .then(function(snap){
-            if(!snap.empty){
-              var ac = snap.docs[0].data();
-              // Read flat modules/financeTabs fields (new format)
-              if(ac.modules && Array.isArray(ac.modules)) {
-                gCurrentUser.perms = {
-                  modules: ac.modules,
-                  financeTabs: ac.financeTabs || []
-                };
-              } else if(ac.modules && typeof ac.modules === "string") {
-                // Support comma-separated string
-                gCurrentUser.perms = {
-                  modules: ac.modules.split(",").map(function(m){ return m.trim(); }),
-                  financeTabs: ac.financeTabs || []
-                };
-              } else if(ac.perms && ac.perms.modules) {
-                // Legacy nested perms object
-                gCurrentUser.perms = ac.perms;
-              }
-              if(ac.socialSaisie !== undefined) {
-                if(!gCurrentUser.perms) gCurrentUser.perms = {modules:[], financeTabs:[]};
-                gCurrentUser.perms.socialSaisie = ac.socialSaisie;
-              }
-              if(ac.semSaisie !== undefined) {
-                if(!gCurrentUser.perms) gCurrentUser.perms = {modules:[], financeTabs:[]};
-                gCurrentUser.perms.semSaisie = ac.semSaisie;
-              }
-              if(ac.ecoSaisie !== undefined) {
-                if(!gCurrentUser.perms) gCurrentUser.perms = {modules:[], financeTabs:[]};
-                gCurrentUser.perms.ecoSaisie = ac.ecoSaisie;
-              }
-              if(ac.projTabs !== undefined && gCurrentUser.perms) {
-                gCurrentUser.perms.projTabs = ac.projTabs;
-              }
-              if(ac.nom) gCurrentUser.nom = ac.nom;
-              // Ne jamais ecraser le role si USER_ROLES definit deja admin
-              var infoRole = USER_ROLES[email];
-              if(ac.role && !(infoRole && infoRole.role === "admin")) gCurrentUser.role = ac.role;
-              // Forcer mise a jour onglet admin apres chargement Firestore
-              var adminTabF = document.getElementById("tab-btn-admin");
-              if(adminTabF) adminTabF.style.display = (gCurrentUser.role === "admin") ? "" : "none";
-            }
+        loadUserPermsFromFirestore(email,
+          function(){
+            var adminTabF = document.getElementById("tab-btn-admin");
+            if(adminTabF) adminTabF.style.display = (gCurrentUser.role === "admin") ? "" : "none";
             launchAppFin();
-          })
-          .catch(function(){ launchAppFin(); });
+          },
+          function(msg){
+            // Acces refuse : le dire dans le formulaire, qui reste sous les yeux.
+            gCurrentUser = null;
+            gLoginManuel = false;
+            if(gAuth) gAuth.signOut().catch(function(){});
+            document.getElementById("li-btn").textContent = "Se connecter";
+            err.textContent = msg;
+            err.className = "login-err show";
+          });
       } else {
         launchAppFin();
       }
@@ -9355,6 +9328,9 @@ function renderAdmin(){
 
   // Load user accounts from localStorage
   var accounts = loadAccounts();
+  // La derniere ouverture et la fermeture d'un compte vivent cote serveur :
+  // sans elles le tableau ne dirait rien des comptes dormants.
+  chargerComptesServeur(false);
 
   var histSize=0;
   try{var h=localStorage.getItem("ecc_hist")||"",c2=localStorage.getItem("ecc_current")||"";histSize=Math.round((h.length+c2.length)/1024);}catch(e){}
@@ -9409,7 +9385,8 @@ function renderAdmin(){
   html+="<th style='padding:7px 9px;text-align:left;font-size:.67rem;font-weight:700;color:#1a3a5c;text-transform:uppercase;border-bottom:2px solid #c5d8ed'>Nom / Email</th>";
   html+="<th style='padding:7px 9px;text-align:left;font-size:.67rem;font-weight:700;color:#1a3a5c;text-transform:uppercase;border-bottom:2px solid #c5d8ed'>Role</th>";
   html+="<th style='padding:7px 9px;text-align:left;font-size:.67rem;font-weight:700;color:#1a3a5c;text-transform:uppercase;border-bottom:2px solid #c5d8ed'>Modules</th>";
-  html+="<th style='padding:7px 9px;text-align:left;font-size:.67rem;font-weight:700;color:#1a3a5c;text-transform:uppercase;border-bottom:2px solid #c5d8ed'>Saisies</th>";
+  html+="<th " + "style='padding:7px 9px;text-align:left;font-size:.67rem;font-weight:700;color:#1a3a5c;text-transform:uppercase;border-bottom:2px solid #c5d8ed'" + ">Saisies</th>";
+  html+="<th " + "style='padding:7px 9px;text-align:left;font-size:.67rem;font-weight:700;color:#1a3a5c;text-transform:uppercase;border-bottom:2px solid #c5d8ed'" + ">Dernière ouverture</th>";
   html+="<th style='padding:7px 9px;text-align:center;font-size:.67rem;font-weight:700;color:#1a3a5c;text-transform:uppercase;border-bottom:2px solid #c5d8ed'>Actions</th>";
   html+="</tr></thead><tbody>";
 
@@ -9437,10 +9414,41 @@ function renderAdmin(){
       if(!saisiesBadges) saisiesBadges = "<span style='color:#adb5bd;font-size:.62rem'>Aucune saisie speciale</span>";
     }
     html+="<td style='padding:7px 9px'>"+saisiesBadges+"</td>";
+
+    // Derniere ouverture : la date, l'anciennete, et l'etat qui en decoule.
+    var et = _etatCompte(ac.email, ac.role);
+    var cell = "";
+    if(gComptesServeur === null){
+      cell = "<span style='color:#adb5bd;font-size:.68rem'>lecture…</span>";
+    } else if(et.admin){
+      cell = (et.lastLogin ? "<div style='font-size:.72rem;color:#1a3a5c'>" + escHtml(_visDateFr(et.lastLogin.substring(0,10))) + "</div>" : "")
+           + "<span style='background:#c8a96e22;color:#a07d2e;padding:1px 6px;border-radius:8px;font-size:.6rem;font-weight:700'>Administrateur — jamais fermé</span>";
+    } else if(et.ferme){
+      cell = (et.lastLogin ? "<div style='font-size:.72rem;color:#6b88a4'>" + escHtml(_visDateFr(et.lastLogin.substring(0,10))) + "</div>" : "")
+           + "<span class='status-badge sb-inactif' style='background:#fee2e2;color:#b91c1c;border-color:#fca5a5'>🔒 Fermé — "
+           + (et.motif === "inactivite" ? "inactivité" : "par l'admin") + "</span>";
+    } else if(et.jours === null){
+      cell = "<span style='color:#6b88a4;font-size:.68rem'>jamais ouvert depuis la mise en place</span>";
+    } else {
+      var reste = INACTIVITE_JOURS - et.jours;
+      var coul = reste <= INACTIVITE_PREAVIS ? "#b45309" : "#1e7d52";
+      cell = "<div style='font-size:.72rem;color:#1a3a5c'>" + escHtml(_visDateFr(et.lastLogin.substring(0,10)))
+           + " <span style='color:#6b88a4'>(" + et.jours + " j)</span></div>"
+           + "<span style='color:" + coul + ";font-size:.64rem;font-weight:700'>"
+           + (reste <= INACTIVITE_PREAVIS ? "⚠️ ferme dans " + reste + " j" : "actif") + "</span>";
+    }
+    html+="<td style='padding:7px 9px'>"+cell+"</td>";
+
     html+="<td style='padding:7px 9px;text-align:center;display:flex;gap:5px;justify-content:center;flex-wrap:wrap'>";
     if(!isMe){
       html+="<button class='btn btn-o btn-sm' onclick='openEditAccount(\""+ac.email+"\")'>Modifier</button>";
       html+="<button class='btn btn-sm' style='background:#0369a1;color:#fff;padding:3px 8px;border:none;border-radius:5px;cursor:pointer;font-size:.68rem' onclick='adminResetPassword(\""+ac.email+"\")'>📧 Reset</button>";
+      // Seul l'administrateur rouvre un compte ferme : c'est tout l'objet de la regle.
+      if(!et.admin){
+        html += et.ferme
+          ? "<button class='btn btn-g btn-sm' onclick='adminToggleCompte(\""+ac.email+"\",false)'>🔓 Réactiver</button>"
+          : "<button class='btn btn-sm' style='background:#b45309;color:#fff;padding:3px 8px;border:none;border-radius:5px;cursor:pointer;font-size:.68rem' onclick='adminToggleCompte(\""+ac.email+"\",true)'>🔒 Désactiver</button>";
+      }
       html+="<button class='btn btn-d btn-sm' onclick='deleteAccount(\""+ac.email+"\")'>Suppr.</button>";
     } else {
       html+="<button class='btn btn-o btn-sm' onclick='openEditAccount(\""+ac.email+"\")'>Modifier</button>";
@@ -9449,6 +9457,27 @@ function renderAdmin(){
     html+="</td></tr>";
   }
   html+="</tbody></table>";
+
+  // Dire la regle la ou elle s'applique, plutot que de la laisser deviner.
+  var nbFermes = 0, nbBientot = 0;
+  for(var ci=0; ci<accounts.length; ci++){
+    var e2 = _etatCompte(accounts[ci].email, accounts[ci].role);
+    if(e2.admin) continue;
+    if(e2.ferme) nbFermes++;
+    else if(e2.jours !== null && (INACTIVITE_JOURS - e2.jours) <= INACTIVITE_PREAVIS) nbBientot++;
+  }
+  html+="<div style='background:#eef4fb;border:1px solid #c5d8ed;border-radius:7px;padding:9px 11px;font-size:.75rem;color:#33506e;margin-bottom:10px'>";
+  html+="Un compte non-administrateur qui n'ouvre pas l'application pendant <b>"+INACTIVITE_JOURS
+      +" jours</b> se ferme tout seul, et seul un administrateur peut le rouvrir. "
+      +"L'utilisateur est prévenu pendant les "+INACTIVITE_PREAVIS+" derniers jours.";
+  if(nbFermes || nbBientot){
+    html+="<div style='margin-top:5px;font-weight:700'>"
+        + (nbFermes ? "🔒 "+nbFermes+" compte(s) fermé(s)" : "")
+        + (nbFermes && nbBientot ? " · " : "")
+        + (nbBientot ? "⚠️ "+nbBientot+" compte(s) à moins de "+INACTIVITE_PREAVIS+" jours" : "")
+        + "</div>";
+  }
+  html+="</div>";
 
   // Add account button
   html+="<button class='btn btn-g' onclick='openAddAccount()'>+ Ajouter un utilisateur</button>";
@@ -13724,20 +13753,120 @@ function setupAuthListener2() {
   }
 }
 
+// ══ COMPTES DORMANTS ═══════════════════════════════════════════════════════
+// Un compte qui n'a pas servi depuis un mois n'est plus un compte en usage :
+// c'est une porte laissée ouverte. L'application est consultée depuis des
+// téléphones personnels qui changent de mains, se perdent ou se revendent, et
+// personne ne pense à signaler qu'un trésorier a quitté ses fonctions. Passé
+// le délai, l'accès se referme de lui-même et seul un administrateur peut le
+// rouvrir.
+//
+// L'administrateur n'est jamais concerné : c'est lui qui rouvre les portes, il
+// ne peut pas se retrouver enfermé dehors.
+//
+// Un compte qui n'a jamais été horodaté n'est pas un compte dormant : c'est un
+// compte d'avant cette règle. Sa première connexion pose la date de départ,
+// elle ne le condamne pas.
+var INACTIVITE_JOURS   = 30;   // au-delà, le compte se referme
+var INACTIVITE_PREAVIS = 7;    // on prévient l'utilisateur dans les derniers jours
+
+function _estAdminCompte(email, ac) {
+  if (USER_ROLES[email] && USER_ROLES[email].role === "admin") return true;
+  return !!(ac && ac.role === "admin");
+}
+function _joursDepuis(iso) {
+  if (!iso) return null;
+  var t = new Date(iso).getTime();
+  if (!t || isNaN(t)) return null;
+  return Math.floor((Date.now() - t) / 86400000);
+}
+function _motifDesactivation(ac) {
+  if (!ac) return "";
+  if (ac.disabledReason === "inactivite") {
+    return "Votre compte s'est ferm\u00e9 apr\u00e8s " + INACTIVITE_JOURS
+         + " jours sans ouverture de l'application. Seul un administrateur peut le r\u00e9ouvrir.";
+  }
+  return "Votre compte a \u00e9t\u00e9 d\u00e9sactiv\u00e9 par l'administrateur.";
+}
+
+// Le document du compte est tantôt écrit sous son email comme identifiant,
+// tantôt retrouvé par une requête sur le champ email. Les deux coexistent :
+// une désactivation posée par l'administrateur crée accounts/<email> sans
+// champ email, et la requête ne la voyait pas — le compte restait donc
+// ouvert. On lit d'abord par identifiant, la requête ne sert que de repli.
+function _lireCompteServeur(email, cb) {
+  if (!gDb) { cb(null); return; }
+  gDb.collection("accounts").doc(email).get()
+    .then(function(doc){
+      if (doc.exists) { cb(doc.data() || {}); return; }
+      gDb.collection("accounts").where("email","==",email).limit(1).get()
+        .then(function(snap){ cb(snap.empty ? null : (snap.docs[0].data() || {})); })
+        .catch(function(){ cb(null); });
+    })
+    .catch(function(){ cb(null); });
+}
+
+// Horodate l'ouverture. Le champ email est toujours réécrit : c'est lui qui
+// rend le document retrouvable par la requête de repli.
+function _marquerOuverture(email) {
+  if (!gDb || !email) return;
+  gDb.collection("accounts").doc(email).set({
+    email: email, lastLogin: new Date().toISOString()
+  }, {merge:true}).catch(function(){});
+}
+
+function _fermerPourInactivite(email, jours) {
+  if (!gDb || !email) return;
+  gDb.collection("accounts").doc(email).set({
+    email: email, disabled: true, disabledAt: new Date().toISOString(),
+    disabledReason: "inactivite", disabledJours: jours
+  }, {merge:true}).catch(function(){});
+}
+
+// Verdict unique, partagé par les deux chemins de connexion. Renvoie true si
+// l'accès est accordé ; sinon il a déjà expliqué et déconnecté.
+function _accesAutorise(email, ac, refus) {
+  function bloquer(msg) {
+    if (typeof refus === "function") refus(msg);
+    else {
+      showToast(msg, "err");
+      setTimeout(function(){ if(gAuth) gAuth.signOut(); }, 2500);
+    }
+    return false;
+  }
+  if (_estAdminCompte(email, ac)) { _marquerOuverture(email); return true; }
+
+  if (ac && ac.disabled === true) return bloquer(_motifDesactivation(ac));
+
+  var jours = _joursDepuis(ac && ac.lastLogin);
+  if (jours === null) { _marquerOuverture(email); return true; }   // première fois : on pose la date
+  if (jours >= INACTIVITE_JOURS) {
+    _fermerPourInactivite(email, jours);
+    return bloquer("Votre compte s'est ferm\u00e9 apr\u00e8s " + jours
+      + " jours sans ouverture de l'application (limite : " + INACTIVITE_JOURS
+      + " jours). Demandez \u00e0 l'administrateur de le r\u00e9ouvrir.");
+  }
+  var reste = INACTIVITE_JOURS - jours;
+  if (reste <= INACTIVITE_PREAVIS) {
+    setTimeout(function(){
+      showToast("Sans nouvelle ouverture, votre compte se fermera dans " + reste
+        + " jour(s) pour inactivit\u00e9.", "warn");
+    }, 3000);
+  }
+  _marquerOuverture(email);
+  return true;
+}
+
 // Charge les permissions d'un compte depuis Firestore et les applique à gCurrentUser, puis exécute le callback.
 // Utilisé pour garantir des permissions cohérentes quel que soit le chemin de connexion.
-function loadUserPermsFromFirestore(email, callback) {
+// `refus` reçoit le message quand l'accès est fermé ; sans lui, un toast suivi
+// d'une déconnexion. Le callback n'est alors PAS exécuté : l'application ne
+// doit pas démarrer derrière un compte fermé.
+function loadUserPermsFromFirestore(email, callback, refus) {
   if(!gDb || !gCurrentUser) { if(callback) callback(); return; }
-  gDb.collection("accounts").where("email","==",email).limit(1).get()
-    .then(function(snap){
-      if(!snap.empty){
-        var ac = snap.docs[0].data();
-        // Vérifier si le compte est désactivé par l'admin
-        if(ac.disabled === true && !(USER_ROLES[email] && USER_ROLES[email].role === "admin")){
-          showToast("Votre compte a été désactivé. Contactez l'administrateur.", "err");
-          setTimeout(function(){ if(gAuth) gAuth.signOut(); }, 2000);
-          return;
-        }
+  _lireCompteServeur(email, function(ac){
+      if(!_accesAutorise(email, ac, refus)) return;
+      if(ac){
         if(ac.modules && Array.isArray(ac.modules)) {
           gCurrentUser.perms = { modules: ac.modules, financeTabs: ac.financeTabs || [] };
         } else if(ac.modules && typeof ac.modules === "string") {
@@ -13759,8 +13888,7 @@ function loadUserPermsFromFirestore(email, callback) {
         if(ac.role && !(infoRole && infoRole.role === "admin")) gCurrentUser.role = ac.role;
       }
       if(callback) callback();
-    })
-    .catch(function(){ if(callback) callback(); });
+  });
 }
 if(document.readyState === "complete") { setupAuthListener2(); }
 else { window.addEventListener("load", setupAuthListener2); }
@@ -23174,21 +23302,84 @@ function adminResetPassword(email) {
 // ================================================
 // == ADMIN : DÉSACTIVER / RÉACTIVER UN COMPTE ==
 // ================================================
+// Cette fonction appelait gDB, qui n'existe pas : elle levait une exception
+// avant d'ecrire quoi que ce soit. Aucun bouton ne l'appelait non plus, si
+// bien qu'un compte ne pouvait en pratique ni se fermer ni se rouvrir.
+//
+// Reactiver remet la date d'ouverture a maintenant. Sans cela le compte
+// rouvert se refermerait a la seconde suivante, l'inactivite etant toujours
+// superieure a la limite : l'administrateur aurait cliqué pour rien.
 function adminToggleCompte(email, desactiver) {
+  if(!gDb) { showToast("Firebase requis pour agir sur un compte.", "err"); return; }
   var action = desactiver ? "désactiver" : "réactiver";
   showModal((desactiver?"Désactiver":"Réactiver")+" ce compte ?",
-    "Le compte "+email+" sera "+action+".",
+    desactiver
+      ? "Le compte " + email + " ne pourra plus ouvrir l'application. "
+        + "Lui seul est concerné : ses saisies déjà enregistrées ne bougent pas."
+      : "Le compte " + email + " pourra de nouveau ouvrir l'application. "
+        + "Son compteur d'inactivité repart de zéro : il aura "
+        + INACTIVITE_JOURS + " jours pour se connecter.",
     function(){
       closeModal();
-      // Marquer dans Firestore — le compte est bloqué à la connexion
-      gDB.collection("accounts").doc(email).set({
+      var maj = {
+        email: email,
         disabled: desactiver,
-        disabledAt: desactiver ? new Date().toISOString() : null
-      }, {merge:true}).then(function(){
-        showToast("Compte "+action+" dans Firestore.", "ok");
-        renderAdmin();
+        disabledAt: desactiver ? new Date().toISOString() : null,
+        disabledReason: desactiver ? "admin" : null,
+        disabledJours: null,
+        disabledBy: desactiver ? ((gCurrentUser && gCurrentUser.email) || "") : null
+      };
+      if(!desactiver){
+        maj.lastLogin      = new Date().toISOString();
+        maj.reactivatedAt  = new Date().toISOString();
+        maj.reactivatedBy  = (gCurrentUser && gCurrentUser.email) || "";
+      }
+      gDb.collection("accounts").doc(email).set(maj, {merge:true}).then(function(){
+        showToast("Compte "+action+".", "ok");
+        logAudit(desactiver ? "COMPTE_DESACTIVE" : "COMPTE_REACTIVE", "Admin", email);
+        chargerComptesServeur(true);
       }).catch(function(e){ showToast("Erreur : "+e.message,"err"); });
     });
+}
+
+// ══ ÉTAT SERVEUR DES COMPTES ══════════════════════════════════════════════
+// Le tableau des comptes se construit depuis le localStorage de l'appareil :
+// il ignore tout de la derniere ouverture et de la fermeture d'un compte, qui
+// vivent cote serveur. On les charge une fois, puis on redessine.
+var gComptesServeur = null;    // {email: donnees} ou null tant que non charge
+var gComptesEnCours = false;
+
+function chargerComptesServeur(forcer) {
+  if(!gDb) { gComptesServeur = {}; return; }
+  if(gComptesEnCours) return;
+  if(gComptesServeur && !forcer) return;
+  gComptesEnCours = true;
+  gDb.collection("accounts").get()
+    .then(function(snap){
+      var m = {};
+      snap.forEach(function(d){
+        var v = d.data() || {};
+        m[(v.email || d.id || "").toLowerCase()] = v;
+      });
+      gComptesServeur = m;
+      gComptesEnCours = false;
+      if(gCurrentUser && gCurrentUser.role === "admin") renderAdmin();
+    })
+    .catch(function(){ gComptesServeur = {}; gComptesEnCours = false; });
+}
+
+// Ce que le tableau doit afficher pour un compte : sa derniere ouverture, son
+// anciennete, et s'il est ferme — par qui ou par quoi.
+function _etatCompte(email, roleLocal) {
+  var ac = (gComptesServeur || {})[String(email).toLowerCase()] || null;
+  var admin = _estAdminCompte(email, ac) || roleLocal === "admin";
+  var jours = _joursDepuis(ac && ac.lastLogin);
+  return {
+    ac: ac, admin: admin, jours: jours,
+    lastLogin: (ac && ac.lastLogin) || "",
+    ferme: !!(ac && ac.disabled === true),
+    motif: (ac && ac.disabledReason) || ""
+  };
 }
 
 
