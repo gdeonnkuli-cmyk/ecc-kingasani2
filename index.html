@@ -1715,6 +1715,61 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
   .card-hdr h2,.badge{color:#000!important}
 }
 
+/* ===== POSTE DE TRAVAIL : accueil adapte aux ecrans d'ordinateur =====
+   Sur un portable 1366x768 -- surtout a 125 % de mise a l'echelle Windows,
+   ou la fenetre ne fait plus que ~1093x500 px CSS -- l'accueil mesurait
+   863 px de haut : les rubriques Formation & Culte et Administration
+   tombaient entierement sous la ligne de flottaison, et rien ne signalait
+   leur existence.
+   On regagne la hauteur la ou elle ne coute rien : l'intertitre passe a
+   gauche de sa rangee au lieu d'occuper une ligne entiere, et les tuiles
+   sont moins hautes. Le gain sert a AGRANDIR les libelles, trop petits
+   sur un ecran d'ordinateur (9,6 px pour les intitules de solde).
+   Tout est enferme dans la requete >=1025 px : le telephone et la
+   tablette gardent exactement la mise en page actuelle. */
+@media (min-width:1025px){
+  /* L'accueil etant desormais plus court que l'ecran, son degrade s'arretait
+     au milieu de la page et laissait une bande plus claire en dessous.
+     Cette ombre portee prolonge le fond jusqu'en bas sans rien ajouter a la
+     hauteur du document : aucun risque de reintroduire un ascenseur. */
+  #module-accueil{padding:11px 16px 16px!important;box-shadow:0 220px 0 0 #123048!important}
+  .ah-entete{display:flex;align-items:baseline;justify-content:center;gap:11px;
+             margin-bottom:9px!important;padding-top:2px!important}
+
+  /* En-tete et bande des soldes : plus lisibles, moins hauts */
+  .ah-titre{font-size:1.1rem!important;letter-spacing:.03em!important}
+  #ah-mois{font-size:.78rem!important}
+  #ah-resume-fin{padding:9px 14px!important;margin-bottom:11px!important}
+  .ah-kpi-l{font-size:.68rem!important;letter-spacing:.04em!important}
+  .ah-kpi-v{font-size:1.02rem!important}
+  #ah-cultes{margin-top:5px!important;padding-top:4px!important;font-size:.67rem!important}
+  #ah-alertes{padding:8px 13px!important;margin-bottom:11px!important}
+  #ah-echeances{margin-bottom:11px!important}
+  #ah-budget-zone{padding:9px 14px!important;margin-bottom:11px!important}
+
+  /* L'intertitre occupe une colonne a gauche au lieu d'une ligne entiere.
+     La grille est batie par buildMenuGrid() en alternant un
+     .menu-section-label puis un .menu-grid-row : le placement
+     automatique du CSS grid les range donc intitule, rangee, intitule,
+     rangee : deux rubriques tiennent sur une meme ligne, et les quatre
+     rangees de tuiles deviennent deux. */
+  #ah-menu-grid{display:grid;
+                grid-template-columns:minmax(104px,148px) 1fr minmax(104px,148px) 1fr;
+                align-items:center;column-gap:16px;row-gap:9px;margin-bottom:0!important}
+  #ah-menu-grid>.menu-section-label{margin:0!important;font-size:.74rem!important}
+  #ah-menu-grid>.menu-section-label::after{display:none}
+  #ah-menu-grid>.menu-grid-row{margin-bottom:0;gap:9px}
+  /* Le message « aucun module accessible » est seul : pleine largeur. */
+  #ah-menu-grid>div:only-child{grid-column:1/-1}
+
+  /* Tuiles plus basses, libelles plus gros */
+  .menu-tile{padding:8px 8px 7px!important}
+  .menu-tile-top{width:33px!important;height:33px!important}
+  .menu-tile-top svg{width:19px!important;height:19px!important}
+  .menu-tile-label{font-size:.8rem!important;margin-top:5px!important}
+  .menu-tile-badge{font-size:.6rem;min-width:17px;height:17px}
+}
+
 </style>
 
 </head>
@@ -1849,8 +1904,8 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
 <!-- ========== MODULE ACCUEIL ========== -->
 <div class="module" id="module-accueil" style="display:none;background:#1a3a5c;margin:-12px;padding:16px;min-height:calc(100vh - 200px);border-radius:0">
   <!-- En-tête simple -->
-  <div style="text-align:center;margin-bottom:14px;padding-top:8px">
-    <div style="font-size:.95rem;font-weight:700;color:#fff;letter-spacing:.02em">CBFC-KINGASANI 2</div>
+  <div class="ah-entete" style="text-align:center;margin-bottom:14px;padding-top:8px">
+    <div class="ah-titre" style="font-size:.95rem;font-weight:700;color:#fff;letter-spacing:.02em">CBFC-KINGASANI 2</div>
     <div id="ah-mois" style="font-size:.7rem;color:rgba(255,255,255,.6);margin-top:3px">Chargement...</div>
   </div>
 
@@ -1863,23 +1918,23 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
   <div id="ah-resume-fin" style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:12px 14px;margin-bottom:18px;color:#fff">
     <div style="display:flex;justify-content:space-around;gap:8px;flex-wrap:wrap">
       <div style="text-align:center;flex:1;min-width:80px">
-        <div style="font-size:.6rem;color:rgba(255,255,255,.55);text-transform:uppercase;letter-spacing:.06em">Solde reporté</div>
-        <div id="ah-rep" style="font-family:'DM Mono',monospace;font-size:.82rem;font-weight:700;color:#e8c97e;margin-top:2px">—</div>
+        <div class="ah-kpi-l" style="font-size:.6rem;color:rgba(255,255,255,.55);text-transform:uppercase;letter-spacing:.06em">Solde reporté</div>
+        <div id="ah-rep" class="ah-kpi-v" style="font-family:'DM Mono',monospace;font-size:.82rem;font-weight:700;color:#e8c97e;margin-top:2px">—</div>
       </div>
       <div style="width:1px;background:rgba(255,255,255,.1)"></div>
       <div style="text-align:center;flex:1;min-width:80px">
-        <div style="font-size:.6rem;color:rgba(255,255,255,.55);text-transform:uppercase;letter-spacing:.06em">Recettes</div>
-        <div id="ah-rec" style="font-family:'DM Mono',monospace;font-size:.82rem;font-weight:700;color:#86efac;margin-top:2px">—</div>
+        <div class="ah-kpi-l" style="font-size:.6rem;color:rgba(255,255,255,.55);text-transform:uppercase;letter-spacing:.06em">Recettes</div>
+        <div id="ah-rec" class="ah-kpi-v" style="font-family:'DM Mono',monospace;font-size:.82rem;font-weight:700;color:#86efac;margin-top:2px">—</div>
       </div>
       <div style="width:1px;background:rgba(255,255,255,.1)"></div>
       <div style="text-align:center;flex:1;min-width:80px">
-        <div style="font-size:.6rem;color:rgba(255,255,255,.55);text-transform:uppercase;letter-spacing:.06em">Dépenses</div>
-        <div id="ah-dep" style="font-family:'DM Mono',monospace;font-size:.82rem;font-weight:700;color:#fca5a5;margin-top:2px">—</div>
+        <div class="ah-kpi-l" style="font-size:.6rem;color:rgba(255,255,255,.55);text-transform:uppercase;letter-spacing:.06em">Dépenses</div>
+        <div id="ah-dep" class="ah-kpi-v" style="font-family:'DM Mono',monospace;font-size:.82rem;font-weight:700;color:#fca5a5;margin-top:2px">—</div>
       </div>
       <div style="width:1px;background:rgba(255,255,255,.1)"></div>
       <div style="text-align:center;flex:1;min-width:80px">
-        <div style="font-size:.6rem;color:rgba(255,255,255,.55);text-transform:uppercase;letter-spacing:.06em">Nouveau solde</div>
-        <div id="ah-solde" style="font-family:'DM Mono',monospace;font-size:.82rem;font-weight:700;color:#e8c97e;margin-top:2px">—</div>
+        <div class="ah-kpi-l" style="font-size:.6rem;color:rgba(255,255,255,.55);text-transform:uppercase;letter-spacing:.06em">Nouveau solde</div>
+        <div id="ah-solde" class="ah-kpi-v" style="font-family:'DM Mono',monospace;font-size:.82rem;font-weight:700;color:#e8c97e;margin-top:2px">—</div>
       </div>
     </div>
     <div style="border-top:1px solid rgba(255,255,255,.1);margin-top:8px;padding-top:6px;font-size:.62rem;color:rgba(255,255,255,.4);text-align:center" id="ah-cultes">—</div>
@@ -1889,23 +1944,23 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
   <div id="ah-echeances" style="display:none;margin-bottom:14px"></div>
 
   <!-- Barre de progression budget -->
-  <div id="ah-budget-zone" style="display:none;background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px 15px;margin-bottom:14px">
+  <div id="ah-budget-zone" style="display:none;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.15);border-radius:10px;padding:12px 15px;margin-bottom:14px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-      <span style="font-size:.78rem;font-weight:700;color:var(--navy)">💰 Budget mensuel</span>
-      <span id="ah-bgt-pct" style="font-size:.78rem;font-weight:800;color:#1e7d52">0%</span>
+      <span style="font-size:.78rem;font-weight:700;color:#fff">💰 Budget mensuel</span>
+      <span id="ah-bgt-pct" style="font-size:.78rem;font-weight:800;color:#34d399">0%</span>
     </div>
-    <div style="background:#e5eaf0;border-radius:6px;height:10px;overflow:hidden">
-      <div id="ah-bgt-bar" style="height:10px;border-radius:6px;background:#1e7d52;width:0%;transition:width .6s ease"></div>
+    <div style="background:rgba(255,255,255,.14);border-radius:6px;height:10px;overflow:hidden">
+      <div id="ah-bgt-bar" style="height:10px;border-radius:6px;background:#34d399;width:0%;transition:width .6s ease"></div>
     </div>
-    <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:.68rem;color:var(--muted)">
+    <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:.68rem;color:rgba(255,255,255,.6)">
       <span id="ah-bgt-real">Réalisé —</span>
       <span id="ah-bgt-prev">Prévu —</span>
     </div>
   </div>
 
   <!-- Alertes -->
-  <div id="ah-alertes" style="display:none;border-radius:10px;padding:11px 14px;margin-bottom:14px;background:#fff8e1;border:1px solid #fbbf24">
-    <div style="font-size:.75rem;font-weight:700;color:#b45309;margin-bottom:7px">⚠️ Points d'attention</div>
+  <div id="ah-alertes" style="display:none;border-radius:10px;padding:11px 14px;margin-bottom:14px;background:rgba(251,191,36,.13);border:1px solid rgba(251,191,36,.42)">
+    <div style="font-size:.75rem;font-weight:700;color:#fcd34d;margin-bottom:7px">⚠️ Points d'attention</div>
     <div id="ah-alertes-list"></div>
   </div>
 
@@ -22751,7 +22806,7 @@ function _renderAccueil() {
   if(budZone) budZone.style.display = budgetPrevu>0 ? "" : "none";
   if(budgetPrevu>0){
     var pct=Math.min(Math.round(budgetRealise/budgetPrevu*100),100);
-    var barColor=pct>=100?"#c0392b":pct>=80?"#e67e22":"#1e7d52";
+    var barColor=pct>=100?"#f87171":pct>=80?"#fbbf24":"#34d399";
     setEl("ah-bgt-pct", pct+"%");
     setStyle("ah-bgt-pct","color",barColor);
     setStyle("ah-bgt-bar","width",pct+"%");
@@ -22818,7 +22873,7 @@ function _renderAccueil() {
     alertZone.style.display = alertes.length>0 ? "" : "none";
     var alertHtml = "";
     alertes.forEach(function(a){
-      alertHtml += "<div onclick=\"switchModule('"+a.mod+"')\" style='display:flex;align-items:center;gap:6px;font-size:.75rem;color:#92400e;margin-bottom:5px;cursor:pointer;padding:4px 6px;border-radius:5px;background:rgba(255,255,255,.5)'>"
+      alertHtml += "<div onclick=\"switchModule('"+a.mod+"')\" style='display:flex;align-items:center;gap:6px;font-size:.75rem;color:#fde68a;margin-bottom:5px;cursor:pointer;padding:4px 6px;border-radius:5px;background:rgba(255,255,255,.07)'>"
         +a.icon+" <span>"+escH(a.msg)+"</span><span style='margin-left:auto;font-size:.65rem;opacity:.6'>→</span></div>";
     });
     setHtml("ah-alertes-list", alertHtml);
