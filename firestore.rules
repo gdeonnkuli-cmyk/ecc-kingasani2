@@ -35,6 +35,24 @@ service cloud.firestore {
                  && get(/databases/$(database)/documents/accounts/$(request.auth.token.email)).data.role == 'admin');
     }
 
+    // ── Qui a encore le droit d'entrer ────────────────────────────────────
+    // Un compte fermé — par l'administrateur, ou tout seul après trente jours
+    // sans ouverture — ne doit plus lire ni écrire quoi que ce soit. Tant que
+    // le contrôle vivait dans la page, il se contournait en rechargeant : la
+    // page appartient au visiteur, pas à l'église.
+    //
+    // Le document absent rend l'expression VRAIE, et c'est délibéré. Un compte
+    // sans document accounts/ n'est pas un compte fermé : c'est un compte que
+    // personne n'a encore décrit. Refuser par défaut ici fermerait l'église à
+    // tout le monde le jour de la publication, ce qu'aucune règle de sécurité
+    // ne vaut. Seule une fermeture explicite ferme.
+    function estActif() {
+      return estProprietaire()
+             || (request.auth != null
+                 && (!exists(/databases/$(database)/documents/accounts/$(request.auth.token.email))
+                     || get(/databases/$(database)/documents/accounts/$(request.auth.token.email)).data.disabled != true));
+    }
+
 
     // ── Comptes et rôles ───────────────────────────────────────────────────
     // C'était le point faible de tout l'édifice : n'importe quel compte
@@ -47,14 +65,40 @@ service cloud.firestore {
     // permissions de chacun. L'écriture est réservée aux administrateurs, si
     // bien que nul ne peut plus modifier son propre rôle.
     match /accounts/{doc} {
+      // La lecture reste ouverte à tout compte connecté, y compris fermé : il
+      // doit pouvoir lire son propre document pour qu'on lui dise pourquoi la
+      // porte ne s'ouvre plus.
       allow read:  if request.auth != null;
       allow write: if estAdmin();
+
+      // Deux gestes qu'un compte fait sur lui-même, et deux seulement.
+      //
+      // Horodater son ouverture : sans cela le compteur d'inactivité ne
+      // démarre jamais, puisque l'écriture serait réservée à l'administrateur.
+      //
+      // Se fermer après trente jours : l'utilisateur pose lui-même le verrou.
+      // La valeur est contrainte à true, si bien qu'il peut se fermer mais
+      // jamais se rouvrir — c'est toute la règle, et elle tient ici, pas dans
+      // l'interface. Le rôle n'est jamais dans les clés autorisées : nul ne se
+      // promeut administrateur par ce chemin.
+      allow create: if request.auth != null
+                    && doc == request.auth.token.email
+                    && request.resource.data.keys().hasOnly(['email', 'lastLogin']);
+      allow update: if request.auth != null
+                    && doc == request.auth.token.email
+                    && (
+                         request.resource.data.diff(resource.data).affectedKeys()
+                           .hasOnly(['email', 'lastLogin'])
+                         || (request.resource.data.diff(resource.data).affectedKeys()
+                               .hasOnly(['email', 'disabled', 'disabledAt', 'disabledReason', 'disabledJours'])
+                             && request.resource.data.disabled == true)
+                       );
     }
 
     // ── Données de gestion : session authentifiée obligatoire ──────────────
     // Ces collections sont celles réellement utilisées par l'application.
-    match /membres_db/{doc}          { allow read, write: if request.auth != null; }
-    match /social_db/{doc}           { allow read, write: if request.auth != null; }
+    match /membres_db/{doc}          { allow read, write: if estActif(); }
+    match /social_db/{doc}           { allow read, write: if estActif(); }
 
     // ── Assistances sociales, un document par demande ──────────────────────
     // Elles vivaient dans social_db/main, réécrit en entier à chaque
@@ -62,33 +106,33 @@ service cloud.firestore {
     // Chaque assistance a désormais son document, ce qui supprime le conflit.
     // L'ancien tableau est conservé comme archive ; cette règle doit être
     // publiée AVANT de lancer la bascule, sans quoi l'écriture est refusée.
-    match /social_assistances/{doc}  { allow read, write: if request.auth != null; }
+    match /social_assistances/{doc}  { allow read, write: if estActif(); }
 
     // ── Membres et cotisations, un document par entité ─────────────────────
     // Même bascule que pour les assistances : ils vivaient dans deux tableaux
     // de membres_db/main, réécrits en entier à chaque enregistrement. Ces deux
     // règles doivent être publiées AVANT de lancer la bascule.
-    match /membres/{doc}             { allow read, write: if request.auth != null; }
-    match /cotisations/{doc}         { allow read, write: if request.auth != null; }
+    match /membres/{doc}             { allow read, write: if estActif(); }
+    match /cotisations/{doc}         { allow read, write: if estActif(); }
 
     // ── Mutuelle : un document par entité ─────────────────────────────────
     // Adhérents, versements et demandes vivaient dans mutuelle_db/main,
     // réécrit en entier à chaque opération : deux personnes enregistrant en
     // même temps s'écrasaient. Ces trois règles doivent être publiées AVANT
     // de lancer la bascule, sans quoi l'écriture est refusée.
-    match /mutuelle_membres/{doc}     { allow read, write: if request.auth != null; }
-    match /mutuelle_cotisations/{doc} { allow read, write: if request.auth != null; }
-    match /mutuelle_soins/{doc}       { allow read, write: if request.auth != null; }
-    match /seminaire_db/{doc}        { allow read, write: if request.auth != null; }
-    match /ecodim_db/{doc}           { allow read, write: if request.auth != null; }
-    match /effectif_db/{doc}         { allow read, write: if request.auth != null; }
-    match /loyer_db/{doc}            { allow read, write: if request.auth != null; }
-    match /projets/{doc}             { allow read, write: if request.auth != null; }
-    match /eb_demandes/{doc}         { allow read, write: if request.auth != null; }
-    match /annonces/{doc}            { allow read, write: if request.auth != null; }
-    match /cultes/{doc}              { allow read, write: if request.auth != null; }
-    match /historique/{doc}          { allow read, write: if request.auth != null; }
-    match /presence/{doc}            { allow read, write: if request.auth != null; }
+    match /mutuelle_membres/{doc}     { allow read, write: if estActif(); }
+    match /mutuelle_cotisations/{doc} { allow read, write: if estActif(); }
+    match /mutuelle_soins/{doc}       { allow read, write: if estActif(); }
+    match /seminaire_db/{doc}        { allow read, write: if estActif(); }
+    match /ecodim_db/{doc}           { allow read, write: if estActif(); }
+    match /effectif_db/{doc}         { allow read, write: if estActif(); }
+    match /loyer_db/{doc}            { allow read, write: if estActif(); }
+    match /projets/{doc}             { allow read, write: if estActif(); }
+    match /eb_demandes/{doc}         { allow read, write: if estActif(); }
+    match /annonces/{doc}            { allow read, write: if estActif(); }
+    match /cultes/{doc}              { allow read, write: if estActif(); }
+    match /historique/{doc}          { allow read, write: if estActif(); }
+    match /presence/{doc}            { allow read, write: if estActif(); }
     // ── Configuration ─────────────────────────────────────────────────────
     // Clôtures de période, correspondance comptable SYCEBNL, montants des
     // cotisations : ce sont des décisions d'administration.
@@ -99,22 +143,22 @@ service cloud.firestore {
     // casserait la numérotation pour le trésorier.
     // config/compteurs porte aussi la séquence des numéros d'expression de
     // besoin, attribués par transaction comme les numéros de pièce.
-    match /config/compteurs          { allow read, write: if request.auth != null; }
+    match /config/compteurs          { allow read, write: if estActif(); }
     match /config/{doc} {
-      allow read:  if request.auth != null;
+      allow read:  if estActif();
       allow write: if estAdmin();
     }
     // Les exercices clos sont des instantanes signes : tout le monde les lit,
     // seul l'administrateur les ecrit ou les supprime lors d'une reouverture.
     match /exercices/{doc} {
-      allow read:  if request.auth != null;
+      allow read:  if estActif();
       allow write: if estAdmin();
     }
-    match /notifications/{doc}       { allow read, write: if request.auth != null; }
-    match /budget_db/{doc}           { allow read, write: if request.auth != null; }
-    match /mutuelle_db/{doc}         { allow read, write: if request.auth != null; }
-    match /distrib_validations/{doc} { allow read, write: if request.auth != null; }
-    match /connexions/{doc}          { allow read, write: if request.auth != null; }
+    match /notifications/{doc}       { allow read, write: if estActif(); }
+    match /budget_db/{doc}           { allow read, write: if estActif(); }
+    match /mutuelle_db/{doc}         { allow read, write: if estActif(); }
+    match /distrib_validations/{doc} { allow read, write: if estActif(); }
+    match /connexions/{doc}          { allow read, write: if estActif(); }
 
     // ── Journal d'audit ───────────────────────────────────────────────────
     // Un journal que chacun peut réécrire n'a aucune valeur probante. Tout
@@ -122,7 +166,7 @@ service cloud.firestore {
     // journal — mais seul un administrateur peut en modifier ou en supprimer
     // une, ce dont clearAccessHistory a besoin.
     match /audit_log/{doc} {
-      allow read, create:   if request.auth != null;
+      allow read, create:   if estActif();
       allow update, delete: if estAdmin();
     }
 
@@ -138,8 +182,8 @@ service cloud.firestore {
     // l'identique, mais l'énumération devient impossible.
     match /fiches_publiques/{doc} {
       allow get:   if true;                  // ouvrir SA fiche, code exact requis
-      allow list:  if request.auth != null;  // énumération réservée à l'équipe
-      allow write: if request.auth != null;  // création, mise à jour, retrait
+      allow list:  if estActif();            // énumération réservée à l'équipe encore ouverte
+      allow write: if estActif();            // création, mise à jour, retrait
     }
 
     // ── Trace des consultations de fiches ─────────────────────────────────
@@ -155,7 +199,7 @@ service cloud.firestore {
                     && (!('nom' in request.resource.data)    || request.resource.data.nom is string)
                     && (!('numero' in request.resource.data) || request.resource.data.numero is string)
                     && (!('time' in request.resource.data)   || request.resource.data.time is string);
-      allow read, update, delete: if request.auth != null;
+      allow read, update, delete: if estActif();
     }
 
     // ── Tout le reste est refusé ──────────────────────────────────────────
@@ -175,9 +219,27 @@ service cloud.firestore {
 //  Ce qui est fermé : nul ne peut plus modifier un rôle ni réécrire le
 //  journal d'audit sans être administrateur.
 //
-//  Ce qui reste ouvert, et assumé pour l'instant : tout compte connecté peut
-//  écrire dans les collections de gestion — un utilisateur « finances » peut
-//  encore modifier le registre des membres. Restreindre demande de décider,
-//  collection par collection, quel rôle écrit quoi ; à faire une fois les
-//  rôles inscrits et stabilisés, en connaissant les usages réels.
+//  Ce qui reste ouvert, et assumé pour l'instant : tout compte connecté ET
+//  encore ouvert peut écrire dans les collections de gestion — un utilisateur
+//  « finances » peut encore modifier le registre des membres. Restreindre
+//  demande de décider, collection par collection, quel rôle écrit quoi ; à
+//  faire une fois les rôles inscrits et stabilisés, en connaissant les usages
+//  réels.
+// ═══════════════════════════════════════════════════════════════════════════
+//  COMPTES DORMANTS
+//
+//  Un compte non-administrateur qui n'ouvre pas l'application pendant trente
+//  jours se ferme, et seul un administrateur le rouvre. La page pose le
+//  verrou — c'est elle qui sait quand l'utilisateur ouvre l'application — mais
+//  c'est estActif() qui le tient : sans ces règles, un compte fermé qui
+//  recharge la page retrouve tous ses droits, la vérification vivant du côté
+//  du visiteur.
+//
+//  L'administrateur n'est jamais fermé, et l'adresse du propriétaire traverse
+//  estActif() en dur, comme pour estAdmin() : une règle de sécurité qui peut
+//  enfermer dehors celui qui la corrige n'est pas une sécurité.
+//
+//  Avant de publier, vérifier dans Administration → Comptes et accès qu'aucun
+//  compte utile ne porte déjà « Fermé ». Un compte sans document accounts/ ne
+//  risque rien : l'absence vaut compte ouvert.
 // ═══════════════════════════════════════════════════════════════════════════
