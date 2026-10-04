@@ -21046,8 +21046,8 @@ var ETATS_DEF = [
   },
   {
     key: "dimes", label: "Dîmes", icon: "💰", base: "b5",
-    groupe: "mois",
-    intro: "Toute recette dont le libellé mentionne « dîmes ». La part reversée est de <b>76,3 %</b> ; le solde reste en caisse de l'église locale.",
+    groupe: "cycle",
+    intro: "Toute recette dont le libellé mentionne « dîmes ». Le regroupement suit le <b>cycle de libération</b> : du 2e dimanche d'un mois au 1er dimanche du mois suivant, libéré ce 1er dimanche — et non le mois calendaire. La part reversée est de <b>76,3 %</b> ; le solde reste en caisse de l'église locale.",
     parts: [
       { label: "Bureau Pastoral",  cle: 0.60,  rubs: ["Part Dimes Bureau Pastoral"] },
       { label: "Budget District",  cle: 0.10,  rubs: ["Budget District Dime District", "Budget District Dime"] },
@@ -21235,8 +21235,67 @@ function _etatCollecterMois(def, debut, fin) {
   out.sort(function(a, b) { return (b.date || "").localeCompare(a.date || ""); });
   return out;
 }
+// Regroupement par cycle de libération, pour les dîmes. Même mécanique que
+// _etatCollecterMois, la clé de regroupement près : la libération du cycle au
+// lieu du mois calendaire. Le sous-titre donne les dates réelles du premier et
+// du dernier culte retenus, et non les bornes théoriques : si un culte de
+// semaine entre dans le cycle, il se voit.
+function _etatCollecterCycle(def, debut, fin) {
+  var MOIS = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
+  var parCycle = {};
+  _etatCultes(debut, fin).forEach(function(h) {
+    var date = (h.meta && h.meta.date) || "";
+    var cy = cycleDimesDe(date);
+    if (!cy) return;
+    var taux = parseFloat(h.meta && h.meta.taux) || getTaux();
+    var collecte = 0, lignes = [];
+    ["cf", "cl"].forEach(function(k) {
+      (h[k] || []).forEach(function(r) {
+        if (!r) return;
+        var lbl = r.l || r.lib || "", note = r.note || r.n || "";
+        if (_etatBaseLigne(lbl, note) !== def.base) return;
+        var mt = arrondi((parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux);
+        if (mt <= 0) return;
+        collecte += mt;
+        lignes.push({ date: date, culte: k.toUpperCase(), rubrique: lbl, note: note, montant: mt });
+      });
+    });
+    var verses = _etatVerses(def, h, taux);
+    var aVerse = def.parts.some(function(p) { return verses[p.label] > 0; });
+    if (!collecte && !aVerse) return;
+    if (!parCycle[cy.cle]) {
+      parCycle[cy.cle] = {
+        titre: "Cycle d" + (/^[aeiouy]/.test(MOIS[cy.mois] || "") ? "'" : "e ") + (MOIS[cy.mois] || "") + " " + cy.annee,
+        sousTitre: "", date: cy.liberation, liberation: cy.liberation,
+        piece: "", resp: "", collecte: 0, lignes: [], verses: {}, du: {},
+        tauxUSD: taux, nbCultes: 0, premier: date, dernier: date
+      };
+      def.parts.forEach(function(x) { parCycle[cy.cle].verses[x.label] = 0; parCycle[cy.cle].du[x.label] = 0; });
+    }
+    var e = parCycle[cy.cle];
+    e.collecte += collecte;
+    e.nbCultes++;
+    if (date < e.premier) e.premier = date;
+    if (date > e.dernier) e.dernier = date;
+    lignes.forEach(function(l) { e.lignes.push(l); });
+    def.parts.forEach(function(x) { e.verses[x.label] += verses[x.label]; e.du[x.label] += arrondi(collecte * x.cle); });
+  });
+  function jm(d) { var p = String(d).split("-"); return p.length === 3 ? p[2] + "/" + p[1] : d; }
+  var out = [];
+  for (var k in parCycle) {
+    var e = parCycle[k];
+    e.sousTitre = e.nbCultes + " culte(s) \u00b7 du " + jm(e.premier) + " au " + jm(e.dernier)
+                + " \u00b7 lib\u00e9ration le " + jm(e.liberation);
+    out.push(_etatFinaliser(def, e));
+  }
+  out.sort(function(a, b) { return (b.date || "").localeCompare(a.date || ""); });
+  return out;
+}
+
 function _etatCollecter(def, debut, fin) {
-  return def.groupe === "evenement" ? _etatCollecterEvenement(def, debut, fin) : _etatCollecterMois(def, debut, fin);
+  if (def.groupe === "evenement") return _etatCollecterEvenement(def, debut, fin);
+  if (def.groupe === "cycle")     return _etatCollecterCycle(def, debut, fin);
+  return _etatCollecterMois(def, debut, fin);
 }
 
 // Ce que le module lit reellement sur la periode : sert a expliquer un
@@ -28241,7 +28300,7 @@ function __renderRecapMensuelWithValid(ym, valid){
   // Libellés de la période réelle des dîmes, pour affichage
   var periodeDebutStr = new Date(periodeDimes.debut).getDate()+" "+MOIS[new Date(periodeDimes.debut).getMonth()];
   var periodeFinStr = new Date(periodeDimes.fin).getDate()+" "+MOIS[new Date(periodeDimes.fin).getMonth()]+" "+new Date(periodeDimes.fin).getFullYear();
-  var dimeDistribStr = periodeFinStr; // La distribution a lieu le dernier jour de la période (2ème dimanche de M+1)
+  var dimeDistribStr = periodeFinStr; // La libération a lieu le 1er dimanche de M+1, dernier jour du cycle
 
   // Rappels intelligents
   var today=new Date(); var todayYm=today.getFullYear()+"-"+(today.getMonth()<9?"0":"")+(today.getMonth()+1);
@@ -28277,7 +28336,7 @@ function __renderRecapMensuelWithValid(ym, valid){
       +"</div>";
   } else if(tot.dimes>0) {
     alertes+="<div style='background:#f0faf4;border-left:3px solid #1e7d52;padding:7px 10px;border-radius:5px;margin-bottom:6px;color:#14532d;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px'>"
-      +"<span>📆 <strong>Dîmes du "+periodeDebutStr+" au "+periodeFinStr+"</strong> à distribuer le <strong>"+dimeDistribStr+"</strong> (2ème dimanche).</span>"
+      +"<span>📆 <strong>Dîmes du "+periodeDebutStr+" au "+periodeFinStr+"</strong> à libérer le <strong>"+dimeDistribStr+"</strong> (1er dimanche).</span>"
       +"<button onclick=\"validerDistribAccueil('"+ym+"','dimes')\" style='background:#1e7d52;color:#fff;border:none;border-radius:5px;padding:3px 10px;font-size:.65rem;font-weight:700;cursor:pointer'>✓ Marquer distribué</button>"
       +"</div>";
   }
@@ -28644,38 +28703,74 @@ function _trouverCulteParDate(dateVal){
 
 
 // ============================================
-// == PÉRIODE RÉELLE DES DÎMES (2ème dimanche à 2ème dimanche) ==
-// ============================================
+// == CYCLE DES DÎMES ==========================================================
+// La recette à répartir court du 2e dimanche d'un mois au 1er dimanche du mois
+// suivant, et c'est ce 1er dimanche qu'on libère. Le cycle de septembre 2026
+// va donc du 13/09 au 04/10, et se libère le 04/10.
+//
+// Trois définitions cohabitaient dans ce fichier, et aucune n'était celle-là :
+// ce bloc les remplaçait par « 2e dimanche au 2e dimanche », et le module États
+// raisonnait en mois calendaire — il coupait le cycle en deux, rangeait le
+// culte du 13/09 en septembre et celui du 04/10 en octobre, et présentait deux
+// périodes à régulariser là où il n'y a qu'une libération.
+//
+// La borne de début retenue pour le RATTACHEMENT est le lendemain de la
+// libération précédente, et non le 2e dimanche : entre les deux il y a six
+// jours sans aucun dimanche, mais un culte de semaine peut y tomber. Encaissé
+// après la dernière libération, il appartient à la libération suivante ; le
+// rattacher au 2e dimanche strictement le ferait disparaître de tout cycle.
+// Pour une collecte dominicale, les deux bornes donnent le même résultat.
 
-// Retourne la date du 2ème dimanche du mois (year, month) — month est 0-indexé (0=janvier)
-function _deuxiemeDimanche(year, month) {
-  var d = new Date(year, month, 1);
-  var dimanches = 0;
-  while(dimanches < 2){
-    if(d.getDay() === 0) dimanches++;
-    if(dimanches < 2) d.setDate(d.getDate()+1);
+// Nième dimanche d'un mois. month est 0-indexé et peut déborder (-1, 12) :
+// JavaScript normalise, ce qui évite d'écrire la bascule d'année à la main.
+function _dimancheNo(year, month, n) {
+  var d = new Date(year, month, 1), vus = 0;
+  while (true) {
+    if (d.getDay() === 0) { vus++; if (vus === n) return d; }
+    d.setDate(d.getDate() + 1);
   }
-  return d;
+}
+
+// Conservée : le loyer s'appuie dessus, et son rythme n'est pas celui des dîmes.
+function _deuxiemeDimanche(year, month) { return _dimancheNo(year, month, 2); }
+
+// Cycle auquel appartient une date : celui dont la libération est le premier
+// dimanche à survenir le jour même ou après.
+function cycleDimesDe(dateStr) {
+  var d = new Date(String(dateStr) + "T00:00:00");
+  if (isNaN(d.getTime())) return null;
+  var s1 = _dimancheNo(d.getFullYear(), d.getMonth(), 1);
+  var lib = (d.getTime() <= s1.getTime()) ? s1 : _dimancheNo(d.getFullYear(), d.getMonth() + 1, 1);
+  var prec = _dimancheNo(lib.getFullYear(), lib.getMonth() - 1, 1);
+  var deb = new Date(prec); deb.setDate(deb.getDate() + 1);
+  var src = new Date(lib.getFullYear(), lib.getMonth() - 1, 1);
+  return {
+    cle:        _dateToYMD(lib),
+    liberation: _dateToYMD(lib),
+    debut:      _dateToYMD(deb),                                        // rattachement
+    annonce:    _dateToYMD(_dimancheNo(src.getFullYear(), src.getMonth(), 2)), // 2e dimanche
+    mois: src.getMonth(), annee: src.getFullYear()
+  };
 }
 
 function _dateToYMD(d){
   return d.getFullYear()+"-"+((d.getMonth()+1)<10?"0":"")+(d.getMonth()+1)+"-"+(d.getDate()<10?"0":"")+d.getDate();
 }
 
-// Calcule la vraie période de collecte des dîmes qui se termine (et se distribue) au 2ème dimanche du mois (year, month)
-// Période : du lendemain du 2ème dimanche du mois précédent, jusqu'au 2ème dimanche du mois (year,month) INCLUS
+// Cycle libéré le 1er dimanche de (year, month). month est 0-indexé, et c'est
+// le mois de la LIBÉRATION : les deux appelants passent déjà cette valeur.
+// La signature et les clés renvoyées ne changent pas.
 function getPeriodeDimes(year, month) {
-  var finPeriode = _deuxiemeDimanche(year, month);
-  var moisPrecedent = new Date(year, month-1, 1);
-  var deb2eDimPrecedent = _deuxiemeDimanche(moisPrecedent.getFullYear(), moisPrecedent.getMonth());
-  var debutPeriode = new Date(deb2eDimPrecedent);
-  debutPeriode.setDate(debutPeriode.getDate()+1);
-
+  var fin  = _dimancheNo(year, month, 1);
+  var prec = _dimancheNo(year, month - 1, 1);
+  var deb  = new Date(prec); deb.setDate(deb.getDate() + 1);
   return {
-    debut: _dateToYMD(debutPeriode),
-    fin: _dateToYMD(finPeriode),
-    dateDistribution: _dateToYMD(finPeriode),
-    finPeriodeObj: finPeriode
+    debut: _dateToYMD(deb),
+    fin: _dateToYMD(fin),
+    dateDistribution: _dateToYMD(fin),
+    finPeriodeObj: fin,
+    // Le 2e dimanche : la date à annoncer, celle du premier culte du cycle.
+    annonce: _dateToYMD(_dimancheNo(year, month - 1, 2))
   };
 }
 
