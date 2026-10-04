@@ -2189,7 +2189,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
         <div class="fg"><label style="color:#2e75b6">Base 1 — Offrandes ordinaires / Familles</label><input type="number" id="base-b1" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#2e75b6" oninput="this.dataset.manual=1;renderDistrib()"></div>
         <div class="fg"><label style="color:#8e44ad">Base 2 — Offrandes Prophete</label><input type="number" id="base-b2" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#8e44ad" oninput="this.dataset.manual=1;renderDistrib()"></div>
         <div class="fg"><label style="color:#e67e22">Base 4 — Journee Speciale</label><input type="number" id="base-b4" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#e67e22" oninput="this.dataset.manual=1;renderDistrib()"></div>
-        <div class="fg"><label style="color:#27ae60">Base 5 — Dimes collectees</label><input type="number" id="base-b5" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#27ae60" oninput="this.dataset.manual=1;renderDistrib()"></div>
+        <div class="fg" style="grid-column:1/-1"><label style="color:#27ae60">Base 5 — Dimes collectees</label><input type="number" id="base-b5" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#27ae60" oninput="this.dataset.manual=1;renderDistrib()"><div id="b5-cycle-note" style="font-size:.66rem;margin-top:3px;line-height:1.4"></div></div>
         <div class="fg" style="grid-column:1/-1"><label style="color:#8e44ad">🎁 Collecte Enveloppe (autonome)</label><div style="display:flex;align-items:center;gap:8px"><input type="number" id="base-benv" placeholder="0" readonly style="background:#f8f0ff;font-family:DM Mono,monospace;font-weight:600;color:#8e44ad;flex:1"><span style="font-size:.72rem;color:#8e44ad;font-weight:600">FC — Distribution au cas par cas (admin)</span></div></div>
         <div class="fg"><label style="color:#c0392b">Base 6 — Cotisation Ration Pasteurs</label><input type="number" id="base-b6" placeholder="Auto" style="background:#fff;font-family:DM Mono,monospace;font-weight:600;color:#c0392b" oninput="this.dataset.manual=1;renderDistrib()"></div>
       </div>
@@ -6963,17 +6963,87 @@ function getBases(){
   }
   return{b1:b1,b2:b2,b4:b4,b5:b5,b6:b6,b7:b7,benv:benv};
 }
+// Dîmes d'un culte déjà archivé, lues comme le module États les lit : même
+// repérage de ligne, même arrondi. Les deux écrans doivent dire le même chiffre.
+function _dimesCulteArchive(h) {
+  var taux = parseFloat(h && h.meta && h.meta.taux) || getTaux(), tot = 0;
+  ["cf", "cl"].forEach(function(k) {
+    ((h && h[k]) || []).forEach(function(r) {
+      if (!r) return;
+      var lbl = r.l || r.lib || "", note = r.note || r.n || "";
+      if (typeof _etatBaseLigne !== "function" || _etatBaseLigne(lbl, note) !== "b5") return;
+      var mt = arrondi((parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux);
+      if (mt > 0) tot += mt;
+    });
+  });
+  return tot;
+}
+
+// Total de dîmes du cycle auquel appartient cette date : les cultes déjà
+// archivés, plus la saisie en cours. Le culte de même date est exclu de
+// l'historique — c'est le formulaire qui fait foi, sans quoi une reprise de
+// saisie compterait deux fois.
+function _dimesDuCycle(dateStr, b5Jour) {
+  if (typeof cycleDimesDe !== "function") return b5Jour;
+  var cy = cycleDimesDe(dateStr);
+  if (!cy) return b5Jour;
+  var tot = b5Jour;
+  (gHistCache || []).forEach(function(h) {
+    var d = (h && h.meta && h.meta.date) || "";
+    if (!d || d === dateStr) return;
+    var c2 = cycleDimesDe(d);
+    if (!c2 || c2.cle !== cy.cle) return;
+    tot += _dimesCulteArchive(h);
+  });
+  return tot;
+}
+
+// Ce culte est-il celui qui libère son cycle ?
+function _estCulteDeLiberation(dateStr) {
+  if (!dateStr || typeof cycleDimesDe !== "function") return false;
+  var cy = cycleDimesDe(dateStr);
+  return !!cy && cy.liberation === dateStr;
+}
+
 function getBaseVal(item,b){if(item.base===1)return b.b1;if(item.base===2)return b.b2;if(item.base===4)return b.b4;if(item.base===5)return b.b5;if(item.base===6)return b.b6;if(item.base===7)return b.b7||0;return 0;}
 
 function calcDistrib(){
   var bases=getBases();
+  // Les dîmes ne se libèrent pas chaque dimanche. Le 1er dimanche du mois, le
+  // culte qui ferme le cycle porte la base de TOUT le cycle : c'est ce jour-là
+  // que l'argent sort, en un seul retrait. Les autres dimanches, la base reste
+  // la collecte du jour, qui reste en caisse.
+  var _d = (document.getElementById("meta-date") || {}).value || "";
+  var _lib = _estCulteDeLiberation(_d);
+  if (_lib) bases.b5 = _dimesDuCycle(_d, bases.b5);
   var fields=["b1","b2","b4","b5","b6"];
   for(var fi=0;fi<fields.length;fi++){var el=document.getElementById("base-"+fields[fi]);if(el&&!el.dataset.manual){var v=bases[fields[fi]];el.value=v>0?Math.round(v):""}}
+  _majNoteCycleDimes(_d, _lib, bases.b5);
   renderDistrib();
   var rm=document.getElementById("recap-mois");
   var md=(document.getElementById("meta-date")||{}).value||"";
   if(rm&&!rm.value&&md.length>=7) rm.value=md.substring(0,7);
   renderRecapMensuel();
+}
+
+// Note sous la base 5 : dire si l'on distribue le cycle ou si l'on attend.
+function _majNoteCycleDimes(dateStr, estLiberation, b5) {
+  var el = document.getElementById("b5-cycle-note");
+  if (!el) return;
+  if (!dateStr || typeof cycleDimesDe !== "function") { el.innerHTML = ""; return; }
+  var cy = cycleDimesDe(dateStr);
+  if (!cy) { el.innerHTML = ""; return; }
+  function jm(d) { var p = String(d).split("-"); return p.length === 3 ? p[2] + "/" + p[1] : d; }
+  if (estLiberation) {
+    el.innerHTML = "<span style='color:#15803d;font-weight:700'>\u21bb Lib\u00e9ration du cycle</span>"
+      + "<span style='color:#33506e'> \u2014 la base porte les d\u00eemes du " + jm(cy.annonce)
+      + " au " + jm(cy.liberation) + ", et non la seule collecte du jour. C'est aujourd'hui que l'argent sort.</span>";
+  } else {
+    el.innerHTML = "<span style='color:#b45309;font-weight:700'>\u23f8 En caisse jusqu'au " + jm(cy.liberation) + "</span>"
+      + "<span style='color:#33506e'> \u2014 les d\u00eemes de ce dimanche entrent dans le cycle du " + jm(cy.annonce)
+      + " au " + jm(cy.liberation) + ". <strong>N'injectez pas</strong> leur r\u00e9partition ce jour-ci : "
+      + "elle serait compt\u00e9e deux fois le jour de la lib\u00e9ration.</span>";
+  }
 }
 
 function renderDistrib(){
@@ -6988,6 +7058,29 @@ function renderDistrib(){
     var rnd=arrondi(raw);
     sections[item.sec].push({label:item.label,cle:item.cle,base:item.base,raw:raw,rnd:rnd,val:gValidation[item.label]||false,isM:item.base===0,info:!!item.info});
   }
+  // Le reste en caisse d'une base n'est pas sa cle theorique : c'est ce qui
+  // demeure une fois les quotes-parts arrondies sorties. Sur un cycle de
+  // 582 700 FC, 0,237 arrondi donne 138 050 alors que la caisse garde
+  // reellement 138 200. Le module Etats retient deja ce residu reel ; les deux
+  // ecrans doivent annoncer le meme billet.
+  (function(){
+    var sorties = {}, basesVal = {}, k;
+    for (k = 0; k < DISTRIB_ITEMS.length; k++) {
+      var it2 = DISTRIB_ITEMS[k];
+      if (it2.base === 0) continue;
+      basesVal[it2.base] = getBaseVal(it2, b);
+      if (it2.info) continue;
+      sorties[it2.base] = (sorties[it2.base] || 0) + arrondi(getBaseVal(it2, b) * it2.cle);
+    }
+    for (var sk2 in sections) {
+      for (var z = 0; z < sections[sk2].length; z++) {
+        var o = sections[sk2][z];
+        if (!o.info || o.base === 0 || basesVal[o.base] === undefined) continue;
+        var residu = basesVal[o.base] - (sorties[o.base] || 0);
+        o.raw = residu; o.rnd = residu;
+      }
+    }
+  })();
   var totDec=0,totCaisse=0,totEcart=0,html="";
   var secKeys=Object.keys(sections);
   for(var si=0;si<secKeys.length;si++){
@@ -21267,10 +21360,10 @@ function _etatCollecterCycle(def, debut, fin) {
       parCycle[cy.cle] = {
         titre: "Cycle d" + (/^[aeiouy]/.test(MOIS[cy.mois] || "") ? "'" : "e ") + (MOIS[cy.mois] || "") + " " + cy.annee,
         sousTitre: "", date: cy.liberation, liberation: cy.liberation,
-        piece: "", resp: "", collecte: 0, lignes: [], verses: {}, du: {},
+        piece: "", resp: "", collecte: 0, lignes: [], verses: {}, du: null,
         tauxUSD: taux, nbCultes: 0, premier: date, dernier: date
       };
-      def.parts.forEach(function(x) { parCycle[cy.cle].verses[x.label] = 0; parCycle[cy.cle].du[x.label] = 0; });
+      def.parts.forEach(function(x) { parCycle[cy.cle].verses[x.label] = 0; });
     }
     var e = parCycle[cy.cle];
     e.collecte += collecte;
@@ -21278,7 +21371,15 @@ function _etatCollecterCycle(def, debut, fin) {
     if (date < e.premier) e.premier = date;
     if (date > e.dernier) e.dernier = date;
     lignes.forEach(function(l) { e.lignes.push(l); });
-    def.parts.forEach(function(x) { e.verses[x.label] += verses[x.label]; e.du[x.label] += arrondi(collecte * x.cle); });
+    // Le dû n'est PAS cumulé culte par culte ici, contrairement aux journées et
+    // à la ration. Un cycle ne se décaisse pas chaque dimanche : il se libère
+    // une fois, en un seul retrait, le 1er dimanche du mois suivant. La
+    // quote-part s'arrondit donc une fois, sur le total du cycle — e.du reste
+    // vide et _etatFinaliser calcule arrondi(collecte x cle).
+    // Sur 582 700 FC, cumuler les arrondis hebdomadaires donnait 444 350 là où
+    // le décaissement réel vaut 444 500 : 150 FC d'écart permanent avec la
+    // rubrique Distribution, et un cycle qui ne se soldait jamais.
+    def.parts.forEach(function(x) { e.verses[x.label] += verses[x.label]; });
   });
   function jm(d) { var p = String(d).split("-"); return p.length === 3 ? p[2] + "/" + p[1] : d; }
   var out = [];
