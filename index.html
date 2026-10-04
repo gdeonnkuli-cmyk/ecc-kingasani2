@@ -11262,6 +11262,51 @@ function _majMontantCarte() {
 }
 
 // Quand on change le type de cotisation, pré-remplir le montant attendu
+// Mois le plus ancien encore du par ce membre. C'est par la qu'on reprend un
+// reglement d'arrieres : le plus vieux d'abord, sinon les mois anciens restent
+// indefiniment en arriere pendant qu'on encaisse les mois courants.
+// Balaie les annees depuis 2026, demarrage du systeme, jusqu'a l'annee en
+// cours. Renvoie null si le membre est a jour de ses mois.
+function _premierMoisDu(membreId) {
+  var m = (typeof findMembre === "function") ? findMembre(membreId) : null;
+  if (!m) return null;
+  var fin = currentYear();
+  for (var an = 2026; an <= fin; an++) {
+    var reste = _moisImpayes(m, an, 1);
+    if (reste.length) return { annee: String(an), mois: (reste[0] < 10 ? "0" : "") + reste[0] };
+  }
+  return null;
+}
+
+// Place le formulaire sur ce mois : annee, mois, et le montant qui en decoule.
+// Appelee a la selection d'un membre et apres chaque enregistrement, de sorte
+// que les arrieres s'enchainent sans qu'on retouche les listes.
+function _placerSurMoisDu(membreId, silencieux) {
+  var d = _premierMoisDu(membreId);
+  if (!d) {
+    // « de ses mois » et non « a jour » : les cotisations annuelles
+    // District, Regional et General ne sont pas comptees ici.
+    if (!silencieux) showToast("Ce membre est a jour de ses mois.", "ok");
+    return null;
+  }
+  var selA = document.getElementById("pay-annee");
+  if (selA) {
+    selA.value = d.annee;
+    // L'annee pourrait manquer de la liste : on l'ajoute plutot que de laisser
+    // le formulaire sur une annee qui n'est pas celle de l'arriere.
+    if (selA.value !== d.annee) {
+      var opt = document.createElement("option");
+      opt.value = d.annee; opt.textContent = d.annee;
+      selA.appendChild(opt); selA.value = d.annee;
+    }
+  }
+  var selM = document.getElementById("pay-mois");
+  if (selM) selM.value = d.mois;
+  if (typeof onPayMoisChange === "function") onPayMoisChange();
+  if (!silencieux) showToast("Mois a regler : " + moisLabel(d.mois) + " " + d.annee + ".", "ok");
+  return d;
+}
+
 function onPayMoisChange() {
   var mois = (document.getElementById("pay-mois")||{}).value;
   var annee = (document.getElementById("pay-annee")||{}).value;
@@ -12812,8 +12857,14 @@ function selectMembreCot(id, label) {
   if(selectedLabel) selectedLabel.textContent = label;
   if(selected) selected.style.display = "flex";
 
-  // Auto-populate grille cotisation
-  showGrilleMembre(id);
+  // Se placer sur le mois le plus ancien encore du, montant compris.
+  _placerSurMoisDu(id);
+
+  // showGrilleMembre() n'existe nulle part dans le fichier : l'appel levait une
+  // ReferenceError a CHAQUE selection de membre, et tout ce qui suivait dans
+  // cette fonction etait donc mort. Garde en place au cas ou la grille par
+  // membre serait ecrite un jour, mais elle ne casse plus la selection.
+  if (typeof showGrilleMembre === "function") showGrilleMembre(id);
 }
 
 function clearMembreCot() {
@@ -12865,7 +12916,7 @@ document.addEventListener("mousedown", function(e) {
 function populateYearSelects() {
   var yr=currentYear();
   var opts="";
-  for (var y=yr;y>=yr-5;y--) opts+="<option value='"+y+"'"+( y===yr?" selected":"")+"'>"+y+"</option>";
+  for (var y=yr;y>=yr-5;y--) opts+="<option value='"+y+"'"+(y===yr?" selected":"")+">"+y+"</option>";
   var selects=["pay-annee","hist-annee","arr-annee","grid-annee"];
   for (var i=0;i<selects.length;i++) {
     var el=document.getElementById(selects[i]);
@@ -12915,7 +12966,12 @@ function enregistrerPaiement() {
   renderHistorique();
   renderDashboardM();
   syncCotisToRecettes();
-  showToast("Paiement enregistre !","ok");
+  // Enchainer : le formulaire se place sur le mois du suivant, de sorte qu'un
+  // membre qui regle plusieurs mois d'affilee se saisisse sans rien rechoisir.
+  var _suite = _placerSurMoisDu(membreId, true);
+  showToast(_suite
+    ? ("Paiement enregistre. Mois suivant a regler : " + moisLabel(_suite.mois) + " " + _suite.annee + ".")
+    : "Paiement enregistre. Ce membre est a jour de ses mois.", "ok");
   var mPaye=findMembre(membreId);
   if(mPaye) pushNotif("💳","Cotisation enregistree",mPaye.prenom+" "+mPaye.nom+" — "+moisLabel(mois)+" "+annee,"membres");
 
@@ -13123,7 +13179,7 @@ function quickPay(membreId) {
   showTabM("cotisations");
   var pm=document.getElementById("pay-membre");
   if(pm) pm.value=membreId;
-  showToast("Membre selectionne. Choisissez le mois a payer.","ok");
+  _placerSurMoisDu(membreId);
 }
 
 // == GRILLE ANNUELLE ==
