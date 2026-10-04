@@ -7805,6 +7805,84 @@ function inscrireRoles() {
 // relancée, et elle est sans effet si elle a déjà eu lieu.
 // ══ BASCULE DES MEMBRES ET COTISATIONS ═════════════════════════════════════
 
+// ══ BAREME DU LOYER ════════════════════════════════════════════════════════
+// Date, comme le bareme des cotisations : un loyer qui change ne doit pas
+// reecrire le passe. Chaque entree vaut a partir de son mois « depuis », et
+// c'est la derniere entree anterieure ou egale au mois controle qui s'applique.
+var gBaremeLoyer = [{ depuis: "2026-01", montant: 150, devise: "USD" }];
+
+function _normaliserBaremeLoyer(b) {
+  if (!b || !b.length) return [];
+  var out = [];
+  for (var i = 0; i < b.length; i++) {
+    var e = b[i] || {};
+    var mt = parseFloat(e.montant);
+    if (!/^[0-9]{4}-[0-9]{2}$/.test(e.depuis || "") || !(mt > 0)) continue;
+    out.push({ depuis: e.depuis, montant: mt, devise: (e.devise === "CDF" ? "CDF" : "USD") });
+  }
+  out.sort(function(a, b2) { return a.depuis.localeCompare(b2.depuis); });
+  return out;
+}
+
+function chargerBaremeLoyer(cb) {
+  try {
+    var l = localStorage.getItem("ecc_bareme_loyer");
+    if (l) { var p = _normaliserBaremeLoyer(JSON.parse(l)); if (p.length) gBaremeLoyer = p; }
+  } catch (e) {}
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(); return; }
+  gDb.collection("config").doc("loyer").get()
+    .then(function(doc) {
+      var d = (doc.exists && doc.data()) || null;
+      var dist = d ? _normaliserBaremeLoyer(d.bareme) : [];
+      // Un bareme distant vide ne doit pas effacer celui de l'appareil.
+      if (dist.length) {
+        gBaremeLoyer = dist;
+        try { localStorage.setItem("ecc_bareme_loyer", JSON.stringify(gBaremeLoyer)); } catch (e) {}
+      }
+      if (cb) cb();
+    })
+    .catch(function() { if (cb) cb(); });
+}
+
+function enregistrerBaremeLoyer() {
+  var mt = parseFloat((document.getElementById("bl-montant") || {}).value);
+  var dv = (document.getElementById("bl-devise") || {}).value === "CDF" ? "CDF" : "USD";
+  var dp = (document.getElementById("bl-depuis") || {}).value || "";
+  if (!(mt > 0)) { showToast("Saisissez un montant de loyer.", "err"); return; }
+  if (!/^[0-9]{4}-[0-9]{2}$/.test(dp)) { showToast("Mois d'effet invalide.", "err"); return; }
+  var liste = gBaremeLoyer.filter(function(e) { return e.depuis !== dp; });
+  liste.push({ depuis: dp, montant: mt, devise: dv });
+  gBaremeLoyer = _normaliserBaremeLoyer(liste);
+  try { localStorage.setItem("ecc_bareme_loyer", JSON.stringify(gBaremeLoyer)); } catch (e) {}
+  function fini(msg, t) { showToast(msg, t || "ok"); if (typeof renderAdmin === "function") renderAdmin(); }
+  if (typeof logAudit === "function") logAudit("CONFIG", "Loyer", "Bar\u00e8me : " + mt + " " + dv + " \u00e0 partir de " + dp);
+  if (!IS_CONFIGURED || !gDb) { fini("Bar\u00e8me enregistr\u00e9 sur cet appareil."); return; }
+  gDb.collection("config").doc("loyer").set({
+    bareme: gBaremeLoyer,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedBy: gCurrentUser ? gCurrentUser.email : ""
+  }, { merge: true })
+    .then(function() { fini("Bar\u00e8me du loyer enregistr\u00e9 et synchronis\u00e9."); })
+    .catch(function() { fini("Enregistr\u00e9 sur cet appareil, pas encore synchronis\u00e9.", "warn"); });
+}
+
+function supprimerBaremeLoyer(depuis) {
+  if (gBaremeLoyer.length <= 1) { showToast("Le dernier bar\u00e8me ne peut pas \u00eatre retir\u00e9.", "warn"); return; }
+  gBaremeLoyer = gBaremeLoyer.filter(function(e) { return e.depuis !== depuis; });
+  try { localStorage.setItem("ecc_bareme_loyer", JSON.stringify(gBaremeLoyer)); } catch (e) {}
+  if (IS_CONFIGURED && gDb) gDb.collection("config").doc("loyer").set({ bareme: gBaremeLoyer }, { merge: true }).catch(function(){});
+  if (typeof renderAdmin === "function") renderAdmin();
+}
+
+// Loyer du par un mois donne.
+function _loyerDu(ym) {
+  var ret = null;
+  for (var i = 0; i < gBaremeLoyer.length; i++) {
+    if (gBaremeLoyer[i].depuis <= ym) ret = gBaremeLoyer[i];
+  }
+  return ret;
+}
+
 // ══ CONTROLE DU LOYER ══════════════════════════════════════════════════════
 // recalcLoy() ne donnait qu'un cumul annuel : collecte totale moins depenses
 // totales. Un mois pouvait rester impaye sans que rien ne le signale, tant que
@@ -7824,7 +7902,7 @@ function _controleLoyerDonnees() {
   var parMois = {}, orphelines = [];
   function ligne(ym) {
     if (!parMois[ym]) parMois[ym] = { ym: ym, collecte: 0, collecteUSD: 0, nbContrib: 0,
-                                      b7: 0, paye: 0, payeUSD: 0, dates: [] };
+                                      b7: 0, paye: 0, payeUSD: 0, dates: [], taux: 0, dateTaux: "" };
     return parMois[ym];
   }
 
@@ -7861,7 +7939,12 @@ function _controleLoyerDonnees() {
       var cy = (typeof cycleDimesDe === "function") ? cycleDimesDe(d) : null;
       var ymC = cy ? (cy.annee + "-" + ((cy.mois + 1) < 10 ? "0" : "") + (cy.mois + 1))
                    : d.substring(0, 7);
-      ligne(ymC).b7 += tot;
+      var L = ligne(ymC);
+      L.b7 += tot;
+      // Le taux retenu pour comparer un loyer en USD a une collecte en CDF est
+      // celui du culte le plus tardif du cycle : celui en vigueur le jour ou
+      // l'argent est libere.
+      if (!L.dateTaux || d > L.dateTaux) { L.dateTaux = d; L.taux = taux; }
     }
   });
 
@@ -7897,53 +7980,116 @@ function _carteControleLoyer() {
       + "<div class=\'cp-l\'>Aucun versement ni paiement de loyer enregistr\u00e9.</div></div>";
   }
 
-  var nonRegles = 0, retards = 0, nonPortes = 0;
+  var nonRegles = 0, retards = 0, nonPortes = 0, partiels = 0, sousCollectes = 0;
   var corps = "";
   d.mois.forEach(function(e) {
     var ecartRecette = e.collecte - e.b7;
     var retard = _loyerEnRetard(e);
-    var etat, cls;
-    if (e.paye <= 0 && e.payeUSD <= 0) {
-      if (e.collecte > 0 || e.collecteUSD > 0) { etat = "\u{1F534} Non r\u00e9gl\u00e9"; cls = "ko"; nonRegles++; }
-      else { etat = "\u2014"; cls = ""; }
+    var bar = _loyerDu(e.ym);
+    var taux = e.taux || getTaux();
+
+    // Tout est ramene a la devise du bail. Un loyer libelle en dollars n'est
+    // pas regle parce qu'on a sorti des francs : il l'est quand l'equivalent
+    // atteint le montant du bail, au taux du jour de la liberation.
+    var enUSD = !bar || bar.devise === "USD";
+    function versDevise(cdf, usd) { return enUSD ? (usd + (taux ? cdf / taux : 0)) : (cdf + usd * taux); }
+    var dev = enUSD ? "$" : "FC";
+    function mtt(v) { return enUSD ? (Math.round(v * 100) / 100).toFixed(2) + " $" : fmt(Math.round(v)) + " FC"; }
+
+    var du = bar ? bar.montant : 0;
+    var payeEq = versDevise(e.paye, e.payeUSD);
+    var colEq = versDevise(e.collecte, e.collecteUSD);
+    var reste = du - payeEq;
+
+    var etat;
+    if (payeEq <= 0.009) {
+      if (e.collecte > 0 || e.collecteUSD > 0 || du > 0) { etat = "\u{1F534} Non r\u00e9gl\u00e9"; nonRegles++; }
+      else etat = "\u2014";
+    } else if (du > 0 && reste > 0.99) {
+      etat = "\u{1F7E0} Partiel \u2014 reste " + mtt(reste); partiels++;
     } else if (retard) {
-      etat = "\u26a0\ufe0f R\u00e9gl\u00e9 apr\u00e8s le 10"; cls = "warn"; retards++;
+      etat = "\u26a0\ufe0f R\u00e9gl\u00e9 apr\u00e8s le 10"; retards++;
     } else if (e.collecte <= 0 && e.collecteUSD <= 0) {
-      etat = "\u26a0\ufe0f Pay\u00e9 sans collecte identifi\u00e9e"; cls = "warn";
+      etat = "\u26a0\ufe0f Pay\u00e9 sans collecte identifi\u00e9e";
     } else {
-      etat = "\u2705 R\u00e9gl\u00e9"; cls = "ok";
+      etat = "\u2705 R\u00e9gl\u00e9";
     }
-    if (Math.abs(ecartRecette) > 1 && (e.collecte > 0)) nonPortes++;
+    if (Math.abs(ecartRecette) > 1 && e.collecte > 0) nonPortes++;
+    // La collecte couvre-t-elle le loyer ? Un mois peut etre regle et
+    // sous-collecte : la difference a ete prise ailleurs en caisse.
+    var sous = du > 0 && colEq > 0 && colEq < du - 0.99;
+    if (sous) sousCollectes++;
 
     corps += "<tr>"
       + "<td style=\'padding:5px 8px;font-weight:600;white-space:nowrap\'>" + escH(_labelMois(e.ym)) + "</td>"
-      + "<td style=\'text-align:right;font-family:DM Mono,monospace\'>" + fmt(e.collecte) + (e.collecteUSD ? " + " + fmt(e.collecteUSD) + " $" : "") + "</td>"
+      + "<td style=\'text-align:right;font-family:DM Mono,monospace;font-weight:700\'>" + (bar ? mtt(du) : "\u2014") + "</td>"
+      + "<td style=\'text-align:right;font-family:DM Mono,monospace\'>" + fmt(e.collecte) + (e.collecteUSD ? " + " + fmt(e.collecteUSD) + " $" : "")
+      + (sous ? "<br><span style=\'font-size:.64rem;color:#b45309\'>couvre " + Math.round(colEq / du * 100) + "\u202f% du loyer</span>" : "")
+      + "</td>"
       + "<td style=\'text-align:center;font-size:.7rem;color:var(--muted)\'>" + (e.nbContrib || "\u2014") + "</td>"
-      + "<td style=\'text-align:right;font-family:DM Mono,monospace\'>" + fmt(e.b7) + "</td>"
-      + "<td style=\'text-align:right;font-family:DM Mono,monospace\'>" + fmt(e.paye) + (e.payeUSD ? " + " + fmt(e.payeUSD) + " $" : "") + "</td>"
-      + "<td style=\'text-align:right;font-family:DM Mono,monospace;font-weight:700;color:" + ((e.collecte - e.paye) < 0 ? "#c0392b" : "#1e7d52") + "\'>" + fmt(e.collecte - e.paye) + "</td>"
+      + "<td style=\'text-align:right;font-family:DM Mono,monospace\'>" + fmt(e.b7)
+      + (Math.abs(ecartRecette) > 1 && e.collecte > 0 ? "<br><span style=\'font-size:.64rem;color:#b45309\'>\u00e9cart " + fmt(ecartRecette) + "</span>" : "")
+      + "</td>"
+      + "<td style=\'text-align:right;font-family:DM Mono,monospace\'>" + fmt(e.paye) + (e.payeUSD ? " + " + fmt(e.payeUSD) + " $" : "")
+      + (e.paye || e.payeUSD ? "<br><span style=\'font-size:.64rem;color:var(--muted)\'>= " + mtt(payeEq) + "</span>" : "")
+      + "</td>"
+      + "<td style=\'text-align:right;font-family:DM Mono,monospace;font-weight:700;color:" + (reste > 0.99 ? "#c0392b" : "#1e7d52") + "\'>"
+      + (bar ? mtt(reste > -0.009 && reste < 0.009 ? 0 : reste) : "\u2014") + "</td>"
       + "<td style=\'white-space:nowrap;font-size:.72rem\'>" + etat + "</td>"
       + "</tr>";
   });
 
   var alerte = [];
   if (nonRegles) alerte.push("<strong>" + nonRegles + " mois non r\u00e9gl\u00e9(s)</strong>");
+  if (partiels) alerte.push("<strong>" + partiels + " mois partiellement r\u00e9gl\u00e9(s)</strong>");
   if (retards) alerte.push(retards + " r\u00e9glement(s) apr\u00e8s le 10");
+  if (sousCollectes) alerte.push(sousCollectes + " mois dont la collecte ne couvre pas le loyer");
   if (nonPortes) alerte.push(nonPortes + " mois dont la collecte n\u2019est pas port\u00e9e en recette");
   if (d.orphelines.length) alerte.push(d.orphelines.length + " d\u00e9pense(s) sans mois exploitable");
 
+  var barCour = _loyerDu(_moisDe(getTodayStr())) || gBaremeLoyer[gBaremeLoyer.length - 1];
+
   h += "<div class=\'ctrl-piece " + (alerte.length ? "ko" : "ok") + "\'><div class=\'cp-tete\'><strong>"
      + (alerte.length ? alerte.join(" \u00b7 ") : "Tous les mois sont r\u00e9gl\u00e9s")
-     + "</strong></div><div class=\'cp-l\'>Le montant du loyer n\u2019\u00e9tant pas encore param\u00e9tr\u00e9, ce contr\u00f4le "
-     + "ne dit pas s\u2019il manque de l\u2019argent : il dit quels mois n\u2019ont jamais \u00e9t\u00e9 pay\u00e9s, "
-     + "lesquels l\u2019ont \u00e9t\u00e9 en retard, et o\u00f9 la collecte n\u2019a pas \u00e9t\u00e9 port\u00e9e en recette. "
+     + "</strong></div><div class=\'cp-l\'>Loyer en vigueur : <strong>"
+     + (barCour ? (barCour.montant + " " + barCour.devise + " par mois depuis " + _labelMois(barCour.depuis)) : "non param\u00e9tr\u00e9")
+     + "</strong>. Un loyer libell\u00e9 en dollars n\u2019est pas r\u00e9gl\u00e9 parce qu\u2019on a sorti des francs : "
+     + "tout est ramen\u00e9 \u00e0 la devise du bail, au taux du culte qui cl\u00f4t le cycle. "
      + "La colonne port\u00e9e en recette suit le <strong>cycle de lib\u00e9ration</strong> \u2014 du 2e dimanche d\u2019un mois "
      + "au 1er dimanche du suivant \u2014 comme les d\u00eemes.</div></div>";
 
+  // Bareme, modifiable par l'administrateur
+  var estAdm = gCurrentUser && (gCurrentUser.role === "admin"
+            || (USER_ROLES[gCurrentUser.email] && USER_ROLES[gCurrentUser.email].role === "admin"));
+  if (estAdm) {
+    h += "<div style=\'margin-top:8px;padding:9px 12px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:8px\'>"
+       + "<div style=\'font-size:.7rem;font-weight:700;margin-bottom:6px\'>Bar\u00e8me du loyer</div>"
+       + "<div style=\'display:flex;gap:7px;flex-wrap:wrap;align-items:flex-end\'>"
+       + "<div class=\'fg\' style=\'margin:0\'><label style=\'font-size:.64rem\'>Montant</label>"
+       + "<input type=\'number\' id=\'bl-montant\' step=\'0.01\' value=\'" + (barCour ? barCour.montant : "") + "\' style=\'width:92px\'></div>"
+       + "<div class=\'fg\' style=\'margin:0\'><label style=\'font-size:.64rem\'>Devise</label>"
+       + "<select id=\'bl-devise\' style=\'width:82px\'><option value=\'USD\'" + (barCour && barCour.devise === "USD" ? " selected" : "") + ">USD</option>"
+       + "<option value=\'CDF\'" + (barCour && barCour.devise === "CDF" ? " selected" : "") + ">CDF</option></select></div>"
+       + "<div class=\'fg\' style=\'margin:0\'><label style=\'font-size:.64rem\'>\u00c0 partir de</label>"
+       + "<input type=\'month\' id=\'bl-depuis\' value=\'" + (barCour ? barCour.depuis : "") + "\' style=\'width:140px\'></div>"
+       + "<button class=\'btn btn-g btn-sm\' onclick=\'enregistrerBaremeLoyer()\'>Enregistrer</button>"
+       + "</div>";
+    if (gBaremeLoyer.length > 1) {
+      h += "<div style=\'margin-top:7px;font-size:.68rem;color:var(--muted)\'>Historique : ";
+      gBaremeLoyer.forEach(function(b2) {
+        h += "<span style=\'margin-right:9px\'>" + b2.montant + " " + b2.devise + " depuis " + _labelMois(b2.depuis)
+           + " <a onclick=\"supprimerBaremeLoyer(\'" + b2.depuis + "\')\" style=\'cursor:pointer;color:#c0392b\'>\u2715</a></span>";
+      });
+      h += "</div>";
+    }
+    h += "</div>";
+  }
+
   h += "<div style=\'overflow-x:auto;margin-top:8px\'><table class=\'cotis-table\' style=\'font-size:.74rem\'><thead><tr>"
-     + "<th>Mois de loyer</th><th style=\'text-align:right\'>Collect\u00e9</th><th>Contrib.</th>"
-     + "<th style=\'text-align:right\' title=\'Cotisations loyer collect\u00e9es aux cultes du cycle : du 2e dimanche au 1er dimanche suivant\'>Port\u00e9 en recette</th><th style=\'text-align:right\'>Pay\u00e9 au bailleur</th>"
-     + "<th style=\'text-align:right\'>\u00c9cart</th><th>\u00c9tat</th>"
+     + "<th>Mois de loyer</th><th style=\'text-align:right\'>D\u00fb</th><th style=\'text-align:right\'>Collect\u00e9</th><th>Contrib.</th>"
+     + "<th style=\'text-align:right\' title=\'Cotisations loyer collect\u00e9es aux cultes du cycle : du 2e dimanche au 1er dimanche suivant\'>Port\u00e9 en recette</th>"
+     + "<th style=\'text-align:right\'>Pay\u00e9 au bailleur</th>"
+     + "<th style=\'text-align:right\'>Reste d\u00fb</th><th>\u00c9tat</th>"
      + "</tr></thead><tbody>" + corps + "</tbody></table></div>";
 
   if (d.orphelines.length) {
@@ -18618,6 +18764,8 @@ function preloadAllModules(callback) {
   function done() { pending--; if(pending<=0 && callback) callback(); }
   // Membres
   loadDBFromFirebase(function(db){ DB = db; done(); });
+  // Bareme du loyer — necessaire au controle mois par mois
+  chargerBaremeLoyer(function(){});
   // Social
   loadSocDBFromFirebase(function(db){ SOCDB = db; done(); });
   // Projets
