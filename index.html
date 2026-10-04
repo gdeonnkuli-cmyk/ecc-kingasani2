@@ -5396,6 +5396,7 @@ function _saveToHistoryFinal(data, histId, wasExisting) {
   data.savedAt    = firebase.firestore.FieldValue.serverTimestamp();
   data.savedBy    = gCurrentUser ? gCurrentUser.nom : "";
   data.savedEmail = gCurrentUser ? gCurrentUser.email : "";
+  _histoirePerimee();
   var _pHist = gDb.collection("historique").doc(histId).set(data, {merge: false});
   _signalerAttenteReseau(_pHist, "Culte enregistré dans l'historique");
   _pHist
@@ -5454,7 +5455,11 @@ function updatePresence() {
     }
   });
 
-  gDb.collection("presence").onSnapshot(function(snap) {
+  // Borne : la presence est un etat ephemere d'appareils connectes, et seuls
+  // ceux vus dans les cinq dernieres minutes sont retenus plus bas. Sans limite,
+  // chaque appareil ayant un jour ouvert l'application coutait une lecture a
+  // chaque ouverture, pour etre ensuite ecarte par le filtre des 5 minutes.
+  gDb.collection("presence").limit(50).onSnapshot(function(snap) {
     var online = [];
     var cutoff = Date.now() - 5*60*1000; // Actif dans les 5 dernières minutes seulement
     snap.forEach(function(d) {
@@ -6223,6 +6228,16 @@ function validateAndSave() {
 // pour éviter que plusieurs requêtes concurrentes s'écrasent mutuellement
 // (garde anti-écrasement : ne remplace jamais un cache plus complet par un plus petit)
 var gHistLoading = false;
+// Le cache reflete-t-il la base ? Firestore facture UNE LECTURE PAR DOCUMENT :
+// relire l'historique entier coute autant de lectures qu'il y a de cultes, et
+// ce nombre grandit chaque dimanche sans jamais redescendre. Quatre endroits
+// du code le relisaient chacun de leur cote — tableau de bord, solde reporte,
+// recap social, liste de l'historique — soit quatre fois le meme prix a chaque
+// ouverture. Ils passent tous par _histoire() maintenant.
+var gHistCharge = false;
+// Chargement en vol : les appels concurrents attendent le meme resultat au lieu
+// de lancer chacun sa requete.
+var gHistFile = null;
 // D'où vient l'historique actuellement affiché — sert au message de liste vide.
 var gHistSource = {mode:"", read:0, sansSavedAt:0, erreur:""};
 
@@ -6249,10 +6264,33 @@ function _rendreHistorique(cb) {
   }
 }
 
+// Accès à l'historique. Sert le cache quand il est à jour, ne déclenche une
+// lecture que lorsqu'il ne l'est pas, et fait patienter les appels concurrents
+// derrière une seule requête. forcer=true pour une relecture explicite.
+function _histoire(cb, forcer) {
+  if (!forcer && gHistCharge && gHistCache && gHistCache.length) {
+    if (cb) { try { cb(gHistCache); } catch (e) { if (window.console) console.error(e); } }
+    return;
+  }
+  if (gHistFile) { if (cb) gHistFile.push(cb); return; }
+  gHistFile = cb ? [cb] : [];
+  _chargerHistoriqueComplet(function(h){
+    var file = gHistFile || []; gHistFile = null;
+    for (var i = 0; i < file.length; i++) {
+      try { file[i](h); } catch (e) { if (window.console) console.error(e); }
+    }
+  });
+}
+
+// Le cache ne vaut plus rien dès qu'un culte est écrit, modifié ou supprimé :
+// la prochaine demande relira la base.
+function _histoirePerimee() { gHistCharge = false; }
+
 function _chargerHistoriqueComplet(cb) {
   if(!IS_CONFIGURED || !gDb){
     gHistSource = {mode:"local", read:0, sansSavedAt:0, erreur:"Firebase non configuré"};
     if(!gHistCache || gHistCache.length===0) gHistCache = getHistLocal();
+    gHistCharge = true;
     if(cb) cb(gHistCache);
     return;
   }
@@ -6277,12 +6315,15 @@ function _chargerHistoriqueComplet(cb) {
       }).length, erreur:""};
       // Anti-écrasement : ne jamais remplacer un cache plus complet par un plus petit
       if(!gHistCache || hist.length >= gHistCache.length) gHistCache = hist;
+      gHistCharge = true;
       _rendreHistorique(cb);
     })
     .catch(function(e){
       gHistSource = {mode:"local", read:0, sansSavedAt:0, erreur:(e&&e.message)||"lecture refusée"};
       if(typeof showSyncError === "function") showSyncError(e, "lecture de l'historique");
       if(!gHistCache || gHistCache.length===0) gHistCache = getHistLocal();
+      // Un refus ne vaut pas un cache a jour : la prochaine demande reessaiera.
+      gHistCharge = false;
       _rendreHistorique(cb);
     });
 }
@@ -6591,6 +6632,7 @@ function delHist(id) {
   showModal("Supprimer cette entree ?","Action irreversible.",function(){
     var h = _findHistById(id);
     if(IS_CONFIGURED && id){
+      _histoirePerimee();
       gDb.collection("historique").doc(id).delete()
         .then(function(){renderHistory();closeModal();})
         .catch(function(e){showToast("Erreur: "+e.message,"err");});
@@ -6872,11 +6914,9 @@ function buildDashboard() {
     var cfclEl=document.getElementById("cfcl-bars");if(cfclEl){cfclEl.style.display="flex";cfclEl.innerHTML=cfclHtml;}
   }
 
-  if(IS_CONFIGURED && gDb){
-    gDb.collection("historique").get()
-      .then(function(snap){var h=[];snap.forEach(function(d){h.push(d.data());});compute(h);})
-      .catch(function(){compute(getHistLocal());});
-  } else { compute(getHistLocal()); }
+  // Le tableau de bord se contente du cache : il n'a aucune raison de relire
+  // l'historique entier a chaque affichage.
+  _histoire(function(h){ compute(h && h.length ? h : getHistLocal()); });
 }
 
 // == DISTRIBUTION ==
@@ -7349,20 +7389,11 @@ function autoFillSoldeReporte(callback) {
     if(callback) callback();
   }
 
-  if (IS_CONFIGURED && gDb) {
-    // Même angle mort : orderBy("savedAt").limit(1) rapportait le dernier culte
-    // AYANT un savedAt, pas le dernier culte tout court — d'où un solde reporté
-    // faux quand le culte le plus récent n'avait pas ce champ.
-    // applyLastSolde trie déjà sur meta.date : on lui passe l'ensemble.
-    gDb.collection("historique").get()
-      .then(function(snap){
-        var h=[];
-        snap.forEach(function(d){h.push(d.data());});
-        applyLastSolde(h);
-      }).catch(function(){ applyLastSolde(getHistLocal()); });
-  } else {
-    applyLastSolde(getHistLocal());
-  }
+  // Même angle mort qu'ailleurs : orderBy("savedAt").limit(1) rapportait le
+  // dernier culte AYANT un savedAt, pas le dernier culte tout court — d'où un
+  // solde reporté faux quand le culte le plus récent n'avait pas ce champ.
+  // applyLastSolde trie déjà sur meta.date : on lui passe l'ensemble du cache.
+  _histoire(function(h){ applyLastSolde(h && h.length ? h : getHistLocal()); });
 }
 
 // == ADMIN ==
@@ -8023,7 +8054,7 @@ function migrerAssistances() {
                 function(){ closeModal(); renderAdmin(); });
             } else {
               showToast(faits + " assistance(s) bascul\u00e9e(s). L'ancien tableau est conserv\u00e9 comme archive.", "ok");
-              if (typeof subscribeSoc === "function") subscribeSoc();
+              if (typeof subscribeSoc === "function") subscribeSoc(true);  // bascule faite : relecture voulue
               renderAdmin();
             }
           });
@@ -8455,6 +8486,7 @@ function _appliquerRecalculCotis(liste) {
     h.sums = { rCDF: rCDF, rUSD: rUSD, dCDF: dCDF, dUSD: dUSD, nCDF: rCDF - dCDF, nUSD: rUSD - dUSD };
 
     var maj = { cf: h.cf || [], cl: h.cl || [], sums: h.sums };
+    _histoirePerimee();
     gDb.collection("historique").doc(l.id).set(maj, { merge: true })
       .then(function(){ faits++; })
       .catch(function(){ echecs++; })
@@ -14420,8 +14452,12 @@ function _rafraichirSoc() {
   if (typeof renderDashboardSoc === "function") renderDashboardSoc();
 }
 
-function subscribeSoc() {
+function subscribeSoc(forcer) {
   if (!IS_CONFIGURED || !gDb) return;
+  // Se reabonner relit TOUTE la collection : une lecture facturee par
+  // assistance. On ne tronque pas ces donnees — ce serait en perdre — mais on
+  // ne paie pas deux fois le meme abonnement.
+  if (gUnsubSocColl && !forcer) return;
   if (gUnsubSoc) gUnsubSoc();
   if (gUnsubSocColl) gUnsubSocColl();
 
@@ -14604,15 +14640,7 @@ function loadSocFromAllHistory(callback) {
   }
 
   if (IS_CONFIGURED && gDb) {
-    gDb.collection("historique").get()
-      .then(function(snap) {
-        var records = [];
-        snap.forEach(function(d){ records.push(d.data()); });
-        processRecords(records);
-      })
-      .catch(function() {
-        processRecords(getHistLocal());
-      });
+    _histoire(function(h){ processRecords(h && h.length ? h : getHistLocal()); });
   } else {
     processRecords(getHistLocal());
   }
@@ -16360,8 +16388,11 @@ function loadEBFromFirebase(callback) {
 }
 
 var gUnsubEB = null;
-function subscribeEB() {
+function subscribeEB(forcer) {
   if(!IS_CONFIGURED || !gDb) return;
+  // Meme raison que pour les assistances : un reabonnement relit toute la
+  // collection des expressions de besoin.
+  if (gUnsubEB && !forcer) return;
   if(gUnsubEB) gUnsubEB();
   var ready = false;
   gUnsubEB = gDb.collection("eb_demandes")
