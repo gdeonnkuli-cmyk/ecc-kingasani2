@@ -2528,6 +2528,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
           <input type="text" id="pay-note" placeholder="Optionnel">
         </div>
       </div>
+      <div id="cotis-grille-membre"></div>
     </div>
     <div class="abar">
       <button class="btn btn-g" onclick="enregistrerPaiement()">Enregistrer le paiement</button>
@@ -12860,10 +12861,7 @@ function selectMembreCot(id, label) {
   // Se placer sur le mois le plus ancien encore du, montant compris.
   _placerSurMoisDu(id);
 
-  // showGrilleMembre() n'existe nulle part dans le fichier : l'appel levait une
-  // ReferenceError a CHAQUE selection de membre, et tout ce qui suivait dans
-  // cette fonction etait donc mort. Garde en place au cas ou la grille par
-  // membre serait ecrite un jour, mais elle ne casse plus la selection.
+  // La grille de situation du membre, sous le formulaire.
   if (typeof showGrilleMembre === "function") showGrilleMembre(id);
 }
 
@@ -12874,6 +12872,8 @@ function clearMembreCot() {
   if(hidden) hidden.value = "";
   if(searchInput) { searchInput.value = ""; searchInput.focus(); }
   if(selected) selected.style.display = "none";
+  var g = document.getElementById("cotis-grille-membre");
+  if (g) g.innerHTML = "";
 }
 
 // Listener délégué unique pour la sélection d'un membre (fiable sur mobile et desktop)
@@ -12968,6 +12968,7 @@ function enregistrerPaiement() {
   syncCotisToRecettes();
   // Enchainer : le formulaire se place sur le mois du suivant, de sorte qu'un
   // membre qui regle plusieurs mois d'affilee se saisisse sans rien rechoisir.
+  if (typeof showGrilleMembre === "function") showGrilleMembre(membreId);
   var _suite = _placerSurMoisDu(membreId, true);
   showToast(_suite
     ? ("Paiement enregistre. Mois suivant a regler : " + moisLabel(_suite.mois) + " " + _suite.annee + ".")
@@ -13174,12 +13175,110 @@ function renderArrieres() {
   document.getElementById("arr-body").innerHTML=html||"<tr><td colspan='7' style='text-align:center;padding:18px;color:var(--muted)'>Aucun arriere pour "+annee+" !</td></tr>";
 }
 
+// Les deux entrees rapides posaient l'identifiant dans le champ cache sans
+// afficher le nom retenu : on ne voyait pas QUI etait selectionne. Elles
+// passent desormais par selectMembreCot, qui affiche le nom, place le mois du
+// et ouvre la grille de situation.
 function quickPay(membreId) {
-  // Switch to cotisations tab and pre-select member
   showTabM("cotisations");
-  var pm=document.getElementById("pay-membre");
-  if(pm) pm.value=membreId;
-  _placerSurMoisDu(membreId);
+  var m = findMembre(membreId);
+  selectMembreCot(membreId, m ? (m.prenom + " " + m.nom) : membreId);
+}
+
+// == GRILLE D'UN SEUL MEMBRE ==
+// Appelee a la selection d'un membre dans le formulaire de paiement. Elle
+// repond a la question qu'on se pose a ce moment-la, et a aucune autre : ou en
+// est CE membre, annee par annee, et quel mois reste a regler.
+//
+// Les mois dus viennent de _moisDusListe(), la meme source que le mois propose
+// par le formulaire : la case rouge et le mois propose designent donc toujours
+// le meme mois. Une case rouge se clique pour aller droit a ce mois-la.
+function _celluleGrilleM(bg, couleur, symbole, titre, mid, cle, an) {
+  var cliquable = !!mid;
+  return "<td style='text-align:center;background:" + bg + ";color:" + couleur
+       + ";font-weight:700;border:1px solid #fff;padding:4px 2px;cursor:"
+       + (cliquable ? "pointer" : "default") + "'"
+       + (cliquable ? " data-mid='" + mid + "' data-mois='" + cle + "' data-annee='" + an
+                      + "' onclick='quickPayFromGrid(this)'" : "")
+       + " title='" + titre + "'>" + symbole + "</td>";
+}
+
+function showGrilleMembre(membreId) {
+  var zone = document.getElementById("cotis-grille-membre");
+  if (!zone) return;
+  var m = (typeof findMembre === "function") ? findMembre(membreId) : null;
+  if (!m) { zone.innerHTML = ""; return; }
+
+  var fin = currentYear(), an, lignes = "", totDus = 0, totRegles = 0, totRetard = 0;
+
+  for (an = 2026; an <= fin; an++) {
+    var dus = _moisDusListe(m, String(an));
+    var specShow = getSpecApplicable(m, String(an));
+    if (!dus.length && !specShow) continue;
+
+    var estDu = {}, i;
+    for (i = 0; i < dus.length; i++) estDu[dus[i]] = true;
+    var map = getMemberCotisations(m.id, String(an));
+    var specDu = getSpecDue(m, String(an));
+    var cells = "", regles = 0, dusAn = dus.length + specDu;
+
+    for (var mo = 1; mo <= 12; mo++) {
+      var cle = (mo < 10 ? "0" : "") + mo;
+      var paye = map[an + "_" + cle] != null;
+      var lib = MOIS_LABELS[mo] + " " + an;
+      if (paye) { regles++; cells += _celluleGrilleM("#27ae60", "#fff", "\u2713", lib + " \u2014 r\u00e9gl\u00e9", null); }
+      else if (estDu[mo]) { totRetard++; cells += _celluleGrilleM("#e74c3c", "#fff", "\u2717", lib + " \u2014 d\u00fb, cliquer pour r\u00e9gler", m.id, cle, String(an)); }
+      else cells += _celluleGrilleM("#f5f5f5", "#ccc", "\u2013", lib + " \u2014 pas encore d\u00fb", null);
+    }
+
+    for (var sp = 0; sp < COTIS_SPECIALES.length; sp++) {
+      var k = COTIS_SPECIALES[sp].key, l = COTIS_SPECIALES[sp].label + " " + an;
+      var payeS = map[an + "_" + k] != null;
+      if (payeS) { regles++; cells += _celluleGrilleM("#27ae60", "#fff", "\u2713", l + " \u2014 r\u00e9gl\u00e9", null); }
+      else if (specDu > 0) cells += _celluleGrilleM("#c0392b", "#fff", "\u2717", l + " \u2014 d\u00fb, cliquer pour r\u00e9gler", m.id, k, String(an));
+      else if (specShow > 0) cells += _celluleGrilleM("#ede9fe", "#8e44ad", "\u2022", l + " \u2014 payable, exigible au 31 d\u00e9cembre", m.id, k, String(an));
+      else cells += _celluleGrilleM("#f5f5f5", "#ccc", "\u2013", l + " \u2014 non applicable", null);
+    }
+
+    totDus += dusAn; totRegles += regles;
+    lignes += "<tr><td style='padding:4px 9px;background:var(--pale);font-weight:700;font-family:DM Mono,monospace;border-bottom:1px solid var(--border)'>"
+            + an + "</td>" + cells
+            + "<td style='text-align:center;font-family:DM Mono,monospace;font-weight:700;background:var(--pale);border-bottom:1px solid var(--border);padding:4px 7px'>"
+            + regles + "/" + dusAn + "</td></tr>";
+  }
+
+  if (!lignes) {
+    zone.innerHTML = "<div style='margin-top:10px;padding:10px 13px;background:var(--pale);border-radius:8px;font-size:.75rem;color:var(--muted)'>"
+      + "Aucune cotisation n'est encore due pour ce membre. Le syst\u00e8me ne compte rien avant 2026, "
+      + "ni avant le mois d'adh\u00e9sion.</div>";
+    return;
+  }
+
+  var tete = "<tr><th style='padding:4px 9px;background:var(--navy);color:#fff;text-align:left'>Ann\u00e9e</th>";
+  for (var t = 1; t <= 12; t++) tete += "<th style='padding:4px 2px;background:var(--navy);color:#fff;text-align:center;min-width:30px'>" + MOIS_LABELS[t] + "</th>";
+  for (var ts = 0; ts < COTIS_SPECIALES.length; ts++) tete += "<th style='padding:4px 2px;background:#8e44ad;color:#fff;text-align:center;min-width:34px' title='" + COTIS_SPECIALES[ts].label + "'>" + COTIS_SPECIALES[ts].short + "</th>";
+  tete += "<th style='padding:4px 7px;background:var(--navy);color:#fff;text-align:center'>R\u00e9gl\u00e9s</th></tr>";
+
+  var prochain = _premierMoisDu(m.id);
+  var resume = totRetard
+    ? ("<strong>" + totRetard + " mois en retard</strong> \u00b7 prochain \u00e0 r\u00e9gler : <strong>"
+       + (prochain ? moisLabel(prochain.mois) + " " + prochain.annee : "\u2014") + "</strong>")
+    : "<strong>\u00c0 jour de ses mois.</strong>";
+
+  zone.innerHTML =
+      "<div style='margin-top:12px'>"
+    + "<div style='font-size:.72rem;font-weight:700;color:var(--navy);margin-bottom:5px'>Situation de "
+    + escH(m.prenom + " " + m.nom) + (m.numero ? " \u00b7 n\u00b0 " + escH(m.numero) : "") + "</div>"
+    + "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:.7rem'><thead>"
+    + tete + "</thead><tbody>" + lignes + "</tbody></table></div>"
+    + "<div style='display:flex;gap:13px;flex-wrap:wrap;margin-top:6px;font-size:.68rem;color:var(--muted);align-items:center'>"
+    + "<span><span style='display:inline-block;width:9px;height:9px;border-radius:2px;background:#27ae60'></span> r\u00e9gl\u00e9</span>"
+    + "<span><span style='display:inline-block;width:9px;height:9px;border-radius:2px;background:#e74c3c'></span> d\u00fb \u2014 cliquer pour r\u00e9gler</span>"
+    + "<span><span style='display:inline-block;width:9px;height:9px;border-radius:2px;background:#ede9fe;border:1px solid #8e44ad'></span> annuelle, exigible au 31 d\u00e9cembre</span>"
+    + "<span><span style='display:inline-block;width:9px;height:9px;border-radius:2px;background:#f5f5f5;border:1px solid #ddd'></span> pas encore d\u00fb</span>"
+    + "</div>"
+    + "<div style='margin-top:6px;font-size:.73rem;color:var(--navy)'>" + totRegles + " r\u00e9gl\u00e9(s) sur " + totDus + " d\u00fb(s) \u00b7 " + resume + "</div>"
+    + "</div>";
 }
 
 // == GRILLE ANNUELLE ==
@@ -13207,14 +13306,19 @@ function renderGrid() {
     var m=actifs[mi];
     var cotisMap2=getMemberCotisations(m.id,annee);
     var paidCount=0;
-    var due2=getMonthsDue(m,String(annee));
+    // Le comptage ne suffit pas : pour un membre adherent en cours d'annee, les
+    // mois dus ne commencent pas en janvier. Comparer a un NOMBRE peignait donc
+    // en rouge des mois anterieurs a son adhesion. On teste l'appartenance.
+    var dusListe2=_moisDusListe(m,String(annee)), estDu2={};
+    for (var _d=0;_d<dusListe2.length;_d++) estDu2[dusListe2[_d]]=true;
+    var due2=dusListe2.length;
     html+="<tr>";
     html+="<td style='padding:5px 10px;background:var(--pale);font-weight:600;white-space:nowrap;position:sticky;left:0;border-bottom:1px solid var(--border)'>"+escH(m.prenom+" "+m.nom.charAt(0)+".").substring(0,20)+"</td>";
     for (var mo2=1;mo2<=12;mo2++) {
       var moStr2=mo2<10?"0"+mo2:String(mo2);
       var key2=annee+"_"+moStr2;
       var isPaid=cotisMap2[key2]!=null;
-      var isDue2=mo2<=due2;
+      var isDue2=estDu2[mo2]===true;
       if(isPaid) paidCount++;
       var bg=isPaid?"#27ae60":(isDue2?"#e74c3c":"#f5f5f5");
       var fc=isPaid||isDue2?"#fff":"#ccc";
@@ -13272,10 +13376,23 @@ function renderGrid() {
 
 function quickPayMonth(membreId, mois, annee) {
   showTabM("cotisations");
-  var pm=document.getElementById("pay-membre"); if(pm) pm.value=membreId;
+  var m = findMembre(membreId);
+  selectMembreCot(membreId, m ? (m.prenom + " " + m.nom) : membreId);
+  // On a clique une case precise : elle l'emporte sur le mois du propose.
+  var pm3=document.getElementById("pay-annee");
+  if(pm3){
+    pm3.value=annee;
+    if(pm3.value!==String(annee)){
+      var opt=document.createElement("option");
+      opt.value=String(annee); opt.textContent=String(annee);
+      pm3.appendChild(opt); pm3.value=String(annee);
+    }
+  }
   var pm2=document.getElementById("pay-mois"); if(pm2) pm2.value=mois;
-  var pm3=document.getElementById("pay-annee"); if(pm3) pm3.value=annee;
-  showToast("Membre et mois pre-selectionnes. Confirmez le paiement.","ok");
+  // Le montant depend du mois ET de l'annee : sans cela, cliquer une case
+  // laissait le montant du mois precedemment affiche.
+  if (typeof onPayMoisChange === "function") onPayMoisChange();
+  showToast("Mois pre-selectionne : " + moisLabel(mois) + " " + annee + ". Confirmez le paiement.","ok");
 }
 
 function quickPayFromGrid(td) {
