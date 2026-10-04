@@ -2147,6 +2147,10 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
         <div class="fg"><label>Reporte CDF</label><input type="number" id="rep-cdf" placeholder="0" onchange="dirty();recalc()"></div>
         <div class="fg"><label>Reporte USD</label><input type="number" id="rep-usd" placeholder="0" onchange="dirty();recalc()"></div>
       </div>
+      <div style="margin-top:7px">
+        <button class="btn btn-o btn-sm" onclick="reporterSoldePrecedent()"
+                title="Recopie le solde laisse par le culte precedent">↩ Reporter le solde du culte precedent</button>
+      </div>
       <div class="sgrid" style="margin-top:10px">
         <div class="sc neu" id="sc-fin"><div class="sc-lbl">Solde Final</div><div class="sc-cdf" id="s-fin-cdf">0 CDF</div><div class="sc-usd" id="s-fin-usd">0 USD</div><div class="sc-eq" id="s-fin-eq"></div></div>
         <div class="sc neu" id="sc-eq"><div class="sc-lbl">Equivalent unifie</div><div class="sc-cdf" id="s-eq-cdf">-</div><div class="sc-usd" id="s-eq-usd">-</div><div class="sc-eq">Au taux saisi</div></div>
@@ -5965,6 +5969,41 @@ function _culteAvant(dateStr) {
   return best;
 }
 
+// Solde que le culte precedent a laisse en caisse : son propre report plus son
+// nouveau solde. C'est ce que la case « Reporte » du culte suivant devrait
+// contenir. Renvoie null s'il n'y a pas de culte anterieur dans l'historique.
+function _reportAttendu(dateStr) {
+  if (!dateStr || !gHistCache || !gHistCache.length) return null;
+  var prev = _culteAvant(dateStr);
+  if (!prev) return null;
+  var m = prev.meta || {}, sm = prev.sums || {};
+  return {
+    cdf:  (parseFloat(m.repCDF) || 0) + (sm.nCDF || 0),
+    usd:  (parseFloat(m.repUSD) || 0) + (sm.nUSD || 0),
+    date: m.date || "?"
+  };
+}
+
+// Recopie ce solde dans les cases « Reporte ». Appele par le bouton place
+// sous ces cases : le report n'etait jusqu'ici rempli automatiquement qu'a la
+// creation d'un formulaire neuf, jamais sur un brouillon repris ni apres un
+// changement de date.
+function reporterSoldePrecedent() {
+  var d = (document.getElementById("meta-date") || {}).value || "";
+  if (!d) { showToast("Renseignez d'abord la date du culte.", "warn"); return; }
+  var a = _reportAttendu(d);
+  if (!a) {
+    showToast("Aucun culte anterieur au " + d + " dans l'historique : rien a reporter.", "warn");
+    return;
+  }
+  var eC = document.getElementById("rep-cdf"), eU = document.getElementById("rep-usd");
+  if (eC) eC.value = a.cdf;
+  if (eU) eU.value = a.usd;
+  dirty(); recalc();
+  showToast("Reporte : " + fmt(a.cdf) + " CDF / " + fmt(a.usd) + " USD, solde du culte du "
+            + a.date + ".", "ok");
+}
+
 function runValidation() {
   var errors=[],warnings=[],successes=[];
   var date=document.getElementById("meta-date").value;
@@ -6001,9 +6040,30 @@ function runValidation() {
   // plus que le disponible, soit solde reporté + recettes.
   var repCDF = parseFloat((document.getElementById("rep-cdf")||{}).value) || 0;
   var repUSD = parseFloat((document.getElementById("rep-usd")||{}).value) || 0;
-  var repEq  = repCDF + repUSD * t;
+
+  // Une case « Reporte » laissee vide n'est pas un report nul : le solde du
+  // culte precedent est en caisse, qu'on l'ait recopie ou non dans le
+  // formulaire. Le compter pour zero faisait apparaitre un decouvert qui
+  // n'existait pas, et bloquait l'enregistrement d'une journee parfaitement
+  // financee. On supplee donc le report connu de l'historique -- mais pour le
+  // seul controle de tresorerie : la piece enregistree garde ce qui est saisi,
+  // et l'ecart continue d'etre signale plus bas.
+  var _attRep = _reportAttendu(date);
+  var repCDFeff = (repCDF === 0 && _attRep && _attRep.cdf > 0) ? _attRep.cdf : repCDF;
+  var repUSDeff = (repUSD === 0 && _attRep && _attRep.usd > 0) ? _attRep.usd : repUSD;
+  var _repSupplee = (repCDFeff !== repCDF) || (repUSDeff !== repUSD);
+
+  var repEq  = repCDFeff + repUSDeff * t;
   var dispo  = repEq + rTotal;
   var nouveauSolde = dispo - dTotal;
+
+  if (_repSupplee && dTotal > rTotal) {
+    warnings.push("Solde reporte non saisi : le controle de tresorerie a retenu "
+      + fmt(repCDFeff) + " CDF"
+      + (repUSDeff ? " et " + fmt(repUSDeff) + " USD" : "")
+      + ", solde laisse par le culte du " + _attRep.date
+      + ". Recopiez-le dans la case Reporte (bouton sous les cases) pour que la piece soit juste.");
+  }
 
   if (nouveauSolde < 0) {
     errors.push("Décaissement supérieur au disponible : " + fmt(dTotal)
@@ -6074,19 +6134,18 @@ function runValidation() {
   // Le report saisi doit valoir le nouveau solde du culte précédent.
   // Avertissement, jamais blocage : un mouvement hors culte peut expliquer l'écart.
   if (date && gHistCache && gHistCache.length) {
-    var prev = _culteAvant(date);
-    if (prev) {
-      var attCDF = (parseFloat(prev.meta && prev.meta.repCDF) || 0) + ((prev.sums && prev.sums.nCDF) || 0);
-      var attUSD = (parseFloat(prev.meta && prev.meta.repUSD) || 0) + ((prev.sums && prev.sums.nUSD) || 0);
+    // Même calcul que le contrôle de trésorerie ci-dessus : _reportAttendu().
+    var attendu = _attRep;
+    if (attendu) {
       // Le report est arrondi à 50 FC près par l'application : tolérance identique.
-      if (Math.abs(repCDF - attCDF) > 50) {
-        warnings.push("Solde reporté CDF : " + fmt(repCDF) + " saisi, " + fmt(attCDF)
-          + " attendu d'après le culte du " + (prev.meta.date || "?")
-          + " (écart " + fmt(repCDF - attCDF) + " CDF).");
+      if (Math.abs(repCDF - attendu.cdf) > 50) {
+        warnings.push("Solde reporté CDF : " + fmt(repCDF) + " saisi, " + fmt(attendu.cdf)
+          + " attendu d'après le culte du " + attendu.date
+          + " (écart " + fmt(repCDF - attendu.cdf) + " CDF).");
       }
-      if (Math.abs(repUSD - attUSD) > 0.01) {
-        warnings.push("Solde reporté USD : " + fmt(repUSD) + " saisi, " + fmt(attUSD)
-          + " attendu (écart " + fmt(repUSD - attUSD) + " USD).");
+      if (Math.abs(repUSD - attendu.usd) > 0.01) {
+        warnings.push("Solde reporté USD : " + fmt(repUSD) + " saisi, " + fmt(attendu.usd)
+          + " attendu (écart " + fmt(repUSD - attendu.usd) + " USD).");
       }
     }
     // ── Doublon de date ─────────────────────────────────────────────────────
