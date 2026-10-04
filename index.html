@@ -7812,7 +7812,9 @@ function inscrireRoles() {
 //
 // Trois sources, toutes deja en memoire — aucune lecture Firestore de plus :
 //   - LOYDB.versements : ce que les contributeurs ont verse, par mois couvert
-//   - les cultes (base 7) : ce qui a ete porte en recette, par mois
+//   - les cultes (base 7) : ce qui a ete porte en recette, par CYCLE de
+//     liberation — du 2e dimanche d'un mois au 1er dimanche du suivant, comme
+//     les dimes, et non par mois calendaire
 //   - LOYDB.depenses    : ce qui a ete paye au bailleur, par periode couverte
 //
 // Le montant du loyer n'est pas encore parametre : le controle ne dit donc pas
@@ -7849,7 +7851,18 @@ function _controleLoyerDonnees() {
         if (mt > 0) tot += mt;
       });
     });
-    if (tot > 0) ligne(d.substring(0, 7)).b7 += tot;
+    // La cotisation loyer collectee au culte suit le MEME cycle que les dimes :
+    // du 2e dimanche d'un mois au 1er dimanche du mois suivant, qui est le jour
+    // de la liberation. Le culte du 04/10 appartient donc a la collecte de
+    // septembre, pas a celle d'octobre. Regrouper sur le mois calendaire
+    // decalait la colonne « porte en recette » d'un mois entier par rapport aux
+    // versements, et faisait apparaitre des ecarts qui n'existaient pas.
+    if (tot > 0) {
+      var cy = (typeof cycleDimesDe === "function") ? cycleDimesDe(d) : null;
+      var ymC = cy ? (cy.annee + "-" + ((cy.mois + 1) < 10 ? "0" : "") + (cy.mois + 1))
+                   : d.substring(0, 7);
+      ligne(ymC).b7 += tot;
+    }
   });
 
   ((typeof LOYDB !== "undefined" && LOYDB.depenses) || []).forEach(function(d) {
@@ -7923,11 +7936,13 @@ function _carteControleLoyer() {
      + (alerte.length ? alerte.join(" \u00b7 ") : "Tous les mois sont r\u00e9gl\u00e9s")
      + "</strong></div><div class=\'cp-l\'>Le montant du loyer n\u2019\u00e9tant pas encore param\u00e9tr\u00e9, ce contr\u00f4le "
      + "ne dit pas s\u2019il manque de l\u2019argent : il dit quels mois n\u2019ont jamais \u00e9t\u00e9 pay\u00e9s, "
-     + "lesquels l\u2019ont \u00e9t\u00e9 en retard, et o\u00f9 la collecte n\u2019a pas \u00e9t\u00e9 port\u00e9e en recette.</div></div>";
+     + "lesquels l\u2019ont \u00e9t\u00e9 en retard, et o\u00f9 la collecte n\u2019a pas \u00e9t\u00e9 port\u00e9e en recette. "
+     + "La colonne port\u00e9e en recette suit le <strong>cycle de lib\u00e9ration</strong> \u2014 du 2e dimanche d\u2019un mois "
+     + "au 1er dimanche du suivant \u2014 comme les d\u00eemes.</div></div>";
 
   h += "<div style=\'overflow-x:auto;margin-top:8px\'><table class=\'cotis-table\' style=\'font-size:.74rem\'><thead><tr>"
      + "<th>Mois de loyer</th><th style=\'text-align:right\'>Collect\u00e9</th><th>Contrib.</th>"
-     + "<th style=\'text-align:right\'>Port\u00e9 en recette</th><th style=\'text-align:right\'>Pay\u00e9 au bailleur</th>"
+     + "<th style=\'text-align:right\' title=\'Cotisations loyer collect\u00e9es aux cultes du cycle : du 2e dimanche au 1er dimanche suivant\'>Port\u00e9 en recette</th><th style=\'text-align:right\'>Pay\u00e9 au bailleur</th>"
      + "<th style=\'text-align:right\'>\u00c9cart</th><th>\u00c9tat</th>"
      + "</tr></thead><tbody>" + corps + "</tbody></table></div>";
 
