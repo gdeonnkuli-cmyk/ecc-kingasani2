@@ -3998,7 +3998,8 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
       <div class="fg"><label>Montant (FC)</label><input type="number" id="loydep-cdf" placeholder="0" min="0"></div>
       <div class="fg"><label>Montant (USD)</label><input type="number" id="loydep-usd" placeholder="0" min="0" step="0.01"></div>
       <div class="fg"><label>Date</label><input type="date" id="loydep-date"></div>
-      <div class="fg"><label>Période couverte</label><input type="text" id="loydep-periode" placeholder="Ex: Janvier 2026"></div>
+      <div class="fg"><label>Période couverte *</label><select id="loydep-periode"></select>
+        <div style="font-size:.64rem;color:var(--muted);margin-top:3px;line-height:1.4">Le mois de loyer que ce paiement règle. C'est lui qui permet de dire si un mois est réglé ou non.</div></div>
       <div class="fg" style="grid-column:1/-1"><label>Note</label><input type="text" id="loydep-note" placeholder="Optionnel"></div>
     </div>
     <div class="modal-acts">
@@ -7803,6 +7804,161 @@ function inscrireRoles() {
 // source de lecture si la collection est vidée. La bascule peut donc être
 // relancée, et elle est sans effet si elle a déjà eu lieu.
 // ══ BASCULE DES MEMBRES ET COTISATIONS ═════════════════════════════════════
+
+// ══ CONTROLE DU LOYER ══════════════════════════════════════════════════════
+// recalcLoy() ne donnait qu'un cumul annuel : collecte totale moins depenses
+// totales. Un mois pouvait rester impaye sans que rien ne le signale, tant que
+// le cumul de l'annee restait positif. Ce controle raisonne mois par mois.
+//
+// Trois sources, toutes deja en memoire — aucune lecture Firestore de plus :
+//   - LOYDB.versements : ce que les contributeurs ont verse, par mois couvert
+//   - les cultes (base 7) : ce qui a ete porte en recette, par CYCLE de
+//     liberation — du 2e dimanche d'un mois au 1er dimanche du suivant, comme
+//     les dimes, et non par mois calendaire
+//   - LOYDB.depenses    : ce qui a ete paye au bailleur, par periode couverte
+//
+// Le montant du loyer n'est pas encore parametre : le controle ne dit donc pas
+// « il manque X », il dit « ce mois n'a jamais ete paye », « la collecte n'a
+// jamais ete portee en recette », « le reglement est intervenu apres le 10 ».
+function _controleLoyerDonnees() {
+  var parMois = {}, orphelines = [];
+  function ligne(ym) {
+    if (!parMois[ym]) parMois[ym] = { ym: ym, collecte: 0, collecteUSD: 0, nbContrib: 0,
+                                      b7: 0, paye: 0, payeUSD: 0, dates: [] };
+    return parMois[ym];
+  }
+
+  ((typeof LOYDB !== "undefined" && LOYDB.versements) || []).forEach(function(v) {
+    if (!v) return;
+    var ym = String(v.annee || "") + "-" + String(v.mois || "");
+    if (!/^[0-9]{4}-[0-9]{2}$/.test(ym)) return;
+    var e = ligne(ym);
+    e.collecte += parseFloat(v.cdf) || 0;
+    e.collecteUSD += parseFloat(v.usd) || 0;
+    e.nbContrib++;
+  });
+
+  (gHistCache || []).forEach(function(h) {
+    var d = (h && h.meta && h.meta.date) || "";
+    if (!d) return;
+    var taux = parseFloat(h.meta && h.meta.taux) || getTaux(), tot = 0;
+    ["cf", "cl"].forEach(function(k) {
+      (h[k] || []).forEach(function(r) {
+        if (!r) return;
+        var lbl = r.l || r.lib || "", note = r.note || r.n || "";
+        if (typeof _etatBaseLigne !== "function" || _etatBaseLigne(lbl, note) !== "b7") return;
+        var mt = arrondi((parseFloat(r.cdf) || 0) + (parseFloat(r.usd) || 0) * taux);
+        if (mt > 0) tot += mt;
+      });
+    });
+    // La cotisation loyer collectee au culte suit le MEME cycle que les dimes :
+    // du 2e dimanche d'un mois au 1er dimanche du mois suivant, qui est le jour
+    // de la liberation. Le culte du 04/10 appartient donc a la collecte de
+    // septembre, pas a celle d'octobre. Regrouper sur le mois calendaire
+    // decalait la colonne « porte en recette » d'un mois entier par rapport aux
+    // versements, et faisait apparaitre des ecarts qui n'existaient pas.
+    if (tot > 0) {
+      var cy = (typeof cycleDimesDe === "function") ? cycleDimesDe(d) : null;
+      var ymC = cy ? (cy.annee + "-" + ((cy.mois + 1) < 10 ? "0" : "") + (cy.mois + 1))
+                   : d.substring(0, 7);
+      ligne(ymC).b7 += tot;
+    }
+  });
+
+  ((typeof LOYDB !== "undefined" && LOYDB.depenses) || []).forEach(function(d) {
+    if (!d) return;
+    var ym = _moisDepuisTexte(d.periode);
+    if (!ym) { orphelines.push(d); return; }
+    var e = ligne(ym);
+    e.paye += parseFloat(d.cdf) || 0;
+    e.payeUSD += parseFloat(d.usd) || 0;
+    if (d.date) e.dates.push(d.date);
+  });
+
+  var out = [];
+  for (var k in parMois) out.push(parMois[k]);
+  out.sort(function(a, b) { return b.ym.localeCompare(a.ym); });
+  return { mois: out, orphelines: orphelines };
+}
+
+// Echeance : le loyer d'un mois se regle avant le 10 du mois suivant.
+function _loyerEnRetard(e) {
+  if (!e.dates.length) return false;
+  var premier = e.dates.slice().sort()[0];
+  return premier > _ymDecale(e.ym, 1) + "-10";
+}
+
+function _carteControleLoyer() {
+  var h = "<div class=\'sec-lbl\' style=\'margin-top:16px\'>\u{1F3E0} Contr\u00f4le du loyer</div>";
+  var d = _controleLoyerDonnees();
+
+  if (!d.mois.length) {
+    return h + "<div class=\'ctrl-piece ok\'><div class=\'cp-tete\'><strong>Rien \u00e0 contr\u00f4ler</strong></div>"
+      + "<div class=\'cp-l\'>Aucun versement ni paiement de loyer enregistr\u00e9.</div></div>";
+  }
+
+  var nonRegles = 0, retards = 0, nonPortes = 0;
+  var corps = "";
+  d.mois.forEach(function(e) {
+    var ecartRecette = e.collecte - e.b7;
+    var retard = _loyerEnRetard(e);
+    var etat, cls;
+    if (e.paye <= 0 && e.payeUSD <= 0) {
+      if (e.collecte > 0 || e.collecteUSD > 0) { etat = "\u{1F534} Non r\u00e9gl\u00e9"; cls = "ko"; nonRegles++; }
+      else { etat = "\u2014"; cls = ""; }
+    } else if (retard) {
+      etat = "\u26a0\ufe0f R\u00e9gl\u00e9 apr\u00e8s le 10"; cls = "warn"; retards++;
+    } else if (e.collecte <= 0 && e.collecteUSD <= 0) {
+      etat = "\u26a0\ufe0f Pay\u00e9 sans collecte identifi\u00e9e"; cls = "warn";
+    } else {
+      etat = "\u2705 R\u00e9gl\u00e9"; cls = "ok";
+    }
+    if (Math.abs(ecartRecette) > 1 && (e.collecte > 0)) nonPortes++;
+
+    corps += "<tr>"
+      + "<td style=\'padding:5px 8px;font-weight:600;white-space:nowrap\'>" + escH(_labelMois(e.ym)) + "</td>"
+      + "<td style=\'text-align:right;font-family:DM Mono,monospace\'>" + fmt(e.collecte) + (e.collecteUSD ? " + " + fmt(e.collecteUSD) + " $" : "") + "</td>"
+      + "<td style=\'text-align:center;font-size:.7rem;color:var(--muted)\'>" + (e.nbContrib || "\u2014") + "</td>"
+      + "<td style=\'text-align:right;font-family:DM Mono,monospace\'>" + fmt(e.b7) + "</td>"
+      + "<td style=\'text-align:right;font-family:DM Mono,monospace\'>" + fmt(e.paye) + (e.payeUSD ? " + " + fmt(e.payeUSD) + " $" : "") + "</td>"
+      + "<td style=\'text-align:right;font-family:DM Mono,monospace;font-weight:700;color:" + ((e.collecte - e.paye) < 0 ? "#c0392b" : "#1e7d52") + "\'>" + fmt(e.collecte - e.paye) + "</td>"
+      + "<td style=\'white-space:nowrap;font-size:.72rem\'>" + etat + "</td>"
+      + "</tr>";
+  });
+
+  var alerte = [];
+  if (nonRegles) alerte.push("<strong>" + nonRegles + " mois non r\u00e9gl\u00e9(s)</strong>");
+  if (retards) alerte.push(retards + " r\u00e9glement(s) apr\u00e8s le 10");
+  if (nonPortes) alerte.push(nonPortes + " mois dont la collecte n\u2019est pas port\u00e9e en recette");
+  if (d.orphelines.length) alerte.push(d.orphelines.length + " d\u00e9pense(s) sans mois exploitable");
+
+  h += "<div class=\'ctrl-piece " + (alerte.length ? "ko" : "ok") + "\'><div class=\'cp-tete\'><strong>"
+     + (alerte.length ? alerte.join(" \u00b7 ") : "Tous les mois sont r\u00e9gl\u00e9s")
+     + "</strong></div><div class=\'cp-l\'>Le montant du loyer n\u2019\u00e9tant pas encore param\u00e9tr\u00e9, ce contr\u00f4le "
+     + "ne dit pas s\u2019il manque de l\u2019argent : il dit quels mois n\u2019ont jamais \u00e9t\u00e9 pay\u00e9s, "
+     + "lesquels l\u2019ont \u00e9t\u00e9 en retard, et o\u00f9 la collecte n\u2019a pas \u00e9t\u00e9 port\u00e9e en recette. "
+     + "La colonne port\u00e9e en recette suit le <strong>cycle de lib\u00e9ration</strong> \u2014 du 2e dimanche d\u2019un mois "
+     + "au 1er dimanche du suivant \u2014 comme les d\u00eemes.</div></div>";
+
+  h += "<div style=\'overflow-x:auto;margin-top:8px\'><table class=\'cotis-table\' style=\'font-size:.74rem\'><thead><tr>"
+     + "<th>Mois de loyer</th><th style=\'text-align:right\'>Collect\u00e9</th><th>Contrib.</th>"
+     + "<th style=\'text-align:right\' title=\'Cotisations loyer collect\u00e9es aux cultes du cycle : du 2e dimanche au 1er dimanche suivant\'>Port\u00e9 en recette</th><th style=\'text-align:right\'>Pay\u00e9 au bailleur</th>"
+     + "<th style=\'text-align:right\'>\u00c9cart</th><th>\u00c9tat</th>"
+     + "</tr></thead><tbody>" + corps + "</tbody></table></div>";
+
+  if (d.orphelines.length) {
+    h += "<div class=\'ctrl-piece warn\' style=\'margin-top:8px\'><div class=\'cp-tete\'><strong>"
+       + d.orphelines.length + " d\u00e9pense(s) dont la p\u00e9riode n\u2019est pas exploitable</strong></div><div class=\'cp-l cp-w\'>";
+    d.orphelines.forEach(function(o) {
+      h += escH(o.benef || "?") + " \u00b7 " + fmt(parseFloat(o.cdf) || 0) + " FC \u00b7 "
+         + escH(o.date || "?") + " \u00b7 p\u00e9riode \u00ab\u00a0" + escH(o.periode || "vide") + "\u00a0\u00bb<br>";
+    });
+    h += "Elles ne sont rattach\u00e9es \u00e0 aucun mois et ne comptent donc nulle part. "
+       + "Rouvrez-les dans Loyer \u2192 D\u00e9penses pour leur choisir un mois.</div></div>";
+  }
+  return h;
+}
+
 function _carteMigrationMutuelle() {
   var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F504} Mutuelle : documents s\u00e9par\u00e9s</div>';
   var nm = ((MUTDB && MUTDB.membres) || []).length;
@@ -9434,7 +9590,7 @@ var ADM_FAMILLES = [
   { cle:"acces",  titre:"Comptes et accès",
     motifs:["comptes utilisateurs","historique des acc","sessions actives","santé des permissions","rôles côté serveur","journal d'audit"] },
   { cle:"compta", titre:"Contrôles comptables",
-    motifs:["clôture de période","couverture du registre","rapprochement cotisations","séquence des pièces","sycebnl","barème des cotisations","états comptables"] },
+    motifs:["clôture de période","couverture du registre","rapprochement cotisations","séquence des pièces","sycebnl","barème des cotisations","états comptables","contrôle du loyer"] },
   { cle:"etats",  titre:"États et données",
     motifs:["tableau de bord","rapport financier","export global","actions"] },
   { cle:"maint",  titre:"Maintenance des données",
@@ -9796,6 +9952,7 @@ function renderAdmin(){
   html += _carteMigrationSocial();
   html += _carteCouverture();
   html += _carteRapprochementCotis();
+  html += _carteControleLoyer();
   html += _carteControlePieces();
   html += _carteSycebnl();
   var ab=document.getElementById("admin-body-mod");if(ab)ab.innerHTML=_admRendu(html);
@@ -18970,7 +19127,10 @@ function openAddLoyDep() {
   document.getElementById("loydep-cdf").value = "";
   document.getElementById("loydep-usd").value = "";
   document.getElementById("loydep-date").value = getTodayStr();
-  document.getElementById("loydep-periode").value = "";
+  // Par defaut, le mois precedent : on regle le loyer du mois ecoule.
+  var _now = new Date();
+  var _base = _now.getFullYear() + "-" + ((_now.getMonth()+1) < 10 ? "0" : "") + (_now.getMonth()+1);
+  document.getElementById("loydep-periode").innerHTML = _optionsMoisLoyerDepense(_ymDecale(_base, -1));
   document.getElementById("loydep-note").value = "";
   document.getElementById("modal-loydep").className = "modal-back open";
 }
@@ -28651,6 +28811,29 @@ function chargerValidationsDistrib(ym, cb) {
 
 var _MOIS_FR = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
 
+// La periode couverte d'une depense de loyer etait saisie en texte libre
+// (« Ex: Janvier 2026 »). Un controle ne peut pas rapprocher sur du texte
+// libre : on en tire un mois machine quand c'est possible, et ce qui resiste
+// est montre a part plutot qu'ecarte en silence.
+var _MOIS_SAISIE = ["janvier","fevrier","mars","avril","mai","juin",
+                    "juillet","aout","septembre","octobre","novembre","decembre"];
+function _moisDepuisTexte(txt) {
+  var t = String(txt || "").trim();
+  if (!t) return "";
+  if (/^[0-9]{4}-[0-9]{2}$/.test(t)) return t;                       // 2026-01
+  var m = t.match(/^([0-9]{1,2})[\/\-]([0-9]{4})$/);                 // 01/2026
+  if (m) return m[2] + "-" + (m[1].length === 1 ? "0" : "") + m[1];
+  var brut = (typeof normStr === "function") ? normStr(t) : t.toLowerCase();
+  var an = brut.match(/(20[0-9]{2})/);
+  if (!an) return "";
+  for (var i = 0; i < _MOIS_SAISIE.length; i++) {
+    if (brut.indexOf(_MOIS_SAISIE[i]) >= 0) {
+      return an[1] + "-" + (i < 9 ? "0" : "") + (i + 1);
+    }
+  }
+  return "";
+}
+
 function _labelMois(ym) {
   if (!/^[0-9]{4}-[0-9]{2}$/.test(ym || "")) return ym || "";
   return _MOIS_FR[parseInt(ym.substring(5, 7), 10) - 1] + " " + ym.substring(0, 4);
@@ -28675,6 +28858,27 @@ function _ymDecale(ym, delta) {
 // moment de libérer les fonds. L'application ne le devine pas — un mois de
 // loyer faux sur une validation vaut moins que pas de mois du tout.
 var _loyerCouvertChoisi = "";
+
+// Liste de mois pour la periode couverte d'une depense : deux ans en arriere,
+// trois mois en avant. Assez large pour regulariser un arriere ancien, assez
+// etroite pour rester lisible.
+function _optionsMoisLoyerDepense(selectionne) {
+  var now = new Date();
+  var base = now.getFullYear() + "-" + ((now.getMonth() + 1) < 10 ? "0" : "") + (now.getMonth() + 1);
+  var h = "", vu = {};
+  if (selectionne && !/^[0-9]{4}-[0-9]{2}$/.test(selectionne)) selectionne = _moisDepuisTexte(selectionne);
+  for (var k = 3; k >= -24; k--) {
+    var v = _ymDecale(base, k);
+    vu[v] = true;
+    h += '<option value="' + v + '"' + (v === selectionne ? ' selected' : '') + '>' + _labelMois(v) + '</option>';
+  }
+  // Une periode plus ancienne, heritee d'une saisie libre, ne doit pas
+  // disparaitre du formulaire au point d'etre reecrite par megarde.
+  if (selectionne && !vu[selectionne]) {
+    h = '<option value="' + selectionne + '" selected>' + _labelMois(selectionne) + '</option>' + h;
+  }
+  return h;
+}
 
 function _optionsMoisLoyer(ymCollecte, selectionne) {
   var h = "";
