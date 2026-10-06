@@ -127,6 +127,15 @@ service cloud.firestore {
     match /ecodim_db/{doc}           { allow read, write: if estActif(); }
     match /effectif_db/{doc}         { allow read, write: if estActif(); }
     match /loyer_db/{doc}            { allow read, write: if estActif(); }
+
+    // ── Loyer : un document par entité ────────────────────────────────────
+    // Contributeurs, versements et dépenses vivaient dans loyer_db/main,
+    // réécrit en entier à chaque geste : deux personnes enregistrant en même
+    // temps s'écrasaient. Ces trois règles doivent être publiées AVANT de
+    // lancer la bascule, sans quoi l'écriture est refusée.
+    match /loyer_contributeurs/{doc}  { allow read, write: if estActif(); }
+    match /loyer_versements/{doc}     { allow read, write: if estActif(); }
+    match /loyer_depenses/{doc}       { allow read, write: if estActif(); }
     match /projets/{doc}             { allow read, write: if estActif(); }
     match /eb_demandes/{doc}         { allow read, write: if estActif(); }
     match /annonces/{doc}            { allow read, write: if estActif(); }
