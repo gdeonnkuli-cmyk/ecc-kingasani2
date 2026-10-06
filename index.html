@@ -7959,6 +7959,106 @@ function _carteControleLoyer() {
   return h;
 }
 
+// ══ BASCULE DU LOYER EN DOCUMENTS SEPARES ═════════════════════════════════
+// Copie, sans rien detruire : l'ancien document reste en place et redevient la
+// source de lecture si les collections sont vidées. La bascule peut donc etre
+// relancee, et elle est sans effet si elle a deja eu lieu.
+function _carteMigrationLoyer() {
+  var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F504} Loyer : documents s\u00e9par\u00e9s</div>';
+  var nc = ((LOYDB && LOYDB.contributeurs) || []).length;
+  var nv = ((LOYDB && LOYDB.versements) || []).length;
+  var nd = ((LOYDB && LOYDB.depenses) || []).length;
+  var tot = nc + nv + nd;
+
+  h += '<p style="font-size:.74rem;color:var(--muted);margin-bottom:9px;line-height:1.5">'
+     + 'Contributeurs, versements et d\u00e9penses vivaient dans un seul document r\u00e9\u00e9crit en entier \u00e0 chaque geste : '
+     + 'deux personnes enregistrant en m\u00eame temps s\u2019\u00e9crasaient sans un mot. Chaque entit\u00e9 prend son propre document.</p>';
+
+  if (gLoyParDoc) {
+    return h + '<div class="ctrl-piece ok"><div class="cp-tete"><strong>Bascule faite</strong></div>'
+       + '<div class="cp-l">' + nc + ' contributeur(s), ' + nv + ' versement(s) et ' + nd + ' d\u00e9pense(s) sont lus depuis leurs collections. '
+       + 'L\u2019ancien document loyer_db/main reste en archive.</div></div>';
+  }
+  if (!tot) {
+    return h + '<div class="ctrl-piece ok"><div class="cp-tete"><strong>Rien \u00e0 basculer</strong></div>'
+         + '<div class="cp-l">Le module Loyer ne contient encore aucune donn\u00e9e. Posez le marqueur d\u00e8s maintenant pour que '
+         + 'les prochaines saisies aillent directement dans leurs collections.</div>'
+         + '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn btn-sm btn-p" onclick="migrerLoyer()">Poser le marqueur</button></div></div>';
+  }
+  return h + '<div class="ctrl-piece ko"><div class="cp-tete"><strong>' + tot + ' entr\u00e9e(s) encore dans le document unique</strong></div>'
+     + '<div class="cp-l cp-w">' + nc + ' contributeur(s), ' + nv + ' versement(s), ' + nd + ' d\u00e9pense(s). '
+     + 'Publiez d\u2019abord les r\u00e8gles des collections loyer_contributeurs, loyer_versements et loyer_depenses, '
+     + 'sans quoi l\u2019\u00e9criture sera refus\u00e9e et rien ne changera.</div></div>'
+     + '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">'
+     + '<button class="btn btn-sm btn-p" onclick="migrerLoyer()">Basculer les ' + tot + ' entr\u00e9e(s)</button></div>';
+}
+
+function migrerLoyer() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l'administrateur.", "err"); return; }
+  if (!IS_CONFIGURED || !gDb) { showToast("Firebase requis pour cette op\u00e9ration.", "err"); return; }
+  var ctr = ((LOYDB && LOYDB.contributeurs) || []).filter(function(x){ return x && x.id; });
+  var ver = ((LOYDB && LOYDB.versements) || []).filter(function(x){ return x && x.id; });
+  var dep = ((LOYDB && LOYDB.depenses) || []).filter(function(x){ return x && x.id; });
+  var tot = ctr.length + ver.length + dep.length;
+
+  showModal(tot ? ("Basculer " + tot + " entr\u00e9e(s) du loyer ?") : "Poser le marqueur sans donn\u00e9es ?",
+    (tot
+      ? "Chaque contributeur, versement et d\u00e9pense sera copi\u00e9 dans son propre document, par lots.\n\n"
+        + "Rien n'est supprim\u00e9 : l'ancien document reste en place et pourra \u00eatre relu. "
+        + "L'op\u00e9ration peut \u00eatre relanc\u00e9e sans dommage.\n\n"
+      : "Le module Loyer est vide. Le marqueur sera pos\u00e9 pour que les prochaines saisies aillent directement "
+        + "dans leurs collections.\n\n")
+    + "Si les r\u00e8gles Firestore des collections loyer_contributeurs, loyer_versements et loyer_depenses "
+    + "ne sont pas encore publi\u00e9es, l'\u00e9criture sera refus\u00e9e et rien ne changera.",
+    function(){
+      closeModal();
+      if (tot) showToast("Bascule de " + tot + " entr\u00e9e(s)\u2026", "ok");
+      var erreurs = [], restants = 3;
+
+      function lots(coll, liste, suite) {
+        if (!liste.length) { suite(null); return; }
+        var paquets = [], i;
+        for (i = 0; i < liste.length; i += 400) paquets.push(liste.slice(i, i + 400));
+        var reste = paquets.length, err = null;
+        paquets.forEach(function(paquet){
+          var lot = gDb.batch();
+          paquet.forEach(function(o){ lot.set(gDb.collection(coll).doc(o.id), o); });
+          lot.commit().catch(function(e){ err = e; })
+            .then(function(){ if (--reste === 0) suite(err); });
+        });
+      }
+
+      function fini(e) {
+        if (e) erreurs.push(e.message || String(e));
+        if (--restants > 0) return;
+        if (!erreurs.length) {
+          gLoyParDoc = true;
+          // Marqueur explicite : c'est lui, et non la seule presence de
+          // documents, qui fera lire les collections aux autres appareils.
+          gDb.collection("loyer_db").doc("main")
+            .set({ docsActifs: true, docsActifsLe: getTodayStr() }, { merge: true })
+            .catch(function(){ gLoyParDoc = false; showToast("Bascule faite, mais le marqueur n'a pas pu \u00eatre \u00e9crit. Relancez.", "err"); });
+          if (typeof logAudit === "function") {
+            logAudit("MIGRATION", "Loyer", ctr.length + " contributeur(s), " + ver.length + " versement(s) et "
+              + dep.length + " d\u00e9pense(s) bascul\u00e9(e)s en documents s\u00e9par\u00e9s");
+          }
+          showToast("Bascule termin\u00e9e : " + tot + " entr\u00e9e(s) en documents s\u00e9par\u00e9s.", "ok");
+        } else {
+          showModal("Bascule incompl\u00e8te",
+            erreurs.length + " lot(s) en \u00e9chec.\n\nErreur : " + erreurs[0]
+            + "\n\nRien n'est perdu : l'ancien document reste la source de lecture. "
+            + "V\u00e9rifiez que les r\u00e8gles Firestore sont publi\u00e9es, puis relancez.",
+            function(){ closeModal(); });
+        }
+        if (typeof renderAdmin === "function") renderAdmin();
+      }
+
+      lots(LOY_CONTRIB_COLL, ctr, fini);
+      lots(LOY_VERS_COLL,    ver, fini);
+      lots(LOY_DEP_COLL,     dep, fini);
+    });
+}
+
 function _carteMigrationMutuelle() {
   var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F504} Mutuelle : documents s\u00e9par\u00e9s</div>';
   var nm = ((MUTDB && MUTDB.membres) || []).length;
@@ -9949,6 +10049,7 @@ function renderAdmin(){
   html += _carteRolesServeur();
   html += _carteMigrationMembres();
   html += _carteMigrationMutuelle();
+  html += _carteMigrationLoyer();
   html += _carteMigrationSocial();
   html += _carteCouverture();
   html += _carteRapprochementCotis();
@@ -18713,6 +18814,61 @@ function refreshActiveModule() {
 
 var LOYDB = {contributeurs:[], versements:[], depenses:[]};
 
+// ── Un document par entite ───────────────────────────────────────────────
+// Contributeurs, versements et depenses vivaient dans loyer_db/main, reecrit
+// EN ENTIER a chaque geste : deux personnes enregistrant en meme temps, la
+// seconde ecrasait la premiere sans un mot. Meme defaut que pour les
+// assistances sociales, les membres et la mutuelle, et meme remede.
+var LOY_CONTRIB_COLL = "loyer_contributeurs";
+var LOY_VERS_COLL    = "loyer_versements";
+var LOY_DEP_COLL     = "loyer_depenses";
+var gLoyParDoc = false;
+
+// File des entites touchees depuis le dernier enregistrement : on n'ecrit que
+// ce qui a bouge, au lieu de reecrire les trois collections a chaque geste.
+var gLoyEcritures = [];
+function _loyTouche(coll, obj)     { gLoyEcritures.push({ coll: coll, obj: obj }); }
+function _loyToucheSuppr(coll, id) { gLoyEcritures.push({ coll: coll, id: id, suppr: true }); }
+
+function _ecrireLoy(coll, obj) {
+  if (!IS_CONFIGURED || !gDb || !obj || !obj.id) return Promise.resolve();
+  return gDb.collection(coll).doc(obj.id).set(obj);
+}
+function _supprimerLoy(coll, id) {
+  if (!IS_CONFIGURED || !gDb || !id) return Promise.resolve();
+  return gDb.collection(coll).doc(id).delete();
+}
+
+// Lecture des trois collections. La presence de documents ne suffit pas a
+// declarer la bascule faite : une migration interrompue en laisserait une
+// partie, et lire cette collection amputee ferait disparaitre le reste. Seul
+// le marqueur pose a la fin d'une bascule complete fait foi.
+function chargerLoyParDoc(cb) {
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(null); return; }
+  var res = { contributeurs: null, versements: null, depenses: null }, restants = 3;
+  function fini() { if (--restants === 0) { if (cb) cb(res); } }
+  function lire(coll, cle) {
+    gDb.collection(coll).get().then(function(snap) {
+      if (snap && !snap.empty) {
+        res[cle] = [];
+        snap.forEach(function(d) { var o = d.data() || {}; o.id = d.id; res[cle].push(o); });
+      }
+    }).catch(function(){}).then(fini);
+  }
+  lire(LOY_CONTRIB_COLL, "contributeurs");
+  lire(LOY_VERS_COLL,    "versements");
+  lire(LOY_DEP_COLL,     "depenses");
+}
+
+// Le distant fait foi pour ce qu'il connait ; ce qu'il ignore est conserve.
+// Une ligne n'est jamais supprimee par un simple rechargement.
+function _loyFusion(distant, local) {
+  var vus = {}, out = [];
+  (distant || []).forEach(function(x) { if (x && x.id) vus[x.id] = true; out.push(x); });
+  (local || []).forEach(function(x) { if (x && x.id && !vus[x.id]) out.push(x); });
+  return out;
+}
+
 function loadLOYDB() {
   try { var s=localStorage.getItem("ecc_loyer"); if(s) LOYDB=JSON.parse(s); } catch(e){}
   if(!LOYDB.contributeurs) LOYDB.contributeurs=[];
@@ -18724,36 +18880,62 @@ function loadLOYDB() {
 function saveLOYDB() {
   // 1. Local (fallback)
   try { localStorage.setItem("ecc_loyer", JSON.stringify(LOYDB)); } catch(e){}
-  // 2. Firebase
-  if (IS_CONFIGURED && gDb) {
-    gDb.collection("loyer_db").doc("main").set({
-      contributeurs: LOYDB.contributeurs || [],
-      versements: LOYDB.versements || [],
-      depenses: LOYDB.depenses || [],
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      updatedBy: gCurrentUser ? gCurrentUser.email : ""
-    }).catch(function(e){ console.warn("Loyer Firebase sync:", e.message); });
+  if (!IS_CONFIGURED || !gDb) { gLoyEcritures = []; return; }
+
+  var charge = {
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedBy: gCurrentUser ? gCurrentUser.email : ""
+  };
+  // Une fois les entites passees en documents separes, reecrire les tableaux
+  // ramenerait l'ecrasement concurrent que la bascule vient de supprimer.
+  if (!gLoyParDoc) {
+    charge.contributeurs = LOYDB.contributeurs || [];
+    charge.versements    = LOYDB.versements || [];
+    charge.depenses      = LOYDB.depenses || [];
   }
+
+  var attentes = [gDb.collection("loyer_db").doc("main").set(charge, { merge: true })];
+  if (gLoyParDoc && gLoyEcritures.length) {
+    gLoyEcritures.forEach(function(e) {
+      attentes.push(e.suppr ? _supprimerLoy(e.coll, e.id) : _ecrireLoy(e.coll, e.obj));
+    });
+  }
+  gLoyEcritures = [];
+
+  // Un refus de la base ne doit plus passer inapercu : l'utilisateur croyait
+  // sa saisie enregistree alors que seul l'appareil l'avait gardee.
+  Promise.all(attentes).catch(function(e) {
+    if (typeof showToast === "function") {
+      showToast("Loyer enregistr\u00e9 sur cet appareil SEULEMENT \u2014 base refus\u00e9e : "
+        + ((e && e.message) || "erreur inconnue") + ". Reprenez d\u00e8s que la connexion revient.", "err");
+    }
+    if (window.console) console.warn("Loyer Firebase sync:", e && e.message);
+  });
 }
 
 function loadLOYDBFromFirebase(callback) {
   if (!IS_CONFIGURED || !gDb) { loadLOYDB(); if(callback) callback(); return; }
+  loadLOYDB();                      // le local sert de socle, jamais effacé
   gDb.collection("loyer_db").doc("main").get()
     .then(function(doc) {
-      if (doc.exists) {
-        var data = doc.data();
+      var data = (doc.exists && doc.data()) || {};
+      gLoyParDoc = !!data.docsActifs;
+      function poser(parDoc) {
         LOYDB = {
-          contributeurs: data.contributeurs || [],
-          versements: data.versements || [],
-          depenses: data.depenses || []
+          contributeurs: gLoyParDoc ? (parDoc && parDoc.contributeurs) || []
+                                    : _loyFusion(data.contributeurs || [], LOYDB.contributeurs || []),
+          versements:    gLoyParDoc ? (parDoc && parDoc.versements) || []
+                                    : _loyFusion(data.versements || [],    LOYDB.versements || []),
+          depenses:      gLoyParDoc ? (parDoc && parDoc.depenses) || []
+                                    : _loyFusion(data.depenses || [],      LOYDB.depenses || [])
         };
         try { localStorage.setItem("ecc_loyer", JSON.stringify(LOYDB)); } catch(e){}
-      } else {
-        loadLOYDB();
+        if (callback) callback();
       }
-      if(callback) callback();
+      if (gLoyParDoc) chargerLoyParDoc(function(parDoc){ poser(parDoc); });
+      else poser(null);
     })
-    .catch(function(){ loadLOYDB(); if(callback) callback(); });
+    .catch(function(){ if(callback) callback(); });
 }
 
 function showTabLoy(name) {
@@ -18962,6 +19144,7 @@ function saveContrib() {
   else {
     for(var i=0;i<LOYDB.contributeurs.length;i++) if(LOYDB.contributeurs[i].id===id){LOYDB.contributeurs[i]=contrib;break;}
   }
+  _loyTouche(LOY_CONTRIB_COLL, contrib);
   saveLOYDB();
   closeContribModal();
   renderContribs();
@@ -18972,6 +19155,11 @@ function saveContrib() {
 function deleteContrib() {
   var id = document.getElementById("contrib-id").value;
   showConfirmF("Supprimer ce contributeur ?","Ses versements seront aussi supprimés.", function(){
+    // Le contributeur ET ses versements disparaissent : chacun doit etre
+    // supprime dans sa propre collection, sans quoi ils ressusciteraient au
+    // prochain chargement.
+    LOYDB.versements.forEach(function(v){ if(v && v.contribId===id) _loyToucheSuppr(LOY_VERS_COLL, v.id); });
+    _loyToucheSuppr(LOY_CONTRIB_COLL, id);
     LOYDB.contributeurs = LOYDB.contributeurs.filter(function(c){return c.id!==id;});
     LOYDB.versements = LOYDB.versements.filter(function(v){return v.contribId!==id;});
     saveLOYDB();
@@ -19067,6 +19255,7 @@ function enregistrerVersement() {
     par: gCurrentUser ? gCurrentUser.nom : ""
   };
   LOYDB.versements.push(vers);
+  _loyTouche(LOY_VERS_COLL, vers);
   saveLOYDB();
   renderVersements();
   recalcLoy();
@@ -19111,6 +19300,7 @@ function renderVersements() {
 
 function delVersement(id) {
   showConfirmF("Supprimer ce versement ?","Action irréversible.", function(){
+    _loyToucheSuppr(LOY_VERS_COLL, id);
     LOYDB.versements = LOYDB.versements.filter(function(v){return v.id!==id;});
     saveLOYDB();
     renderVersements();
@@ -19155,6 +19345,7 @@ function saveLoyDep() {
     par: gCurrentUser ? gCurrentUser.nom : ""
   };
   LOYDB.depenses.push(dep);
+  _loyTouche(LOY_DEP_COLL, dep);
   saveLOYDB();
   closeLoyDepModal();
   renderLoyDep();
@@ -19186,6 +19377,7 @@ function renderLoyDep() {
 
 function delLoyDep(id) {
   showConfirmF("Supprimer cette dépense ?","Action irréversible.", function(){
+    _loyToucheSuppr(LOY_DEP_COLL, id);
     LOYDB.depenses = LOYDB.depenses.filter(function(d){return d.id!==id;});
     saveLOYDB();
     renderLoyDep();
@@ -23187,6 +23379,7 @@ function injectLoyerToFinances(id) {
       addRec("cl","CL","Loyer — "+escH(v.contribNom||"")+" ("+escH(v.mois||"")+" "+escH(String(v.annee||""))+")", cdf, usd, "Injecté depuis Loyer");
       // Marquer comme injecté
       v.injectedFinances = true;
+      _loyTouche(LOY_VERS_COLL, v);
       saveLOYDB();
       recalc(); dirty();
       switchModule("finances");
