@@ -7980,7 +7980,7 @@ function _carteControleLoyer() {
       + "<div class=\'cp-l\'>Aucun versement ni paiement de loyer enregistr\u00e9.</div></div>";
   }
 
-  var nonRegles = 0, retards = 0, nonPortes = 0, partiels = 0, sousCollectes = 0;
+  var nonRegles = 0, retards = 0, nonPortes = 0, nonDetailles = 0, partiels = 0, sousCollectes = 0;
   var corps = "";
   d.mois.forEach(function(e) {
     var ecartRecette = e.collecte - e.b7;
@@ -7998,23 +7998,39 @@ function _carteControleLoyer() {
 
     var du = bar ? bar.montant : 0;
     var payeEq = versDevise(e.paye, e.payeUSD);
-    var colEq = versDevise(e.collecte, e.collecteUSD);
+
+    // Deux sources disent la collecte du mois, et aucune ne prime par nature :
+    //   - les versements du module Loyer : le detail nominatif, qui a verse quoi
+    //   - la ligne « Cotisation Loyer » des cultes : l'argent entre en recette
+    // Une cotisation loyer saisie directement dans un culte EST de l'argent de
+    // loyer, meme sans versement nominatif en face. Compter la seule somme des
+    // versements aurait affiche « collecte 0 » sur un mois pourtant encaisse.
+    // On retient donc le plus grand des deux, et on nomme l'ecart :
+    //   recette > versements -> la somme est en caisse, le detail manque
+    //   versements > recette -> l'argent est recu mais jamais porte en recette,
+    //                            et celui-la est un vrai defaut comptable.
+    var versEq = versDevise(e.collecte, e.collecteUSD);
+    var recEq  = versDevise(e.b7, 0);
+    var colEq  = Math.max(versEq, recEq);
+    var nonDetaille = recEq - versEq;
+    var nonPorte    = versEq - recEq;
     var reste = du - payeEq;
 
     var etat;
     if (payeEq <= 0.009) {
-      if (e.collecte > 0 || e.collecteUSD > 0 || du > 0) { etat = "\u{1F534} Non r\u00e9gl\u00e9"; nonRegles++; }
+      if (colEq > 0 || du > 0) { etat = "\u{1F534} Non r\u00e9gl\u00e9"; nonRegles++; }
       else etat = "\u2014";
     } else if (du > 0 && reste > 0.99) {
       etat = "\u{1F7E0} Partiel \u2014 reste " + mtt(reste); partiels++;
     } else if (retard) {
       etat = "\u26a0\ufe0f R\u00e9gl\u00e9 apr\u00e8s le 10"; retards++;
-    } else if (e.collecte <= 0 && e.collecteUSD <= 0) {
+    } else if (colEq <= 0) {
       etat = "\u26a0\ufe0f Pay\u00e9 sans collecte identifi\u00e9e";
     } else {
       etat = "\u2705 R\u00e9gl\u00e9";
     }
-    if (Math.abs(ecartRecette) > 1 && e.collecte > 0) nonPortes++;
+    if (nonPorte > 0.99) nonPortes++;
+    if (nonDetaille > 0.99) nonDetailles++;
     // La collecte couvre-t-elle le loyer ? Un mois peut etre regle et
     // sous-collecte : la difference a ete prise ailleurs en caisse.
     var sous = du > 0 && colEq > 0 && colEq < du - 0.99;
@@ -8023,12 +8039,14 @@ function _carteControleLoyer() {
     corps += "<tr>"
       + "<td style=\'padding:5px 8px;font-weight:600;white-space:nowrap\'>" + escH(_labelMois(e.ym)) + "</td>"
       + "<td style=\'text-align:right;font-family:DM Mono,monospace;font-weight:700\'>" + (bar ? mtt(du) : "\u2014") + "</td>"
-      + "<td style=\'text-align:right;font-family:DM Mono,monospace\'>" + fmt(e.collecte) + (e.collecteUSD ? " + " + fmt(e.collecteUSD) + " $" : "")
+      + "<td style=\'text-align:right;font-family:DM Mono,monospace;font-weight:700\'>" + mtt(colEq)
       + (sous ? "<br><span style=\'font-size:.64rem;color:#b45309\'>couvre " + Math.round(colEq / du * 100) + "\u202f% du loyer</span>" : "")
       + "</td>"
-      + "<td style=\'text-align:center;font-size:.7rem;color:var(--muted)\'>" + (e.nbContrib || "\u2014") + "</td>"
-      + "<td style=\'text-align:right;font-family:DM Mono,monospace\'>" + fmt(e.b7)
-      + (Math.abs(ecartRecette) > 1 && e.collecte > 0 ? "<br><span style=\'font-size:.64rem;color:#b45309\'>\u00e9cart " + fmt(ecartRecette) + "</span>" : "")
+      + "<td style=\'text-align:right;font-family:DM Mono,monospace;font-size:.72rem\'>" + fmt(e.b7) + "</td>"
+      + "<td style=\'text-align:right;font-family:DM Mono,monospace;font-size:.72rem\'>" + fmt(e.collecte) + (e.collecteUSD ? " + " + fmt(e.collecteUSD) + " $" : "")
+      + (e.nbContrib ? "<br><span style=\'font-size:.64rem;color:var(--muted)\'>" + e.nbContrib + " contrib.</span>" : "")
+      + (nonPorte > 0.99 ? "<br><span style=\'font-size:.64rem;color:#c0392b;font-weight:700\'>" + mtt(nonPorte) + " non port\u00e9 en recette</span>" : "")
+      + (nonDetaille > 0.99 ? "<br><span style=\'font-size:.64rem;color:#b45309\'>" + mtt(nonDetaille) + " sans d\u00e9tail</span>" : "")
       + "</td>"
       + "<td style=\'text-align:right;font-family:DM Mono,monospace\'>" + fmt(e.paye) + (e.payeUSD ? " + " + fmt(e.payeUSD) + " $" : "")
       + (e.paye || e.payeUSD ? "<br><span style=\'font-size:.64rem;color:var(--muted)\'>= " + mtt(payeEq) + "</span>" : "")
@@ -8044,7 +8062,8 @@ function _carteControleLoyer() {
   if (partiels) alerte.push("<strong>" + partiels + " mois partiellement r\u00e9gl\u00e9(s)</strong>");
   if (retards) alerte.push(retards + " r\u00e9glement(s) apr\u00e8s le 10");
   if (sousCollectes) alerte.push(sousCollectes + " mois dont la collecte ne couvre pas le loyer");
-  if (nonPortes) alerte.push(nonPortes + " mois dont la collecte n\u2019est pas port\u00e9e en recette");
+  if (nonPortes) alerte.push("<strong>" + nonPortes + " mois dont une partie n\u2019est pas port\u00e9e en recette</strong>");
+  if (nonDetailles) alerte.push(nonDetailles + " mois encaiss\u00e9(s) sans d\u00e9tail par contributeur");
   if (d.orphelines.length) alerte.push(d.orphelines.length + " d\u00e9pense(s) sans mois exploitable");
 
   var barCour = _loyerDu(_moisDe(getTodayStr())) || gBaremeLoyer[gBaremeLoyer.length - 1];
@@ -8055,6 +8074,9 @@ function _carteControleLoyer() {
      + (barCour ? (barCour.montant + " " + barCour.devise + " par mois depuis " + _labelMois(barCour.depuis)) : "non param\u00e9tr\u00e9")
      + "</strong>. Un loyer libell\u00e9 en dollars n\u2019est pas r\u00e9gl\u00e9 parce qu\u2019on a sorti des francs : "
      + "tout est ramen\u00e9 \u00e0 la devise du bail, au taux du culte qui cl\u00f4t le cycle. "
+     + "L\u2019<strong>encaiss\u00e9</strong> retient le plus grand des deux : une cotisation loyer saisie directement "
+     + "dans un culte est de l\u2019argent de loyer, m\u00eame sans versement nominatif en face. "
+     + "Des versements sup\u00e9rieurs \u00e0 la recette, en revanche, signalent de l\u2019argent re\u00e7u mais jamais comptabilis\u00e9. "
      + "La colonne port\u00e9e en recette suit le <strong>cycle de lib\u00e9ration</strong> \u2014 du 2e dimanche d\u2019un mois "
      + "au 1er dimanche du suivant \u2014 comme les d\u00eemes.</div></div>";
 
@@ -8086,8 +8108,10 @@ function _carteControleLoyer() {
   }
 
   h += "<div style=\'overflow-x:auto;margin-top:8px\'><table class=\'cotis-table\' style=\'font-size:.74rem\'><thead><tr>"
-     + "<th>Mois de loyer</th><th style=\'text-align:right\'>D\u00fb</th><th style=\'text-align:right\'>Collect\u00e9</th><th>Contrib.</th>"
-     + "<th style=\'text-align:right\' title=\'Cotisations loyer collect\u00e9es aux cultes du cycle : du 2e dimanche au 1er dimanche suivant\'>Port\u00e9 en recette</th>"
+     + "<th>Mois de loyer</th><th style=\'text-align:right\'>D\u00fb</th>"
+     + "<th style=\'text-align:right\' title=\'Le plus grand des deux : ce qui est entr\u00e9 en recette, ou ce que les versements d\u00e9clarent\'>Encaiss\u00e9</th>"
+     + "<th style=\'text-align:right\' title=\'Cotisations loyer collect\u00e9es aux cultes du cycle : du 2e dimanche au 1er dimanche suivant\'>En recette</th>"
+     + "<th style=\'text-align:right\' title=\'Versements nominatifs saisis dans le module Loyer\'>Versements</th>"
      + "<th style=\'text-align:right\'>Pay\u00e9 au bailleur</th>"
      + "<th style=\'text-align:right\'>Reste d\u00fb</th><th>\u00c9tat</th>"
      + "</tr></thead><tbody>" + corps + "</tbody></table></div>";
