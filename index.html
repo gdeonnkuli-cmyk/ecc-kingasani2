@@ -16479,50 +16479,120 @@ function printHistEco() {
 }
 
 // Injecte les recettes/dépenses de l'ECODIM en cours dans le module Finances (modifiable ensuite)
+// L'envoi d'un ECODIM vers Finances porte l'argent ET l'effectif, comme le
+// bouton « ↗ Finances » du module Culte. Trois choses s'y jouaient mal :
+//
+//  — l'effectif n'etait pas porte du tout, alors que la piece du culte reclame
+//    une rubrique Effectif ECODIM ;
+//  — une session sans argent mais avec des enfants ne pouvait rien envoyer ;
+//  — et surtout, l'argent partait sur le culte affiche, quelle que soit sa
+//    date. Un ECODIM du 11 pouvait atterrir sur le culte du 04 sans un mot.
+//    On ne deplace pas une recette d'un culte a l'autre en silence : la date
+//    est verifiee, et l'ecart est annonce avant toute ecriture.
 function injectEcoToFinances() {
   var rec = sumRowsEco("eco-rec-rows");
   var dep = sumRowsEco("eco-dep-rows");
-  if(rec.cdf<=0 && rec.usd<=0 && dep.cdf<=0 && dep.usd<=0){
-    showToast("Aucune recette/depense ecodim a injecter.","warn");
+  var filles    = parseInt((document.getElementById("eco-filles")||{}).value)||0;
+  var garcons   = parseInt((document.getElementById("eco-garcons")||{}).value)||0;
+  var enfants   = filles + garcons;   // la definition du bilan ECODIM
+  var argent    = (rec.cdf>0 || rec.usd>0 || dep.cdf>0 || dep.usd>0);
+
+  if(!argent && !enfants){
+    showToast("Rien a envoyer : ni recette, ni depense, ni effectif.","warn");
     return;
   }
+
   var titre = (document.getElementById("eco-titre")||{}).value || "ECODIM";
   var dateS = (document.getElementById("eco-date")||{}).value || getTodayStr();
-  var deja = _sessionDejaInjectee((ECODB && ECODB.sessions) || [], dateS, titre);
-  showModal(deja ? "\u26a0\ufe0f D\u00e9j\u00e0 inject\u00e9 \u2014 injecter une seconde fois ?" : "Injecter dans Finances ?",
-    (deja
-      ? "Cet ECODIM a d\u00e9j\u00e0 \u00e9t\u00e9 port\u00e9 en recette le "
-        + ((deja.injecteFinances && deja.injecteFinances.date) || "?")
-        + ". Injecter de nouveau compterait le m\u00eame argent deux fois.\n\n"
-      : "")
-    + "Les recettes et depenses du ecodim seront ajoutees au formulaire Finances en cours. Vous pourrez les modifier avant d'enregistrer le culte.",
+  var deja  = _sessionDejaInjectee((ECODB && ECODB.sessions) || [], dateS, titre);
+
+  var fDate   = document.getElementById("meta-date");
+  var dateFin = fDate ? (fDate.value || "") : "";
+  var memeDate = (!dateFin || dateFin === dateS);
+
+  if (!argent && !memeDate) {
+    showToast("Rien a porter : cet ECODIM n'a pas d'argent, et son effectif appartient au culte du "
+              + dateS + ", pas a celui du " + dateFin + ".", "warn");
+    return;
+  }
+
+  var msg = "";
+  if (deja && argent) {
+    msg += "Cet ECODIM a d\u00e9j\u00e0 \u00e9t\u00e9 port\u00e9 en recette le "
+         + ((deja.injecteFinances && deja.injecteFinances.date) || "?")
+         + ". Injecter de nouveau compterait le m\u00eame argent deux fois.\n\n";
+  }
+  if (argent)  msg += "Les recettes et d\u00e9penses de l'ECODIM seront ajout\u00e9es au formulaire Finances. Vous pourrez les modifier avant d'enregistrer le culte.\n\n";
+  if (enfants && memeDate) msg += "L'effectif ECODIM (" + enfants + " enfant(s)) remplacera celui de la pi\u00e8ce.\n\n";
+  if (!memeDate) {
+    msg += "\u26a0 Le formulaire Finances est sur le culte du " + dateFin + ", alors que cet ECODIM est du " + dateS + ".\n"
+         + "L'argent sera port\u00e9 sur le culte du " + dateFin + ", et l'effectif ne sera PAS modifi\u00e9 \u2014 "
+         + "il appartient au culte du " + dateS + ".\n\n";
+  }
+
+  showModal(deja && argent ? "\u26a0\ufe0f D\u00e9j\u00e0 inject\u00e9 \u2014 injecter une seconde fois ?" : "Envoyer l'ECODIM dans Finances ?",
+    msg,
     function(){
-      // Recette globale ECODIM → ligne dans CL (recettes)
-      if(rec.cdf>0 || rec.usd>0){
-        addRec("cl","CL","ECODIM - "+titre+" ("+dateS+")", rec.cdf, rec.usd, "Injecte depuis ECODIM");
-      }
-      // Dépense globale ECODIM → ligne dans dep-ot (autres dépenses).
-      // La catégorie portait "Sem" par copie du séminaire : les dépenses de
-      // l'école du dimanche sortaient donc classées en séminaire.
-      if(dep.cdf>0 || dep.usd>0){
-        addDep("dep-ot","ECODIM - "+titre+" ("+dateS+")", "Eco", dep.cdf, dep.usd, "Injecte depuis ECODIM");
-      }
-      var marqueE = { date: getTodayStr(), par: (gCurrentUser && gCurrentUser.email) || "",
-                      recCDF: rec.cdf, recUSD: rec.usd, depCDF: dep.cdf, depUSD: dep.usd };
-      gInjectionEnAttente.eco = { date: dateS, titre: titre, marque: marqueE };
-      var majE = false;
-      ((ECODB && ECODB.sessions) || []).forEach(function(x){
-        if (x.date === dateS && String(x.titre||"").trim() === String(titre).trim()) { x.injecteFinances = marqueE; majE = true; }
-      });
-      if (majE) { saveEcoDB(ECODB); gInjectionEnAttente.eco = null; }
-      if (typeof logAudit === "function") {
-        logAudit("INJECTION", "ECODIM", titre + " du " + dateS + " \u2014 recettes " + fmt(rec.cdf) + " FC, d\u00e9penses " + fmt(dep.cdf) + " FC");
-      }
-      recalc();
-      dirty();
       closeModal();
+
+      function poser(){
+        if(rec.cdf>0 || rec.usd>0){
+          addRec("cl","CL","ECODIM - "+titre+" ("+dateS+")", rec.cdf, rec.usd, "Injecte depuis ECODIM");
+        }
+        // Dépense globale ECODIM → ligne dans dep-ot (autres dépenses).
+        // La catégorie portait "Sem" par copie du séminaire : les dépenses de
+        // l'école du dimanche sortaient donc classées en séminaire.
+        if(dep.cdf>0 || dep.usd>0){
+          addDep("dep-ot","ECODIM - "+titre+" ("+dateS+")", "Eco", dep.cdf, dep.usd, "Injecte depuis ECODIM");
+        }
+
+        // L'effectif ne part que sur la piece du bon jour. Un zero ne remplace
+        // rien, si bien que le CF et le CL de la piece ne sont pas touches.
+        var effPose = false;
+        if (enfants && memeDate) {
+          reporterEffectifsFin(dateS, true, { cf: 0, cl: 0, eco: enfants,
+                                              sources: ["l'ECODIM du " + dateS] });
+          effPose = true;
+        }
+
+        if (argent) {
+          var marqueE = { date: getTodayStr(), par: (gCurrentUser && gCurrentUser.email) || "",
+                          recCDF: rec.cdf, recUSD: rec.usd, depCDF: dep.cdf, depUSD: dep.usd };
+          gInjectionEnAttente.eco = { date: dateS, titre: titre, marque: marqueE };
+          var majE = false;
+          ((ECODB && ECODB.sessions) || []).forEach(function(x){
+            if (x.date === dateS && String(x.titre||"").trim() === String(titre).trim()) { x.injecteFinances = marqueE; majE = true; }
+          });
+          if (majE) { saveEcoDB(ECODB); gInjectionEnAttente.eco = null; }
+        }
+        if (typeof logAudit === "function") {
+          logAudit("INJECTION", "ECODIM", titre + " du " + dateS + " \u2014 recettes " + fmt(rec.cdf)
+            + " FC, d\u00e9penses " + fmt(dep.cdf) + " FC" + (effPose ? ", effectif " + enfants : ""));
+        }
+        recalc();
+        dirty();
+        var faits = [];
+        if (argent)  faits.push("recettes et d\u00e9penses");
+        if (effPose) faits.push("effectif " + enfants + " enfant(s)");
+        showToast("ECODIM port\u00e9 sur le culte du " + (memeDate ? dateS : dateFin)
+          + " \u2014 " + faits.join(", ")
+          + (!memeDate && enfants ? ". L'effectif n'a pas \u00e9t\u00e9 touch\u00e9 : il appartient au "
+             + dateS + "." : "."), "ok");
+      }
+
       switchModule("finances");
-      showToast("Recettes/depenses ecodim injectees dans Finances. Modifiez si necessaire.","ok");
+      if (!dateFin) {
+        // Formulaire vierge : on se place sur la date de l'ECODIM par le meme
+        // chemin qu'une saisie, de sorte qu'un culte deja enregistre ce jour-la
+        // soit charge AVANT qu'on ajoute les lignes — sinon son chargement les
+        // effacerait aussitot.
+        setTimeout(function(){
+          if (fDate) fDate.value = dateS;
+          onDateChangeFin(function(){ poser(); });
+        }, 300);
+      } else {
+        setTimeout(poser, 300);
+      }
     });
 }
 
