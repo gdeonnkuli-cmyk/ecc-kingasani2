@@ -9083,6 +9083,92 @@ function exporterRapprochementCotis() {
   if (typeof logAudit === "function") logAudit("EXPORT", "Membres", "Rapprochement cotisations ↔ recettes");
 }
 
+// ══ CONTINUITE DU SOLDE REPORTE ═════════════════════════════════════════
+// Le formulaire avertit deja quand le report saisi ne vaut pas le solde laisse
+// par le culte precedent — mais seulement sur le culte ouvert. Une piece
+// ancienne pouvait donc porter un report faux sans que rien ne le signale, et
+// l'ecart se propageait : le solde de caisse de tous les cultes suivants est
+// decale du meme montant.
+//
+// Ce controle parcourt l'historique dans l'ordre et cherche la premiere
+// rupture. Une seule est signalee a la fois, et c'est voulu : quand une piece
+// porte un report faux, les suivantes ont ete saisies a partir de SON solde,
+// donc elles s'enchainent correctement entre elles. Corriger la rupture fait
+// apparaitre la suivante. On remonte ainsi la chaine, une piece a la fois,
+// sans jamais deviner.
+function _ruptureSolde() {
+  var hist = (gHistCache || []).filter(function(h){ return h && h.meta && h.meta.date; });
+  if (hist.length < 2) return { total: hist.length, ruptures: [] };
+  hist = hist.slice().sort(function(a, b){ return String(a.meta.date).localeCompare(String(b.meta.date)); });
+
+  var ruptures = [];
+  for (var i = 1; i < hist.length; i++) {
+    var prec = hist[i-1], cur = hist[i];
+    var mp = prec.meta || {}, sp = prec.sums || {}, mc = cur.meta || {};
+    var attCDF = (parseFloat(mp.repCDF) || 0) + (sp.nCDF || 0);
+    var attUSD = (parseFloat(mp.repUSD) || 0) + (sp.nUSD || 0);
+    var repCDF = parseFloat(mc.repCDF) || 0;
+    var repUSD = parseFloat(mc.repUSD) || 0;
+    // Memes tolerances que l'avertissement du formulaire : l'application
+    // arrondit le report a 50 FC pres.
+    var ecartCDF = repCDF - attCDF, ecartUSD = repUSD - attUSD;
+    if (Math.abs(ecartCDF) > 50 || Math.abs(ecartUSD) > 0.01) {
+      ruptures.push({ date: mc.date, piece: mc.piece || "", precDate: mp.date, precPiece: mp.piece || "",
+                      repCDF: repCDF, repUSD: repUSD, attCDF: attCDF, attUSD: attUSD,
+                      ecartCDF: ecartCDF, ecartUSD: ecartUSD, restants: hist.length - i - 1 });
+    }
+  }
+  return { total: hist.length, ruptures: ruptures };
+}
+
+function _carteContinuiteSolde() {
+  var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F517} Continuité du solde reporté</div>';
+  var d = _ruptureSolde();
+
+  h += '<p style="font-size:.74rem;color:var(--muted);margin-bottom:9px;line-height:1.45">'
+     + 'Le report d’un culte doit valoir le solde laissé par le précédent. '
+     + 'Quand il ne le vaut pas, la caisse de toutes les pièces suivantes est décalée du même montant. '
+     + 'Ce contrôle porte sur les cultes chargés en cache.</p>';
+
+  if (d.total < 2) {
+    return h + '<div class="ctrl-piece ok"><div class="cp-tete"><strong>Rien à contrôler</strong></div>'
+      + '<div class="cp-l">Il faut au moins deux cultes dans le cache pour comparer une chaîne.</div></div>';
+  }
+  if (!d.ruptures.length) {
+    return h + '<div class="ctrl-piece ok"><div class="cp-tete"><strong>Chaîne continue</strong></div>'
+      + '<div class="cp-l">Les ' + d.total + ' cultes du cache s’enchaînent : chaque report vaut le solde du culte précédent.</div></div>';
+  }
+
+  var r = d.ruptures[0];
+  h += '<div class="ctrl-piece ko"><div class="cp-tete"><strong>Rupture au culte du ' + escH(r.date) + '</strong>'
+     + (r.piece ? ' — pièce ' + escH(r.piece) : '') + '</div>';
+  if (Math.abs(r.ecartCDF) > 50) {
+    h += '<div class="cp-l cp-e">Report CDF : <strong>' + fmt(r.repCDF) + '</strong> saisi, <strong>'
+       + fmt(r.attCDF) + '</strong> attendu d’après le culte du ' + escH(r.precDate)
+       + ' — écart ' + fmt(r.ecartCDF) + ' CDF.</div>';
+  }
+  if (Math.abs(r.ecartUSD) > 0.01) {
+    h += '<div class="cp-l cp-e">Report USD : <strong>' + fmt(r.repUSD) + '</strong> saisi, <strong>'
+       + fmt(r.attUSD) + '</strong> attendu — écart ' + fmt(r.ecartUSD) + ' USD.</div>';
+  }
+  if (r.restants > 0) {
+    h += '<div class="cp-l cp-w">' + r.restants + ' culte(s) suivent cette pièce. Ils ont été saisis à partir '
+       + 'de son solde, donc leur caisse est décalée du même écart. Corrigez celui-ci d’abord : '
+       + 'la rupture suivante apparaîtra ici.</div>';
+  }
+  h += '<div class="cp-l">Pour corriger : Finances → Recettes, date du ' + escH(r.date)
+     + ', chargez le culte, puis le bouton « ↩ Reporter le solde du culte précédent » sous les cases Reporté. '
+     + 'Enregistrez. Un mouvement hors culte peut aussi expliquer l’écart : dans ce cas, laissez la pièce en l’état.</div>';
+  h += '</div>';
+
+  if (d.ruptures.length > 1) {
+    h += '<p style="font-size:.73rem;color:var(--muted);margin-top:7px">'
+       + d.ruptures.length + ' ruptures en tout dans le cache. Elles se corrigent dans l’ordre, '
+       + 'la plus ancienne d’abord.</p>';
+  }
+  return h;
+}
+
 function _carteControlePieces() {
   var a = _analyserPieces();
   var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F5C2}\uFE0F Contr\u00f4le de s\u00e9quence des pi\u00e8ces</div>';
@@ -10334,6 +10420,7 @@ function renderAdmin(){
   html += _carteCouverture();
   html += _carteRapprochementCotis();
   html += _carteControleLoyer();
+  html += _carteContinuiteSolde();
   html += _carteControlePieces();
   html += _carteSycebnl();
   var ab=document.getElementById("admin-body-mod");if(ab)ab.innerHTML=_admRendu(html);
