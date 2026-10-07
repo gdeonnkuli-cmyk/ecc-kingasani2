@@ -25650,27 +25650,43 @@ function injecterEffectifsVersComptage() {
 }
 
 // Injecter les effectifs du programme vers Finances → Recettes
+//
+// Ce bouton posait la date directement dans le champ, sans passer par
+// onDateChangeFin : le culte deja enregistre a cette date n'etait donc pas
+// charge, gEditingHistId restait vide, et l'enregistrement creait un SECOND
+// culte au lieu de mettre a jour le premier. C'etait le vrai defaut derriere
+// « la mise a jour ne se fait pas ».
+//
+// On passe maintenant par le meme chemin qu'une saisie de date : le culte
+// existant est propose au chargement, puis les effectifs sont ecrits par
+// dessus, une fois le formulaire en place.
 function injecterEffectifsVersFinances() {
   var date  = gV("prog-date");
-  var cfTot = gN("prog-cf-h")+gN("prog-cf-f")+gN("prog-cf-j")+gN("prog-cf-e")+gN("prog-cf-v");
-  var clTot = gN("prog-cl-h")+gN("prog-cl-f")+gN("prog-cl-j")+gN("prog-cl-e")+gN("prog-cl-v");
-  if(!cfTot && !clTot){ showToast("Saisissez d'abord les effectifs CF et CL.","err"); return; }
+  if(!date){ showToast("Sélectionnez d'abord la date du culte.","err"); return; }
 
-  // Basculer vers Finances → Recettes
+  var cfForm = gN("prog-cf-h")+gN("prog-cf-f")+gN("prog-cf-j")+gN("prog-cf-e")+gN("prog-cf-v");
+  var clForm = gN("prog-cl-h")+gN("prog-cl-f")+gN("prog-cl-j")+gN("prog-cl-e")+gN("prog-cl-v");
+
+  // Le formulaire ne montre qu'un cote a la fois. Pour l'autre, et pour
+  // l'ECODIM, on prend ce que la base porte a cette date.
+  var base = _effectifsDeLaDate(date);
+  var env = { cf: cfForm || base.cf, cl: clForm || base.cl, eco: base.eco, sources: ["le programme du culte"] };
+  if(base.eco) env.sources.push("l'ECODIM du jour");
+
+  if(!env.cf && !env.cl && !env.eco){ showToast("Saisissez d'abord les effectifs CF et CL.","err"); return; }
+
   switchModule("finances");
   showTab("recettes");
 
-  // Remplir les champs effectif dans le formulaire Finances
   setTimeout(function(){
     var fDate = document.getElementById("meta-date");
-    var fCF   = document.getElementById("eff-cf");
-    var fCL   = document.getElementById("eff-cl");
-    if(fDate && date) fDate.value = date;
-    if(fCF)   fCF.value = cfTot;
-    if(fCL)   fCL.value = clTot;
-    if(typeof recalc === "function") recalc();
-    if(typeof dirty  === "function") dirty();
-    showToast("Effectifs injectés dans Finances — CF:"+cfTot+" / CL:"+clTot,"ok");
+    if(fDate) fDate.value = date;
+    onDateChangeFin(function(d){
+      reporterEffectifsFin(d, true, env);
+      var ou = gEditingHistId ? "Culte du "+date+" mis à jour" : "Effectifs posés pour le "+date;
+      showToast(ou+" — CF "+env.cf+" / CL "+env.cl+(env.eco ? " / ECODIM "+env.eco : "")
+                + (gEditingHistId ? ". Enregistrez pour conserver." : "."), "ok");
+    });
   }, 300);
 }
 
@@ -29614,44 +29630,63 @@ function _effectifsDeLaDate(dateVal) {
   return r;
 }
 
-function reporterEffectifsFin(dateVal) {
+// forcer = le report a été demandé explicitement, par le bouton ↗ Finances du
+// module Culte. Alors on remplace même un chiffre déjà saisi : c'est tout
+// l'objet du geste. On ouvre souvent le culte avec un effectif provisoire
+// (CF 1, CL 1) pour pouvoir l'enregistrer, et on revient poser le vrai
+// comptage une fois le programme rempli. Le remplacement est annoncé,
+// ancienne valeur comprise — une mise à jour muette ne vaut rien.
+//
+// Un zéro ne remplace jamais rien. Charger le programme CF ne met pas le CL à
+// l'écran : sans cette réserve, l'envoi effacerait un CL déjà correct.
+function reporterEffectifsFin(dateVal, forcer, valeurs) {
   var note = document.getElementById("eff-report-note");
   if (note) { note.style.display = "none"; note.innerHTML = ""; }
   if (!dateVal) return;
 
-  var r = _effectifsDeLaDate(dateVal);
+  var r = valeurs || _effectifsDeLaDate(dateVal);
   if (!r.cf && !r.cl && !r.eco) return;
 
-  var poses = [], gardes = [];
+  var poses = [], gardes = [], remplaces = [];
   [["eff-cf", r.cf, "CF"], ["eff-cl", r.cl, "CL"], ["eff-eco", r.eco, "ECODIM"]].forEach(function(t){
     var el = document.getElementById(t[0]);
     if (!el || !t[1]) return;
     var actuel = parseInt(el.value, 10) || 0;
-    if (actuel) { if (actuel !== t[1]) gardes.push(t[2] + " : " + actuel + " saisi, " + t[1] + " au comptage"); return; }
+    if (actuel === t[1]) return;
+    if (actuel && !forcer) { gardes.push(t[2] + " : " + actuel + " saisi, " + t[1] + " au comptage"); return; }
     el.value = t[1];
-    poses.push(t[2] + " " + t[1]);
+    if (actuel) remplaces.push(t[2] + " " + actuel + " → " + t[1]);
+    else        poses.push(t[2] + " " + t[1]);
   });
 
-  if (!poses.length && !gardes.length) return;
-  if (poses.length) { if (typeof recalc === "function") recalc(); if (typeof dirty === "function") dirty(); }
+  if (!poses.length && !gardes.length && !remplaces.length) return;
+  if (poses.length || remplaces.length) { if (typeof recalc === "function") recalc(); if (typeof dirty === "function") dirty(); }
 
   if (note) {
-    var h = "";
-    if (poses.length) {
+    var h = "", src = (r.sources && r.sources.length) ? r.sources.join(" et ") : "le module Culte";
+    if (poses.length || remplaces.length) {
       h += '<div style="background:#eef7f1;border-left:3px solid #1e7d52;border-radius:7px;padding:7px 11px;font-size:.73rem;color:#14532d">'
-         + "↪ Effectifs reportés depuis " + r.sources.join(" et ") + " : <strong>" + poses.join(" · ") + "</strong>. "
-         + "Corrigez librement : votre chiffre fait foi.</div>";
+         + "↪ Effectifs reportés depuis " + src + " : <strong>" + poses.concat(remplaces).join(" · ") + "</strong>. "
+         + (remplaces.length ? "Enregistrez le culte pour conserver la mise à jour."
+                             : "Corrigez librement : votre chiffre fait foi.") + "</div>";
     }
     if (gardes.length) {
-      h += '<div style="background:#fdf6e7;border-left:3px solid #e67e22;border-radius:7px;padding:7px 11px;font-size:.73rem;color:#8a5a00;margin-top:' + (poses.length ? "6px" : "0") + '">'
-         + "⚠ Écart avec le comptage — " + gardes.join(" ; ") + ". Votre saisie est conservée.</div>";
+      h += '<div style="background:#fdf6e7;border-left:3px solid #e67e22;border-radius:7px;padding:7px 11px;font-size:.73rem;color:#8a5a00;margin-top:' + ((poses.length || remplaces.length) ? "6px" : "0") + '">'
+         + "⚠ Écart avec le comptage — " + gardes.join(" ; ")
+         + ". Votre saisie est conservée ; le bouton ↗ Finances du module Culte la remplace si vous le voulez.</div>";
     }
     note.innerHTML = h;
     note.style.display = h ? "" : "none";
   }
 }
 
-function onDateChangeFin() {
+function onDateChangeFin(apres) {
+  function fini(d){
+    // Choisir une date n'est pas une saisie : ne pas marquer le formulaire
+    // modifie, sans quoi la sauvegarde automatique creerait un culte vide.
+    recalc();
+    if (apres) apres(d); else reporterEffectifsFin(d);
+  }
   var dateVal = (document.getElementById("meta-date")||{}).value || "";
   var recPh   = document.getElementById("fin-date-placeholder");
   var recZone = document.getElementById("fin-rubriques-zone");
@@ -29678,6 +29713,7 @@ function onDateChangeFin() {
         closeModal();
         _afficherRubriquesFin(); // Annulé : formulaire vierge pour un NOUVEAU culte à cette date
         modalAnnulerBtn.onclick = ancienOnclick; // Restaurer le comportement standard
+        fini(dateVal);
       };
     }
     showModal("Culte déjà enregistré",
@@ -29688,14 +29724,12 @@ function onDateChangeFin() {
         _afficherRubriquesFin();
         showToast("Culte du "+dateVal+" chargé.","ok");
         if(modalAnnulerBtn) modalAnnulerBtn.onclick = ancienOnclick;
+        fini(dateVal);
       });
-  } else {
-    _afficherRubriquesFin();
+    return;
   }
-  // Choisir une date n'est pas une saisie : ne pas marquer le formulaire
-  // modifie, sans quoi la sauvegarde automatique creerait un culte vide.
-  recalc();
-  reporterEffectifsFin(dateVal);
+  _afficherRubriquesFin();
+  fini(dateVal);
 }
 
 function _afficherRubriquesFin(){
