@@ -4412,9 +4412,10 @@ function switchModule(name) {
     // Initialiser avec une ligne vide si le formulaire est vierge
     if(gEBLignes.length===0) { setTimeout(function(){ ebAjouterLigne(); }, 100); }
   }
-  if (name === "projets") {
-    showProjTab("achat");
-  }
+  // Un premier bloc appelait ici showProjTab("achat") — fonction qui n'existe
+  // pas : la fonction s'appelle showTabProj. L'exception interrompait
+  // switchModule, et initProjets() comme applyProjTabVisibility(), appeles
+  // plus bas, n'etaient jamais atteints. Le bloc complet, plus loin, suffit.
   if (name === "social") {
     // Charger depuis Firebase d'abord, puis afficher
     loadSocDBFromFirebase(function(db) {
@@ -4587,25 +4588,165 @@ function newId() { gUid++; return "r" + gUid; }
 function fmt(n) {
   return parseFloat(n).toLocaleString("fr-FR", {minimumFractionDigits:2, maximumFractionDigits:2});
 }
+// Taux de travail : celui qui est affiche dans l'en-tete, et sous lequel la
+// piece en cours de saisie sera figee. Pour relire un enregistrement deja
+// fait, ce n'est jamais celui-la qu'il faut — voir tauxDe().
 function getTaux() { return parseFloat(document.getElementById("taux").value) || 2800; }
+
+// ══ BARÈME DU TAUX DE CHANGE ══════════════════════════════════
+// Le taux vivait dans le localStorage de chaque appareil : deux telephones
+// pouvaient tenir deux taux differents, et la meme recette ne donnait pas la
+// meme contre-valeur selon qui la saisissait. Le taux est une decision de
+// l'eglise, pas une preference d'appareil : il vit desormais dans
+// config/taux, partage, et date comme le bareme du loyer — une ligne par
+// decision, valable a partir de sa date d'effet.
+//
+// Deux consequences, et c'est tout l'objet du bareme :
+//   - relever le taux aujourd'hui ne reecrit plus le passe ;
+//   - un enregistrement ancien qui ne porte pas son taux est revalorise au
+//     taux de SA date, et non au taux du jour.
+var gBaremeTaux = [];
+
+function _normaliserBaremeTaux(b) {
+  if (!b || !b.length) return [];
+  var out = [];
+  for (var i = 0; i < b.length; i++) {
+    var e = b[i] || {};
+    var t = parseFloat(e.taux);
+    if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(e.depuis || "") || !(t > 0)) continue;
+    out.push({ depuis: e.depuis, taux: t });
+  }
+  out.sort(function(a, b2) { return a.depuis.localeCompare(b2.depuis); });
+  // Une seule ligne par date d'effet : la derniere saisie l'emporte.
+  var net = [];
+  for (var j = 0; j < out.length; j++) {
+    if (net.length && net[net.length - 1].depuis === out[j].depuis) net[net.length - 1] = out[j];
+    else net.push(out[j]);
+  }
+  return net;
+}
+
+// Taux en vigueur a une date donnee. Avant la premiere ligne du bareme, le
+// plus ancien taux connu reste la meilleure approximation : pour une piece de
+// 2023, le taux de 2024 vaut mieux que celui d'aujourd'hui.
+function tauxAuJour(date) {
+  var d = String(date || "").slice(0, 10);
+  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(d)) d = getTodayStr();
+  var ret = 0;
+  for (var i = 0; i < gBaremeTaux.length; i++) {
+    if (gBaremeTaux[i].depuis <= d) ret = gBaremeTaux[i].taux;
+  }
+  if (!ret && gBaremeTaux.length) ret = gBaremeTaux[0].taux;
+  if (!ret) {
+    var el = document.getElementById("taux");
+    ret = (el && parseFloat(el.value)) || 2800;
+  }
+  return ret;
+}
+
+// Taux d'un enregistrement : celui qu'il porte, sinon celui de sa date.
+// C'est le seul accesseur a utiliser pour relire une archive — getTaux()
+// revaloriserait tout l'historique a chaque changement de taux.
+function tauxDe(rec, dateRepli) {
+  var brut = null;
+  if (rec) {
+    if (rec.taux !== undefined && rec.taux !== null && rec.taux !== "") brut = rec.taux;
+    else if (rec.meta && rec.meta.taux !== undefined && rec.meta.taux !== null && rec.meta.taux !== "") brut = rec.meta.taux;
+  }
+  var t = parseFloat(brut);
+  if (t > 0) return t;
+  var d = dateRepli || (rec && (rec.date || (rec.meta && rec.meta.date))) || "";
+  return tauxAuJour(d);
+}
+
+// Contre-valeur CDF d'un enregistrement {cdf, usd, taux}.
+function eqCDF(rec, dateRepli) {
+  if (!rec) return 0;
+  return (parseFloat(rec.cdf) || 0) + (parseFloat(rec.usd) || 0) * tauxDe(rec, dateRepli);
+}
+
+function _ecrireBaremeTaux(cb) {
+  try { localStorage.setItem("ecc_bareme_taux", JSON.stringify(gBaremeTaux)); } catch (e) {}
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(false); return; }
+  gDb.collection("config").doc("taux").set({
+    bareme: gBaremeTaux,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedBy: gCurrentUser ? gCurrentUser.email : ""
+  }, { merge: true })
+    .then(function() { if (cb) cb(true); })
+    .catch(function() { if (cb) cb(false); });
+}
+
+function chargerBaremeTaux(cb) {
+  try {
+    var l = localStorage.getItem("ecc_bareme_taux");
+    if (l) { var p = _normaliserBaremeTaux(JSON.parse(l)); if (p.length) gBaremeTaux = p; }
+  } catch (e) {}
+  // Reprise de l'ancien reglage par appareil : il devient la premiere ligne
+  // du bareme, datee d'aujourd'hui. Etant la seule ligne, elle vaut aussi
+  // pour les dates anterieures — rien ne change tant qu'aucune ligne datee
+  // n'est ajoutee.
+  if (!gBaremeTaux.length) {
+    try {
+      var anc = parseFloat(localStorage.getItem("ecc_admin_taux"));
+      if (anc > 0) gBaremeTaux = [{ depuis: getTodayStr(), taux: anc }];
+    } catch (e) {}
+  }
+  if (!IS_CONFIGURED || !gDb) { if (cb) cb(); return; }
+  gDb.collection("config").doc("taux").get()
+    .then(function(doc) {
+      var d = (doc.exists && doc.data()) || null;
+      var dist = d ? _normaliserBaremeTaux(d.bareme) : [];
+      // Un bareme distant vide ne doit pas effacer celui de l'appareil.
+      if (dist.length) {
+        gBaremeTaux = dist;
+        try { localStorage.setItem("ecc_bareme_taux", JSON.stringify(gBaremeTaux)); } catch (e) {}
+      }
+      if (cb) cb();
+    })
+    .catch(function() { if (cb) cb(); });
+}
+
+// Pose la ligne du jour. C'est ce que fait la saisie dans l'en-tete : le taux
+// tape devient la decision du jour, partagee avec tout le monde, et sans
+// effet sur les dates anterieures.
+function _poserLigneTaux(taux, depuis, cb) {
+  var liste = gBaremeTaux.filter(function(e) { return e.depuis !== depuis; });
+  liste.push({ depuis: depuis, taux: taux });
+  gBaremeTaux = _normaliserBaremeTaux(liste);
+  _ecrireBaremeTaux(cb);
+}
 
 function adminSaveTaux() {
   if(!gCurrentUser || gCurrentUser.role !== "admin") return;
-  var val = document.getElementById("taux").value;
-  if(val && parseFloat(val) > 0) {
-    try { localStorage.setItem("ecc_admin_taux", val); } catch(e) {}
-  }
+  var val = parseFloat(document.getElementById("taux").value);
+  if (!(val > 0)) { recalc(); return; }
+  var aujourd = getTodayStr();
+  var avant = tauxAuJour(aujourd);
+  window.__tauxPose = val;
+  _poserLigneTaux(val, aujourd, function(sync) {
+    if (typeof logAudit === "function" && val !== avant) {
+      logAudit("CONFIG", "Taux", "Taux de change : " + val + " FC / USD \u00e0 partir du " + aujourd
+        + " (pr\u00e9c\u00e9dent " + avant + ")");
+    }
+    if (!sync && IS_CONFIGURED && gDb) {
+      showToast("Taux enregistr\u00e9 sur cet appareil, pas encore synchronis\u00e9.", "warn");
+    }
+    // Rafraichir la carte du bareme, mais seulement si l'ecran Administration
+    // est ouvert : renderAdmin() relit les comptes au serveur.
+    if (typeof renderAdmin === "function" && gCurrentModule === "admin") renderAdmin();
+  });
   recalc();
 }
 
 function restoreAdminTaux() {
-  try {
-    var saved = localStorage.getItem("ecc_admin_taux");
-    if(saved && parseFloat(saved) > 0) {
-      var el = document.getElementById("taux");
-      if(el) el.value = saved;
-    }
-  } catch(e) {}
+  var el = document.getElementById("taux");
+  if (!el) return;
+  // Le bareme arrive du serveur apres le lancement : ne pas ecraser un taux
+  // tape entre-temps.
+  if (window.__tauxPose != null && String(el.value) !== String(window.__tauxPose)) return;
+  var t = tauxAuJour(getTodayStr());
+  if (t > 0) { el.value = t; window.__tauxPose = t; }
 }
 
 function lockTauxIfNeeded() {
@@ -6049,6 +6190,18 @@ function runValidation() {
   if(rTotal>0 && dTotal===0) warnings.push("Aucune depense saisie. Avez-vous injecte les depenses depuis la Distribution ?");
   if(cf.cdf===0&&cf.usd===0)warnings.push("Aucune recette CF.");
   if(cl.cdf===0&&cl.usd===0)warnings.push("Aucune recette CL.");
+  // Le taux de l'en-tete est fige dans la piece : s'il ne correspond pas au
+  // bareme a la date du culte, c'est la contre-valeur de toute la journee qui
+  // part de travers. On signale, sans corriger : seul l'administrateur
+  // tranche, et un taux different peut etre volontaire.
+  if (date && (cf.usd + cl.usd + cm.usd + fr.usd + co.usd + ot.usd) > 0 && gBaremeTaux.length) {
+    var _tBar = tauxAuJour(date);
+    if (_tBar > 0 && Math.abs(_tBar - t) > 0.009) {
+      warnings.push("Taux saisi " + fmt(t) + " FC, alors que le bar\u00e8me donne "
+        + fmt(_tBar) + " FC au " + _jourFr(date) + ". Les montants en dollars de cette pi\u00e8ce "
+        + "seront fig\u00e9s au taux saisi.");
+    }
+  }
 
   // ── Trésorerie : le disponible du jour, ce n'est pas la recette du jour ────
   // Une journée peut légitimement dépenser plus qu'elle n'encaisse : le solde
@@ -7016,7 +7169,7 @@ function getBases(){
 // Dîmes d'un culte déjà archivé, lues comme le module États les lit : même
 // repérage de ligne, même arrondi. Les deux écrans doivent dire le même chiffre.
 function _dimesCulteArchive(h) {
-  var taux = parseFloat(h && h.meta && h.meta.taux) || getTaux(), tot = 0;
+  var taux = tauxDe(h), tot = 0;
   ["cf", "cl"].forEach(function(k) {
     ((h && h[k]) || []).forEach(function(r) {
       if (!r) return;
@@ -7383,7 +7536,7 @@ function autoFillSoldeReporte(callback) {
     });
     var last = sorted[0];
     var s = last.sums || {};
-    var t = parseFloat((last.meta&&last.meta.taux)||getTaux());
+    var t = tauxDe(last);
     var repCDF = parseFloat(last.meta&&last.meta.repCDF) || 0;
     var repUSD = parseFloat(last.meta&&last.meta.repUSD) || 0;
     var fCDF = (s.nCDF||0) + repCDF;
@@ -7928,7 +8081,7 @@ function _controleLoyerDonnees() {
   (gHistCache || []).forEach(function(h) {
     var d = (h && h.meta && h.meta.date) || "";
     if (!d) return;
-    var taux = parseFloat(h.meta && h.meta.taux) || getTaux(), tot = 0;
+    var taux = tauxDe(h), tot = 0;
     ["cf", "cl"].forEach(function(k) {
       (h[k] || []).forEach(function(r) {
         if (!r) return;
@@ -7995,7 +8148,7 @@ function _carteControleLoyer() {
     var ecartRecette = e.collecte - e.b7;
     var retard = _loyerEnRetard(e);
     var bar = _loyerDu(e.ym);
-    var taux = e.taux || getTaux();
+    var taux = e.taux || tauxAuJour(e.dateTaux || (e.ym ? e.ym + "-15" : ""));
 
     // Tout est ramene a la devise du bail. Un loyer libelle en dollars n'est
     // pas regle parce qu'on a sorti des francs : il l'est quand l'equivalent
@@ -9785,7 +9938,7 @@ function _construireJournalSycebnl(exercice) {
 
   hist.forEach(function(h) {
     var date = (h.meta && h.meta.date) || "";
-    var taux = parseFloat(h.meta && h.meta.taux) || getTaux();
+    var taux = tauxDe(h);
     piece++;
     // La reference de la piece est celle attribuee a l'enregistrement du culte.
     // Repli sur un rang d'export pour les cultes anterieurs a la numerotation :
@@ -9840,7 +9993,7 @@ function _balanceSycebnl(lignes) {
 function _tresorerieExercice(hist) {
   if (!hist.length) return { ouverture: 0, cloture: 0 };
   function eq(h, cdf, usd) {
-    var t = parseFloat(h.meta && h.meta.taux) || getTaux();
+    var t = tauxDe(h);
     return (parseFloat(cdf) || 0) + (parseFloat(usd) || 0) * t;
   }
   var pre = hist[0], der = hist[hist.length - 1];
@@ -10010,7 +10163,7 @@ function _carteClotures() {
     if (!parMois[ym]) parMois[ym] = { n: 0, net: 0 };
     parMois[ym].n++;
     var sm = hist[i].sums || {};
-    var tx = parseFloat(hist[i].meta && hist[i].meta.taux) || getTaux();
+    var tx = tauxDe(hist[i]);
     parMois[ym].net += (sm.nCDF || 0) + (sm.nUSD || 0) * tx;
   }
   // Les mois clôturés sans culte doivent rester visibles pour être rouverts.
@@ -10055,7 +10208,7 @@ var ADM_FAMILLES = [
   { cle:"acces",  titre:"Comptes et accès",
     motifs:["comptes utilisateurs","historique des acc","sessions actives","santé des permissions","rôles côté serveur","journal d'audit"] },
   { cle:"compta", titre:"Contrôles comptables",
-    motifs:["clôture de période","couverture du registre","rapprochement cotisations","séquence des pièces","sycebnl","barème des cotisations","états comptables","contrôle du loyer"] },
+    motifs:["clôture de période","couverture du registre","rapprochement cotisations","séquence des pièces","sycebnl","barème des cotisations","barème du taux","états comptables","contrôle du loyer"] },
   { cle:"etats",  titre:"États et données",
     motifs:["tableau de bord","rapport financier","export global","actions"] },
   { cle:"maint",  titre:"Maintenance des données",
@@ -10239,6 +10392,7 @@ function renderAdmin(){
   html+="</div>";
 
   html += _carteBareme();
+  html += _carteBaremeTaux();
 
   html+="<div class='sec-lbl'>Comptes Utilisateurs</div>";
   html+="<table class='comptes-table' style='width:100%;border-collapse:collapse;font-size:.79rem;margin-top:5px;margin-bottom:12px'>";
@@ -11153,6 +11307,98 @@ function saveAppTitles() {
   try{ localStorage.setItem("ecc_app_title", t); localStorage.setItem("ecc_app_sub", s); }catch(e){}
   applyTitlesToHeader(t, s);
   showToast("Titres mis a jour !", "ok");
+}
+
+
+// ══ CARTE DU BARÈME DU TAUX DE CHANGE ════════════════════════════
+// Le taux de l'en-tete pose la ligne du jour. Cette carte sert a ce que
+// l'en-tete ne sait pas faire : renseigner un taux passe, pour que les
+// enregistrements anciens qui ne portent pas leur taux soient revalorises au
+// taux de leur date, et non a celui d'aujourd'hui.
+function _carteBaremeTaux() {
+  var aujourd = getTodayStr();
+  var h = "<div class=\'sec-lbl\'>Bar\u00e8me du taux de change</div>";
+  h += "<div style=\'background:#f7fafd;border-radius:9px;border:1px solid #c5d8ed;padding:12px;margin-bottom:12px\'>";
+  h += "<div style=\'font-size:.73rem;color:#6b88a4;margin-bottom:10px;line-height:1.5\'>"
+     + "Le taux est une d\u00e9cision de l\u2019\u00e9glise, partag\u00e9e par tous les appareils, et <strong>dat\u00e9e</strong> : "
+     + "chaque ligne vaut \u00e0 partir du jour indiqu\u00e9, jusqu\u2019\u00e0 la suivante. Le relever aujourd\u2019hui "
+     + "ne touche donc pas aux pi\u00e8ces d\u00e9j\u00e0 enregistr\u00e9es. "
+     + "Chaque pi\u00e8ce, chaque versement et chaque session fige son propre taux \u00e0 l\u2019enregistrement ; "
+     + "le bar\u00e8me ne sert qu\u2019\u00e0 ceux qui n\u2019en portent pas \u2014 les enregistrements ant\u00e9rieurs \u00e0 cette "
+     + "mise \u00e0 jour. <strong>Renseignez ici les taux pass\u00e9s</strong> et ils seront revaloris\u00e9s au taux de leur date."
+     + "</div>";
+  h += "<div style=\'overflow-x:auto\'><table class=\'cotis-table bar-table\' style=\'min-width:360px\'><thead><tr>"
+     + "<th style=\'width:150px\'>\u00c0 partir du</th><th>1 USD = ? FC</th><th style=\'width:38px\'></th>"
+     + "</tr></thead><tbody>";
+  if (!gBaremeTaux.length) {
+    h += "<tr><td colspan=\'3\' style=\'text-align:center;color:var(--muted);font-size:.75rem;padding:12px\'>"
+       + "Aucune ligne. Le taux affich\u00e9 dans l\u2019en-t\u00eate s\u2019appliquera \u00e0 tout l\u2019historique "
+       + "qui ne porte pas son taux.</td></tr>";
+  } else {
+    for (var i = 0; i < gBaremeTaux.length; i++) {
+      var b = gBaremeTaux[i];
+      var fin = (i + 1 < gBaremeTaux.length) ? gBaremeTaux[i + 1].depuis : "";
+      var cour = b.depuis <= aujourd && !fin;
+      h += "<tr" + (cour ? " style=\'background:#eef4fb\'" : "") + ">"
+         + "<td data-lbl=\'\u00c0 partir du\'>" + _jourFr(b.depuis)
+         + (fin ? "<span style=\'font-size:.66rem;color:var(--muted)\'> \u2192 " + _jourFr(fin) + "</span>"
+                : "<span style=\'font-size:.66rem;color:#1e7d52;font-weight:700\'> \u00b7 en vigueur</span>") + "</td>"
+         + "<td data-lbl=\'Taux\' style=\'font-family:DM Mono,monospace;font-weight:700\'>" + fmt(b.taux) + " FC</td>"
+         + "<td style=\'text-align:center\'><button class=\'btn btn-sm btn-d\' style=\'padding:2px 7px\' "
+         + "onclick=\'supprimerLigneTaux(\"" + b.depuis + "\")\'>\u00d7</button></td></tr>";
+    }
+  }
+  h += "</tbody></table></div>";
+  h += "<div style=\'display:flex;gap:7px;flex-wrap:wrap;align-items:flex-end;margin-top:10px\'>"
+     + "<div class=\'fg\' style=\'margin:0\'><label style=\'font-size:.64rem\'>\u00c0 partir du</label>"
+     + "<input type=\'date\' id=\'bt-depuis\' value=\'" + aujourd + "\' style=\'width:150px\'></div>"
+     + "<div class=\'fg\' style=\'margin:0\'><label style=\'font-size:.64rem\'>1 USD = ? FC</label>"
+     + "<input type=\'number\' id=\'bt-taux\' step=\'0.01\' min=\'1\' value=\'" + tauxAuJour(aujourd) + "\' style=\'width:110px\'></div>"
+     + "<button class=\'btn btn-g btn-sm\' onclick=\'enregistrerLigneTaux()\'>Ajouter la p\u00e9riode</button>"
+     + "</div>";
+  h += "</div>";
+  return h;
+}
+
+function _jourFr(d) {
+  var p = String(d || "").split("-");
+  if (p.length !== 3) return String(d || "");
+  return p[2] + "/" + p[1] + "/" + p[0];
+}
+
+function enregistrerLigneTaux() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l\u2019administrateur.", "err"); return; }
+  var t  = parseFloat((document.getElementById("bt-taux") || {}).value);
+  var dp = (document.getElementById("bt-depuis") || {}).value || "";
+  if (!(t > 0)) { showToast("Saisissez un taux.", "err"); return; }
+  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(dp)) { showToast("Date d\u2019effet invalide.", "err"); return; }
+  _poserLigneTaux(t, dp, function(sync) {
+    if (typeof logAudit === "function") {
+      logAudit("CONFIG", "Taux", "Bar\u00e8me du taux : 1 USD = " + t + " FC \u00e0 partir du " + dp);
+    }
+    showToast(sync ? "Taux du " + _jourFr(dp) + " enregistr\u00e9 et synchronis\u00e9."
+                   : "Taux enregistr\u00e9 sur cet appareil, pas encore synchronis\u00e9.",
+              sync ? "ok" : "warn");
+    restoreAdminTaux();
+    renderAdmin();
+  });
+}
+
+function supprimerLigneTaux(depuis) {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l\u2019administrateur.", "err"); return; }
+  showModal("Retirer le taux du " + _jourFr(depuis) + " ?",
+    "Les enregistrements de cette p\u00e9riode qui ne portent pas leur propre taux "
+    + "repasseront au taux de la p\u00e9riode pr\u00e9c\u00e9dente.",
+    function() {
+      closeModal();
+      gBaremeTaux = gBaremeTaux.filter(function(e) { return e.depuis !== depuis; });
+      _ecrireBaremeTaux(function() {
+        if (typeof logAudit === "function") logAudit("CONFIG", "Taux", "Bar\u00e8me du taux : ligne du " + depuis + " retir\u00e9e");
+        restoreAdminTaux();
+        renderAdmin();
+        showToast("Ligne retir\u00e9e.", "warn");
+      });
+    });
 }
 
 // ══ CARTE DU BARÈME DES COTISATIONS ════════════════════════════════════════
@@ -14662,6 +14908,10 @@ function launchApp() {
   chargerClotures();
   chargerSycebnl();
   chargerBareme();
+  chargerBaremeTaux(function() {
+    restoreAdminTaux();
+    if (typeof recalc === "function") recalc();
+  });
   chargerReports();
   chargerExercicesClos();
   chargerBudgetPostes();
@@ -15941,6 +16191,9 @@ function renderBilanSem() {
   // Cumul de TOUTES les sessions enregistrées (pas le formulaire en cours)
   var sessions = (SEMDB && SEMDB.sessions) ? SEMDB.sessions : [];
   var totRecCDF=0, totRecUSD=0, totDepCDF=0, totDepUSD=0, totPart=0, totOra=0;
+  // Chaque session est ramenee en francs au taux qu'elle porte, pas au taux
+  // du jour : le cumul ne bouge plus quand le taux change.
+  var recEq=0, depEq=0, tauxMultiples=false, tauxVu=null;
   for(var i=0;i<sessions.length;i++){
     var s=sessions[i];
     totRecCDF += parseFloat(s.recCDF)||0;
@@ -15949,10 +16202,13 @@ function renderBilanSem() {
     totDepUSD += parseFloat(s.depUSD)||0;
     totPart   += parseInt(s.participants)||0;
     totOra    += parseInt(s.orateurs)||0;
+    var ts = tauxDe(s, s.date);
+    recEq += (parseFloat(s.recCDF)||0) + (parseFloat(s.recUSD)||0)*ts;
+    depEq += (parseFloat(s.depCDF)||0) + (parseFloat(s.depUSD)||0)*ts;
+    if (tauxVu !== null && ts !== tauxVu) tauxMultiples = true;
+    tauxVu = ts;
   }
   var t=getTaux();
-  var recEq = totRecCDF + totRecUSD*t;
-  var depEq = totDepCDF + totDepUSD*t;
   var soldeEq = recEq - depEq;
 
   var html="<div class='mgrid'>";
@@ -15964,11 +16220,17 @@ function renderBilanSem() {
   html+="<div class='stat'><div class='stat-lbl'>Orateurs cumules</div><div class='stat-val'>"+totOra+"</div></div>";
   html+="</div>";
   if(totRecUSD>0||totDepUSD>0){
-    html+="<div style='font-size:.7rem;color:var(--muted);margin-top:6px'>Detail devises : Recettes "+fmt(totRecCDF)+" FC + "+fmt(totRecUSD)+" USD | Depenses "+fmt(totDepCDF)+" FC + "+fmt(totDepUSD)+" USD | Taux 1 USD = "+fmt(t)+" FC</div>";
+    html+="<div style='font-size:.7rem;color:var(--muted);margin-top:6px'>Detail devises : Recettes "+fmt(totRecCDF)+" FC + "+fmt(totRecUSD)+" USD | Depenses "+fmt(totDepCDF)+" FC + "+fmt(totDepUSD)+" USD | "
+      +(tauxMultiples?"Chaque session est convertie au taux de son enregistrement":"Taux 1 USD = "+fmt(tauxVu||t)+" FC")+"</div>";
   }
   var info=document.getElementById("sem-bilan-info");
   if(info) info.innerHTML=html;
 }
+
+// Une session rechargee pour correction doit garder le taux sous lequel elle
+// a ete enregistree : la recapturer au taux du jour changerait sa
+// contre-valeur sans que personne ne l'ait decide.
+var gSemTauxCharge = null;
 
 function captureSemState() {
   var rows=document.getElementById("sem-rec-rows");
@@ -15993,9 +16255,14 @@ function captureSemState() {
   }
   var rec=sumRowsSem("sem-rec-rows");
   var dep=sumRowsSem("sem-dep-rows");
+  // Le taux est fige a l'enregistrement : sans lui, le bilan du module
+  // revalorisait toute l'histoire du seminaire au taux du jour, et le total
+  // bougeait chaque fois que le taux changeait.
+  var _dte=(document.getElementById("sem-date")||{}).value||getTodayStr();
+  var _tx=(gSemTauxCharge && gSemTauxCharge.date===_dte) ? gSemTauxCharge.taux : getTaux();
   return {
     id:"sem"+Date.now(),
-    date:(document.getElementById("sem-date")||{}).value||getTodayStr(),
+    date:_dte,
     titre:(document.getElementById("sem-titre")||{}).value||"",
     lieu:(document.getElementById("sem-lieu")||{}).value||"",
     resp:(document.getElementById("sem-resp")||{}).value||"",
@@ -16003,6 +16270,7 @@ function captureSemState() {
     orateurs:parseInt((document.getElementById("sem-orateurs")||{}).value)||0,
     recCDF:rec.cdf, recUSD:rec.usd,
     depCDF:dep.cdf, depUSD:dep.usd,
+    taux:_tx,
     recettes:recRows, depenses:depRows,
     savedAt:getTodayStr()
   };
@@ -16036,6 +16304,7 @@ function saveSessionSem() {
 
 // Réinitialise le formulaire de saisie du séminaire (sans toucher à l'historique)
 function resetSemForm() {
+  gSemTauxCharge = null;
   var setVal=function(id,v){var e=document.getElementById(id);if(e)e.value=v||"";};
   setVal("sem-date",getTodayStr());
   setVal("sem-titre","");
@@ -16050,14 +16319,14 @@ function resetSemForm() {
 // Impression de l'historique des séminaires
 function printHistSem() {
   if(!SEMDB.sessions.length){ showToast("Aucun seminaire a imprimer.","warn"); return; }
-  var t = getTaux();
   var rows = "";
-  var totRecCDF=0, totDepCDF=0, totRecUSD=0, totDepUSD=0;
+  var totRecCDF=0, totDepCDF=0, totRecUSD=0, totDepUSD=0, soldeTotal=0;
   // Trier par date décroissante
   var sorted = SEMDB.sessions.slice().sort(function(a,b){ return (b.date||"").localeCompare(a.date||""); });
   for(var i=0;i<sorted.length;i++){
     var s = sorted[i];
-    var solde = (s.recCDF-s.depCDF)+(s.recUSD-s.depUSD)*t;
+    var solde = (s.recCDF-s.depCDF)+(s.recUSD-s.depUSD)*tauxDe(s, s.date);
+    soldeTotal += solde;
     totRecCDF += s.recCDF||0; totDepCDF += s.depCDF||0;
     totRecUSD += s.recUSD||0; totDepUSD += s.depUSD||0;
     var sCls = solde>=0 ? "color:#15803d" : "color:#b91c1c;font-weight:700";
@@ -16072,7 +16341,6 @@ function printHistSem() {
     rows += "<td style='text-align:right;"+sCls+"'>"+fmt(solde)+"</td>";
     rows += "</tr>";
   }
-  var soldeTotal = (totRecCDF-totDepCDF)+(totRecUSD-totDepUSD)*t;
   var win = _fenetreImpression("width=1000,height=750"); if(!win) return;
   win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Historique des Seminaires</title>");
   win.document.write("<style>"+getPrintCSS()+"</style></head><body>");
@@ -16086,7 +16354,7 @@ function printHistSem() {
   win.document.write("<table><thead><tr><th>Date</th><th>Titre</th><th>Responsable</th><th>Lieu</th><th>Particip.</th><th>Recettes CDF</th><th>Depenses CDF</th><th>Solde CDF</th></tr></thead><tbody>");
   win.document.write(rows);
   win.document.write("</tbody></table>");
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Historique Seminaires genere le "+new Date().toLocaleDateString("fr-FR")+" | Taux : 1 USD = "+t+" CDF</div>");
+  win.document.write("<div class='footer'>ECC Kingasani 2 — Historique Seminaires genere le "+new Date().toLocaleDateString("fr-FR")+" | Chaque session est convertie au taux de son enregistrement</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>🖨️ Imprimer / PDF</button></div>");
   win.document.write("</body></html>");
   win.document.close();
@@ -16196,10 +16464,9 @@ function renderHistSem() {
   var badge=document.getElementById("sem-hist-count");
   if(badge) badge.textContent=SEMDB.sessions.length;
   var html="";
-  var t=getTaux();
   for(var i=0;i<SEMDB.sessions.length;i++){
     var s=SEMDB.sessions[i];
-    var solde=(s.recCDF-s.depCDF)+(s.recUSD-s.depUSD)*t;
+    var solde=(s.recCDF-s.depCDF)+(s.recUSD-s.depUSD)*tauxDe(s, s.date);
     var cls=solde>=0?"hi-pos":"hi-neg";
     html+="<div class='hist-item'>";
     html+="<div class='hi-date'>"+escH(s.date||"-")+(s.titre?" - "+escH(s.titre):"")+"</div>";
@@ -16217,6 +16484,7 @@ function renderHistSem() {
 
 function loadSessionSem(i) {
   var s=SEMDB.sessions[i]; if(!s) return;
+  gSemTauxCharge = (parseFloat(s.taux)>0) ? { date:s.date, taux:parseFloat(s.taux) } : null;
   var setVal=function(id,v){var e=document.getElementById(id);if(e)e.value=v||"";};
   setVal("sem-date",s.date);
   setVal("sem-titre",s.titre);
@@ -16442,6 +16710,9 @@ function renderBilanEco() {
   if(info) info.innerHTML=html;
 }
 
+// Meme regle que pour le seminaire : une seance rechargee garde son taux.
+var gEcoTauxCharge = null;
+
 function captureEcoState() {
   var rows=document.getElementById("eco-rec-rows");
   var drws=document.getElementById("eco-dep-rows");
@@ -16465,9 +16736,11 @@ function captureEcoState() {
   }
   var rec=sumRowsEco("eco-rec-rows");
   var dep=sumRowsEco("eco-dep-rows");
+  var _dte=(document.getElementById("eco-date")||{}).value||getTodayStr();
+  var _tx=(gEcoTauxCharge && gEcoTauxCharge.date===_dte) ? gEcoTauxCharge.taux : getTaux();
   return {
     id:"eco"+Date.now(),
-    date:(document.getElementById("eco-date")||{}).value||getTodayStr(),
+    date:_dte,
     titre:(document.getElementById("eco-titre")||{}).value||"",
     lieu:(document.getElementById("eco-lieu")||{}).value||"",
     resp:(document.getElementById("eco-resp")||{}).value||"",
@@ -16476,6 +16749,7 @@ function captureEcoState() {
     moniteurs:parseInt((document.getElementById("eco-moniteurs")||{}).value)||0,
     recCDF:rec.cdf, recUSD:rec.usd,
     depCDF:dep.cdf, depUSD:dep.usd,
+    taux:_tx,
     recettes:recRows, depenses:depRows,
     savedAt:getTodayStr()
   };
@@ -16506,6 +16780,7 @@ function saveSessionEco() {
 
 // Réinitialise le formulaire de saisie du séminaire (sans toucher à l'historique)
 function resetEcoForm() {
+  gEcoTauxCharge = null;
   var setVal=function(id,v){var e=document.getElementById(id);if(e)e.value=v||"";};
   setVal("eco-date",getTodayStr());
   setVal("eco-titre","");
@@ -16521,14 +16796,14 @@ function resetEcoForm() {
 // Impression de l'historique des séminaires
 function printHistEco() {
   if(!ECODB.sessions.length){ showToast("Aucun ecodim a imprimer.","warn"); return; }
-  var t = getTaux();
   var rows = "";
-  var totRecCDF=0, totDepCDF=0, totRecUSD=0, totDepUSD=0;
+  var totRecCDF=0, totDepCDF=0, totRecUSD=0, totDepUSD=0, soldeTotal=0;
   // Trier par date décroissante
   var sorted = ECODB.sessions.slice().sort(function(a,b){ return (b.date||"").localeCompare(a.date||""); });
   for(var i=0;i<sorted.length;i++){
     var s = sorted[i];
-    var solde = (s.recCDF-s.depCDF)+(s.recUSD-s.depUSD)*t;
+    var solde = (s.recCDF-s.depCDF)+(s.recUSD-s.depUSD)*tauxDe(s, s.date);
+    soldeTotal += solde;
     totRecCDF += s.recCDF||0; totDepCDF += s.depCDF||0;
     totRecUSD += s.recUSD||0; totDepUSD += s.depUSD||0;
     var sCls = solde>=0 ? "color:#15803d" : "color:#b91c1c;font-weight:700";
@@ -16545,7 +16820,6 @@ function printHistEco() {
     rows += "<td style='text-align:right;"+sCls+"'>"+fmt(solde)+"</td>";
     rows += "</tr>";
   }
-  var soldeTotal = (totRecCDF-totDepCDF)+(totRecUSD-totDepUSD)*t;
   var win = _fenetreImpression("width=1000,height=750"); if(!win) return;
   win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Historique des ECODIMs</title>");
   win.document.write("<style>"+getPrintCSS()+"</style></head><body>");
@@ -16559,7 +16833,7 @@ function printHistEco() {
   win.document.write("<table><thead><tr><th>Date</th><th>Titre</th><th>Responsable</th><th>Lieu</th><th>Enfants</th><th>Monit.</th><th>Recettes CDF</th><th>Depenses CDF</th><th>Solde CDF</th></tr></thead><tbody>");
   win.document.write(rows);
   win.document.write("</tbody></table>");
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Historique ECODIMs genere le "+new Date().toLocaleDateString("fr-FR")+" | Taux : 1 USD = "+t+" CDF</div>");
+  win.document.write("<div class='footer'>ECC Kingasani 2 — Historique ECODIMs genere le "+new Date().toLocaleDateString("fr-FR")+" | Chaque seance est convertie au taux de son enregistrement</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>🖨️ Imprimer / PDF</button></div>");
   win.document.write("</body></html>");
   win.document.close();
@@ -16687,10 +16961,9 @@ function renderHistEco() {
   var badge=document.getElementById("eco-hist-count");
   if(badge) badge.textContent=ECODB.sessions.length;
   var html="";
-  var t=getTaux();
   for(var i=0;i<ECODB.sessions.length;i++){
     var s=ECODB.sessions[i];
-    var solde=(s.recCDF-s.depCDF)+(s.recUSD-s.depUSD)*t;
+    var solde=(s.recCDF-s.depCDF)+(s.recUSD-s.depUSD)*tauxDe(s, s.date);
     var cls=solde>=0?"hi-pos":"hi-neg";
     html+="<div class='hist-item'>";
     html+="<div class='hi-date'>"+escH(s.date||"-")+(s.titre?" - "+escH(s.titre):"")+"</div>";
@@ -16709,6 +16982,7 @@ function renderHistEco() {
 
 function loadSessionEco(i) {
   var s=ECODB.sessions[i]; if(!s) return;
+  gEcoTauxCharge = (parseFloat(s.taux)>0) ? { date:s.date, taux:parseFloat(s.taux) } : null;
   var setVal=function(id,v){var e=document.getElementById(id);if(e)e.value=v||"";};
   setVal("eco-date",s.date);
   setVal("eco-titre",s.titre);
@@ -16818,13 +17092,13 @@ function exportEcoHistCSV() {
 }
 
 function exportEcoHistXLS() {
-  var t = getTaux();
   var h = "<table border='1'>";
   h += "<tr style='background:#002F6B;color:white;font-size:14pt;font-weight:bold'><td colspan='10'>HISTORIQUE ECODIMS - ECC KINGASANI 2</td></tr>";
   h += "<tr style='background:#eef4fb;font-weight:bold'><td>Date</td><td>Intitule</td><td>Lieu</td><td>Responsable</td><td>Participants</td><td>Rec. CDF</td><td>Rec. USD</td><td>Dep. CDF</td><td>Dep. USD</td><td>Solde CDF</td></tr>";
   var totRec=0,totDep=0;
   for(var i=0;i<ECODB.sessions.length;i++){
     var s=ECODB.sessions[i];
+    var t=tauxDe(s, s.date);
     var solde=(s.recCDF-s.depCDF)+(s.recUSD-s.depUSD)*t;
     var bg=solde>=0?"#e8f5ee":"#fdf0ee";
     h += "<tr style='background:"+bg+"'><td>"+(s.date||"")+"</td><td>"+(s.titre||"")+"</td><td>"+(s.lieu||"")+"</td><td>"+(s.resp||"")+"</td><td>"+s.participants+"</td><td>"+s.recCDF+"</td><td>"+s.recUSD+"</td><td>"+s.depCDF+"</td><td>"+s.depUSD+"</td><td>"+Math.round(solde)+"</td></tr>";
@@ -17070,13 +17344,13 @@ function exportSemHistCSV() {
 }
 
 function exportSemHistXLS() {
-  var t = getTaux();
   var h = "<table border='1'>";
   h += "<tr style='background:#002F6B;color:white;font-size:14pt;font-weight:bold'><td colspan='10'>HISTORIQUE SEMINAIRES - ECC KINGASANI 2</td></tr>";
   h += "<tr style='background:#eef4fb;font-weight:bold'><td>Date</td><td>Intitule</td><td>Lieu</td><td>Responsable</td><td>Participants</td><td>Rec. CDF</td><td>Rec. USD</td><td>Dep. CDF</td><td>Dep. USD</td><td>Solde CDF</td></tr>";
   var totRec=0,totDep=0;
   for(var i=0;i<SEMDB.sessions.length;i++){
     var s=SEMDB.sessions[i];
+    var t=tauxDe(s, s.date);
     var solde=(s.recCDF-s.depCDF)+(s.recUSD-s.depUSD)*t;
     var bg=solde>=0?"#e8f5ee":"#fdf0ee";
     h += "<tr style='background:"+bg+"'><td>"+(s.date||"")+"</td><td>"+(s.titre||"")+"</td><td>"+(s.lieu||"")+"</td><td>"+(s.resp||"")+"</td><td>"+s.participants+"</td><td>"+s.recCDF+"</td><td>"+s.recUSD+"</td><td>"+s.depCDF+"</td><td>"+s.depUSD+"</td><td>"+Math.round(solde)+"</td></tr>";
@@ -18302,7 +18576,7 @@ function renderProjSub(type) {
   var typeLabels={achat:"Achats",travaux:"Travaux",mo:"Main d'œuvre"};
   var total=0, totalNonInj=0, countNonInj=0;
   for(var j=0;j<lignes.length;j++){
-    var lEq = (parseFloat(lignes[j].cdf)||0) + (parseFloat(lignes[j].usd)||0)*(lignes[j].taux||getTaux());
+    var lEq = eqCDF(lignes[j]);
     total += lEq;
     if(!lignes[j].injecte){ totalNonInj += lEq; countNonInj++; }
   }
@@ -18327,7 +18601,7 @@ function renderProjSub(type) {
             ? "<span style='color:#1e7d52;font-weight:700'>✓ Injecté</span>"
             : "<span style='color:#e67e22;font-weight:700'>⚠️ Injecté (culte non sauvegardé)</span>")
         : "<span style='color:#f0a500'>En attente</span>";
-      var montantCDF = (l.cdf||0) + (l.usd||0)*(l.taux||getTaux());
+      var montantCDF = eqCDF(l);
       html+="<tr style='border-bottom:1px solid #eef2f6'>";
       html+="<td style='padding:6px 8px'>"+escH(l.date||"")+"</td>";
       html+="<td style='padding:6px 8px'>"+escH(l.lib)+(l.qte&&l.qte>1?"<span style='font-size:.72rem;color:#6b88a4;margin-left:4px'>×"+l.qte+"</span>":"")+"</td>";
@@ -18390,7 +18664,7 @@ function delProjSub(type, ligneId) {
   (proj.sublignes||[]).forEach(function(l){ if(l.id===ligneId) ligne=l; });
   if(!ligne){ showToast("Ligne introuvable.","err"); return; }
 
-  var eq = (parseFloat(ligne.cdf)||0) + (parseFloat(ligne.usd)||0)*(ligne.taux||getTaux());
+  var eq = eqCDF(ligne);
   var portee = !!(ligne.injecte && ligne.injecteSave);
   showModal("Supprimer cette ligne ?",
     "\u00ab\u00a0" + (ligne.lib||"") + "\u00a0\u00bb \u2014 " + fmt(eq) + " FC, du " + (ligne.date||"?")
@@ -18545,24 +18819,25 @@ function _jaugeBudgetProjet(proj) {
   return h + "</div>";
 }
 
+// Budget : au taux retenu quand il a ete arrete. Recettes et depenses :
+// chacune au taux de son enregistrement. Sans cela, l'engagement d'un projet
+// changeait de pourcentage a chaque mouvement du taux.
 function getProjBudgetEq(proj) {
-  var t = getTaux();
+  var t = parseFloat(proj && proj.tauxBudget) > 0
+        ? parseFloat(proj.tauxBudget)
+        : tauxAuJour((proj && (proj.dateCreation || proj.dateDebut)) || "");
   return (proj.budgetFC||0) + (proj.budgetUSD||0)*t;
 }
 function getProjCollecteEq(proj) {
-  var t = getTaux();
   var tot = 0;
-  (proj.recettes||[]).forEach(function(r){ tot += (r.cdf||0) + (r.usd||0)*t; });
+  (proj.recettes||[]).forEach(function(r){ tot += eqCDF(r, r.date || proj.dateCreation); });
   return tot;
 }
 function getProjDepenseEq(proj) {
-  var t = getTaux();
   var tot = 0;
-  (proj.depenses||[]).forEach(function(d){ tot += (d.cdf||0) + (d.usd||0)*t; });
-  // Inclure les achats, travaux et main d'œuvre (sublignes) — CDF + USD au taux d'enregistrement
-  (proj.sublignes||[]).forEach(function(l){
-    tot += (l.cdf||0) + (l.usd||0)*(l.taux||t);
-  });
+  (proj.depenses||[]).forEach(function(d){ tot += eqCDF(d, d.date || proj.dateCreation); });
+  // Inclure les achats, travaux et main d'œuvre (sublignes)
+  (proj.sublignes||[]).forEach(function(l){ tot += eqCDF(l, l.date || proj.dateCreation); });
   return tot;
 }
 
@@ -18715,6 +18990,8 @@ function sauvegarderProjet() {
     priorite: (document.getElementById("proj-priorite")||{}).value||"normale",
     budgetFC: parseFloat((document.getElementById("proj-budget-fc")||{}).value)||0,
     budgetUSD: parseFloat((document.getElementById("proj-budget-usd")||{}).value)||0,
+    // Taux retenu pour le budget : celui du jour ou il a ete arrete.
+    tauxBudget: getTaux(),
     dateDebut: (document.getElementById("proj-date-debut")||{}).value||"",
     dateFin: (document.getElementById("proj-date-fin")||{}).value||"",
     dateCreation: editId?"":getTodayStr(),
@@ -18724,7 +19001,13 @@ function sauvegarderProjet() {
   if(editId){
     // Keep existing recettes/depenses
     var existing=PROJDB.projets.find(function(p){ return p.id===editId; });
-    if(existing){ proj.recettes=existing.recettes||[]; proj.depenses=existing.depenses||[]; proj.dateCreation=existing.dateCreation||getTodayStr(); }
+    if(existing){
+      proj.recettes=existing.recettes||[]; proj.depenses=existing.depenses||[];
+      proj.dateCreation=existing.dateCreation||getTodayStr();
+      proj.sublignes=existing.sublignes||[];
+      // Modifier le titre d'un projet ne doit pas revaloriser son budget.
+      if(parseFloat(existing.tauxBudget)>0) proj.tauxBudget=parseFloat(existing.tauxBudget);
+    }
     PROJDB.projets=PROJDB.projets.map(function(p){ return p.id===editId?proj:p; });
     showToast("Projet modifié !","ok");
   } else {
@@ -18827,6 +19110,7 @@ function saveProjTransaction() {
     categorie: cat,
     cdf: type==="depense" ? arrondi(cdf) : cdf,
     usd: usd,
+    taux: getTaux(),
     date: date,
     fournisseur: four,
     note: note,
@@ -19045,7 +19329,7 @@ function printProjet(id) {
     var totalSubCDF=0, totalSubUSD=0, totalSubEq=0;
     var typeLabels2={achat:"Achat",travaux:"Travaux",mo:"Main d'œuvre"};
     allSub.forEach(function(l,i){
-      var eq=(l.cdf||0)+(l.usd||0)*(l.taux||t);
+      var eq=eqCDF(l, l.date || p.dateCreation);
       totalSubCDF+=l.cdf||0; totalSubUSD+=l.usd||0; totalSubEq+=eq;
       html+="<tr style='background:"+(i%2===0?"#fff":"#f8fafd")+";border-bottom:1px solid #eef2f6'>";
       html+="<td style='padding:5px 8px'>"+escH(l.date||"")+"</td>";
@@ -19451,16 +19735,33 @@ function loyMonthsDue(contrib, annee) {
   return Math.max(0, endMonth - startMonth + 1);
 }
 
+// eq : la contre-valeur en francs, versement par versement, au taux que
+// chacun porte. Additionner les dollars puis convertir au taux du jour
+// faisait varier les arrieres d'un contributeur a chaque changement de taux.
 function loyVerseTotal(contribId, annee) {
-  var cdf=0, usd=0;
+  var cdf=0, usd=0, eq=0;
   for (var i=0;i<LOYDB.versements.length;i++) {
     var v = LOYDB.versements[i];
     if (v.contribId===contribId && (!annee || v.annee===String(annee))) {
       cdf += parseFloat(v.cdf)||0;
       usd += parseFloat(v.usd)||0;
+      eq  += eqCDF(v);
     }
   }
-  return {cdf:cdf, usd:usd};
+  return {cdf:cdf, usd:usd, eq:eq};
+}
+
+// Collecte et depenses du loyer, chaque piece a son taux.
+function _loyCumul(liste, annee) {
+  var r = { cdf:0, usd:0, eq:0 };
+  for (var i=0;i<(liste||[]).length;i++) {
+    var x = liste[i];
+    if (annee && x.annee !== String(annee)) continue;
+    r.cdf += parseFloat(x.cdf)||0;
+    r.usd += parseFloat(x.usd)||0;
+    r.eq  += eqCDF(x);
+  }
+  return r;
 }
 
 function findContrib(id) {
@@ -19474,7 +19775,6 @@ function renderContribs() {
   var fType = (document.getElementById("loy-filter-type")||{}).value || "";
   search = search.toLowerCase();
   var yr = currentYear();
-  var t = getTaux();
 
   var filtered = LOYDB.contributeurs.filter(function(c){
     if (search && c.nom.toLowerCase().indexOf(search) < 0) return false;
@@ -19495,7 +19795,7 @@ function renderContribs() {
     var moisDus = loyMonthsDue(c, yr);
     var attenduTotal = attenduMois * moisDus;
     var verse = loyVerseTotal(c.id, yr);
-    var verseEq = verse.cdf + verse.usd*t;
+    var verseEq = verse.eq;
     var du = Math.max(0, attenduTotal - verseEq);
     var aJour = du <= 0;
     var typeBadge = c.type==="membre"
@@ -19730,6 +20030,9 @@ function enregistrerVersement() {
     contribNom: c ? c.nom : "",
     mois: mois, annee: annee,
     cdf: cdf, usd: usd,
+    // Taux fige : un versement en dollars de janvier ne doit pas changer de
+    // contre-valeur parce que le taux a bouge en octobre.
+    taux: getTaux(),
     note: document.getElementById("loy-pay-note").value,
     date: document.getElementById("loy-pay-date").value || getTodayStr(),
     par: gCurrentUser ? gCurrentUser.nom : ""
@@ -19819,6 +20122,7 @@ function saveLoyDep() {
     id: "loyd"+Date.now(),
     benef: benef,
     cdf: cdf, usd: usd,
+    taux: getTaux(),
     date: document.getElementById("loydep-date").value || getTodayStr(),
     periode: document.getElementById("loydep-periode").value,
     note: document.getElementById("loydep-note").value,
@@ -19868,21 +20172,12 @@ function delLoyDep(id) {
 
 function recalcLoy() {
   var yr = currentYear();
-  var t = getTaux();
   // Collecte année courante
-  var colCDF=0, colUSD=0;
-  for(var i=0;i<LOYDB.versements.length;i++){
-    if(LOYDB.versements[i].annee===String(yr)){
-      colCDF += parseFloat(LOYDB.versements[i].cdf)||0;
-      colUSD += parseFloat(LOYDB.versements[i].usd)||0;
-    }
-  }
+  var col = _loyCumul(LOYDB.versements, yr);
+  var colCDF = col.cdf, colUSD = col.usd;
   // Dépenses (toutes)
-  var depCDF=0, depUSD=0;
-  for(var j=0;j<LOYDB.depenses.length;j++){
-    depCDF += parseFloat(LOYDB.depenses[j].cdf)||0;
-    depUSD += parseFloat(LOYDB.depenses[j].usd)||0;
-  }
+  var dep = _loyCumul(LOYDB.depenses, null);
+  var depCDF = dep.cdf, depUSD = dep.usd;
   var solCDF = colCDF-depCDF, solUSD = colUSD-depUSD;
   var setT = function(id,v){ var e=document.getElementById(id); if(e) e.textContent=v; };
   setT("loy-col-cdf", fmt(colCDF));
@@ -19894,26 +20189,15 @@ function recalcLoy() {
   setT("loy-s-sol-cdf", fmt(solCDF)+" CDF");
   setT("loy-s-sol-usd", fmt(solUSD)+" USD");
   var card = document.getElementById("loy-s-sol-card");
-  if(card) card.className = "sc "+(solCDF+solUSD*t<0?"neg":"pos");
+  if(card) card.className = "sc "+(col.eq-dep.eq<0?"neg":"pos");
 }
 
 // --- DASHBOARD LOYER ---
 function renderLoyDashboard() {
   var yr = currentYear();
-  var t = getTaux();
-  var colCDF=0, colUSD=0;
-  for(var i=0;i<LOYDB.versements.length;i++){
-    if(LOYDB.versements[i].annee===String(yr)){
-      colCDF += parseFloat(LOYDB.versements[i].cdf)||0;
-      colUSD += parseFloat(LOYDB.versements[i].usd)||0;
-    }
-  }
-  var depCDF=0, depUSD=0;
-  for(var j=0;j<LOYDB.depenses.length;j++){
-    depCDF += parseFloat(LOYDB.depenses[j].cdf)||0;
-    depUSD += parseFloat(LOYDB.depenses[j].usd)||0;
-  }
-  var colEq = colCDF+colUSD*t, depEq = depCDF+depUSD*t;
+  var col = _loyCumul(LOYDB.versements, yr), dep = _loyCumul(LOYDB.depenses, null);
+  var colCDF = col.cdf, colUSD = col.usd, depCDF = dep.cdf, depUSD = dep.usd;
+  var colEq = col.eq, depEq = dep.eq;
   var solEq = colEq-depEq;
   // Calcul total attendu et arriérés
   var totAttendu=0, totArrieres=0, nbAjour=0, nbArr=0;
@@ -19921,7 +20205,7 @@ function renderLoyDashboard() {
     var c = LOYDB.contributeurs[k];
     var att = (parseFloat(c.attendu)||0) * loyMonthsDue(c, yr);
     var verse = loyVerseTotal(c.id, yr);
-    var verseEq = verse.cdf + verse.usd*t;
+    var verseEq = verse.eq;
     totAttendu += att;
     var du = Math.max(0, att-verseEq);
     totArrieres += du;
@@ -19961,7 +20245,7 @@ function renderLoyDashboard() {
   // Top contributeurs
   var ranked = LOYDB.contributeurs.map(function(c){
     var v = loyVerseTotal(c.id, yr);
-    return {nom:c.nom, eq: v.cdf+v.usd*t};
+    return {nom:c.nom, eq: v.eq};
   }).filter(function(x){ return x.eq>0; }).sort(function(a,b){ return b.eq-a.eq; }).slice(0,5);
   var topHtml = "";
   if(ranked.length){
@@ -20081,14 +20365,13 @@ function injectLoyerDepToFinances() {
 // --- EXPORT LOYER ---
 function exportLoyContribCSV() {
   var yr = currentYear();
-  var t = getTaux();
   var lines = ["Nom;Type;Telephone;Attendu/mois FC;Mois dus;Attendu total FC;Verse FC eq;Du/Arriere FC;Statut"];
   for(var i=0;i<LOYDB.contributeurs.length;i++){
     var c = LOYDB.contributeurs[i];
     var moisDus = loyMonthsDue(c, yr);
     var att = (parseFloat(c.attendu)||0)*moisDus;
     var v = loyVerseTotal(c.id, yr);
-    var vEq = v.cdf+v.usd*t;
+    var vEq = v.eq;
     var du = Math.max(0, att-vEq);
     lines.push([c.nom, c.type, c.tel||"", parseFloat(c.attendu)||0, moisDus, Math.round(att), Math.round(vEq), Math.round(du), du<=0?"A jour":"Arriere"].join(";"));
   }
@@ -20108,15 +20391,9 @@ function exportLoyVersCSV() {
 
 function printLoyerRapport() {
   var yr = currentYear();
-  var t = getTaux();
   var logoHdr = buildPrintHeader("Rapport Loyer — Année "+yr);
-  var colCDF=0, colUSD=0;
-  for(var i=0;i<LOYDB.versements.length;i++){
-    if(LOYDB.versements[i].annee===String(yr)){ colCDF+=parseFloat(LOYDB.versements[i].cdf)||0; colUSD+=parseFloat(LOYDB.versements[i].usd)||0; }
-  }
-  var depCDF=0, depUSD=0;
-  for(var j=0;j<LOYDB.depenses.length;j++){ depCDF+=parseFloat(LOYDB.depenses[j].cdf)||0; depUSD+=parseFloat(LOYDB.depenses[j].usd)||0; }
-  var colEq=colCDF+colUSD*t, depEq=depCDF+depUSD*t, solEq=colEq-depEq;
+  var col = _loyCumul(LOYDB.versements, yr), depC = _loyCumul(LOYDB.depenses, null);
+  var colEq=col.eq, depEq=depC.eq, solEq=colEq-depEq;
 
   var rows = "";
   var totAtt=0, totVerse=0, totDu=0;
@@ -20126,7 +20403,7 @@ function printLoyerRapport() {
     var moisDus = loyMonthsDue(c, yr);
     var att = (parseFloat(c.attendu)||0)*moisDus;
     var v = loyVerseTotal(c.id, yr);
-    var vEq = v.cdf+v.usd*t;
+    var vEq = v.eq;
     var du = Math.max(0, att-vEq);
     totAtt+=att; totVerse+=vEq; totDu+=du;
     var stCls = du<=0 ? "color:#15803d;font-weight:700" : "color:#b91c1c;font-weight:700";
@@ -20159,7 +20436,7 @@ function printLoyerRapport() {
   win.document.write("<td style='text-align:right;font-family:monospace'>"+fmt(Math.round(totVerse))+"</td>");
   win.document.write("<td style='text-align:right;font-family:monospace'>"+fmt(Math.round(totDu))+"</td><td></td></tr>");
   win.document.write("</tbody></table>");
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Rapport Loyer généré le "+new Date().toLocaleDateString("fr-FR")+" | Taux : 1 USD = "+t+" CDF</div>");
+  win.document.write("<div class='footer'>ECC Kingasani 2 — Rapport Loyer généré le "+new Date().toLocaleDateString("fr-FR")+" | Chaque versement est converti au taux de son enregistrement</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>🖨️ Imprimer / PDF</button></div>");
   win.document.write("</body></html>");
   win.document.close();
@@ -22192,7 +22469,7 @@ function _etatCollecterEvenement(def, debut, fin) {
   var evts = {};
   _etatCultes(debut, fin).forEach(function(h) {
     var date = (h.meta && h.meta.date) || "";
-    var taux = parseFloat(h.meta && h.meta.taux) || getTaux();
+    var taux = tauxDe(h);
     var collectes = [];
     ["cf", "cl"].forEach(function(k) {
       (h[k] || []).forEach(function(r) {
@@ -22240,7 +22517,7 @@ function _etatCollecterMois(def, debut, fin) {
   var parMois = {};
   _etatCultes(debut, fin).forEach(function(h) {
     var date = (h.meta && h.meta.date) || "", ym = date.substring(0, 7);
-    var taux = parseFloat(h.meta && h.meta.taux) || getTaux();
+    var taux = tauxDe(h);
     var collecte = 0, lignes = [];
     ["cf", "cl"].forEach(function(k) {
       (h[k] || []).forEach(function(r) {
@@ -22289,7 +22566,7 @@ function _etatCollecterCycle(def, debut, fin) {
     var date = (h.meta && h.meta.date) || "";
     var cy = cycleDimesDe(date);
     if (!cy) return;
-    var taux = parseFloat(h.meta && h.meta.taux) || getTaux();
+    var taux = tauxDe(h);
     var collecte = 0, lignes = [];
     ["cf", "cl"].forEach(function(k) {
       (h[k] || []).forEach(function(r) {
@@ -22354,7 +22631,7 @@ function _etatDiagnostic(debut, fin) {
   var cultes = 0, lignes = [];
   _etatCultes(debut, fin).forEach(function(h) {
     cultes++;
-    var taux = parseFloat(h.meta && h.meta.taux) || getTaux();
+    var taux = tauxDe(h);
     var date = (h.meta && h.meta.date) || "";
     ["cf", "cl"].forEach(function(k) {
       (h[k] || []).forEach(function(r) {
@@ -29325,7 +29602,7 @@ function dedupDepRows(contId){
 }
 
 function _recapSumCulte(h){
-  var m=h.meta||{}; var t=parseFloat(m.taux)||getTaux()||2800;
+  var m=h.meta||{}; var t=tauxDe(h);
   var loyer=0,dimes=0,base1=0;
   var lignes=[].concat(h.cf||[],h.cl||[]);
   for(var i=0;i<lignes.length;i++){
