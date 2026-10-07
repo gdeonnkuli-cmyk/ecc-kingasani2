@@ -136,6 +136,9 @@ service cloud.firestore {
     match /loyer_contributeurs/{doc}  { allow read, write: if estActif(); }
     match /loyer_versements/{doc}     { allow read, write: if estActif(); }
     match /loyer_depenses/{doc}       { allow read, write: if estActif(); }
+    match /effectif_seances/{doc}     { allow read, write: if estActif(); }
+    match /effectif_visiteurs/{doc}   { allow read, write: if estActif(); }
+    match /effectif_programmes/{doc}  { allow read, write: if estActif(); }
     match /projets/{doc}             { allow read, write: if estActif(); }
     match /eb_demandes/{doc}         { allow read, write: if estActif(); }
     match /annonces/{doc}            { allow read, write: if estActif(); }

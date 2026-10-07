@@ -2021,6 +2021,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
         <div class="fg"><label>Effectif ECODIM</label><input type="number" id="eff-eco" placeholder="0" min="0" onchange="dirty();recalc()"></div>
         <div class="fg"><label>Responsable *</label><input type="text" id="meta-resp" placeholder="Nom" oninput="dirty();recalc()"></div>
       </div>
+      <div id="eff-report-note" style="display:none;margin-top:9px"></div>
     </div>
   </div>
   <div id="fin-date-placeholder" style="background:#fff;border:2px dashed #c5d8ed;border-radius:12px;padding:28px 16px;text-align:center;margin-bottom:14px">
@@ -8141,6 +8142,106 @@ function _carteControleLoyer() {
 // Copie, sans rien detruire : l'ancien document reste en place et redevient la
 // source de lecture si les collections sont vidées. La bascule peut donc etre
 // relancee, et elle est sans effet si elle a deja eu lieu.
+function _carteMigrationEffectif() {
+  var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F504} Culte : documents séparés</div>';
+  var ns = ((EFFDB && EFFDB.seances)    || []).length;
+  var nv = ((EFFDB && EFFDB.visiteurs)  || []).length;
+  var np = ((EFFDB && EFFDB.programmes) || []).length;
+  var tot = ns + nv + np;
+
+  h += '<p style="font-size:.74rem;color:var(--muted);margin-bottom:9px;line-height:1.5">'
+     + 'Séances, visiteurs et programmes vivaient dans un seul document réécrit en entier à chaque geste. '
+     + 'La fusion de rattrapage amortissait les saisies simultanées, mais ressuscitait aussi tout ce qu’on supprimait : '
+     + 'un visiteur effacé revenait dès qu’un autre poste se synchronisait.</p>';
+
+  if (gEffParDoc) {
+    return h + '<div class="ctrl-piece ok"><div class="cp-tete"><strong>Bascule faite</strong></div>'
+       + '<div class="cp-l">' + ns + ' séance(s), ' + nv + ' visiteur(s) et ' + np + ' programme(s) sont lus depuis leurs collections. '
+       + 'Une suppression est désormais définitive. L’ancien document effectif_db/main reste en archive.</div></div>';
+  }
+  if (!tot) {
+    return h + '<div class="ctrl-piece ok"><div class="cp-tete"><strong>Rien à basculer</strong></div>'
+         + '<div class="cp-l">Le module Culte ne contient encore aucune donnée. Posez le marqueur dès maintenant pour que '
+         + 'les prochaines saisies aillent directement dans leurs collections.</div>'
+         + '<div style="display:flex;gap:8px;margin-top:8px"><button class="btn btn-sm btn-p" onclick="migrerEffectif()">Poser le marqueur</button></div></div>';
+  }
+  return h + '<div class="ctrl-piece ko"><div class="cp-tete"><strong>' + tot + ' entrée(s) encore dans le document unique</strong></div>'
+     + '<div class="cp-l cp-w">' + ns + ' séance(s), ' + nv + ' visiteur(s), ' + np + ' programme(s). '
+     + 'Ouvrez d’abord le module Culte pour que ce décompte vienne de la base et non de cet appareil. '
+     + 'Publiez ensuite les règles des collections effectif_seances, effectif_visiteurs et effectif_programmes, '
+     + 'sans quoi l’écriture sera refusée et rien ne changera.</div></div>'
+     + '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">'
+     + '<button class="btn btn-sm btn-p" onclick="migrerEffectif()">Basculer les ' + tot + ' entrée(s)</button></div>';
+}
+
+function migrerEffectif() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("Réservé à l'administrateur.", "err"); return; }
+  if (!IS_CONFIGURED || !gDb) { showToast("Firebase requis pour cette opération.", "err"); return; }
+  var sea = ((EFFDB && EFFDB.seances)    || []).filter(function(x){ return x && x.date; });
+  var vis = ((EFFDB && EFFDB.visiteurs)  || []).filter(function(x){ return x && x.id; });
+  var pro = ((EFFDB && EFFDB.programmes) || []).filter(function(x){ return x && x.date; });
+  var tot = sea.length + vis.length + pro.length;
+
+  showModal(tot ? ("Basculer " + tot + " entrée(s) du module Culte ?") : "Poser le marqueur sans données ?",
+    (tot
+      ? "Chaque séance, visiteur et programme sera copié dans son propre document, par lots.\n\n"
+        + "Rien n'est supprimé : l'ancien document reste en place et pourra être relu. "
+        + "L'opération peut être relancée sans dommage.\n\n"
+        + "Après la bascule, supprimer un visiteur ou un programme sera définitif : il ne reviendra plus à la synchronisation.\n\n"
+      : "Le module Culte est vide. Le marqueur sera posé pour que les prochaines saisies aillent directement "
+        + "dans leurs collections.\n\n")
+    + "Si les règles Firestore des collections effectif_seances, effectif_visiteurs et effectif_programmes "
+    + "ne sont pas encore publiées, l'écriture sera refusée et rien ne changera.",
+    function(){
+      closeModal();
+      if (tot) showToast("Bascule de " + tot + " entrée(s)…", "ok");
+      var erreurs = [], restants = 3;
+
+      function lots(coll, liste, cle, suite) {
+        if (!liste.length) { suite(null); return; }
+        var paquets = [], i;
+        for (i = 0; i < liste.length; i += 400) paquets.push(liste.slice(i, i + 400));
+        var reste = paquets.length, err = null;
+        paquets.forEach(function(paquet){
+          var lot = gDb.batch();
+          paquet.forEach(function(o){ lot.set(gDb.collection(coll).doc(cle(o)), o); });
+          lot.commit().catch(function(e){ err = e; })
+            .then(function(){ if (--reste === 0) suite(err); });
+        });
+      }
+
+      function fini(e) {
+        if (e) erreurs.push(e.message || String(e));
+        if (--restants > 0) return;
+        if (!erreurs.length) {
+          gEffParDoc = true;
+          // Marqueur explicite : c'est lui, et non la seule presence de
+          // documents, qui fera lire les collections aux autres appareils.
+          gDb.collection("effectif_db").doc("main")
+            .set({ docsActifs: true, docsActifsLe: getTodayStr() }, { merge: true })
+            .catch(function(){ gEffParDoc = false; showToast("Bascule faite, mais le marqueur n'a pas pu être écrit. Relancez.", "err"); });
+          if (typeof gUnsubEff === "function") { gUnsubEff(); gUnsubEff = null; }
+          if (typeof logAudit === "function") {
+            logAudit("MIGRATION", "Culte", sea.length + " séance(s), " + vis.length + " visiteur(s) et "
+              + pro.length + " programme(s) basculé(e)s en documents séparés");
+          }
+          showToast("Bascule terminée : " + tot + " entrée(s) en documents séparés.", "ok");
+        } else {
+          showModal("Bascule incomplète",
+            erreurs.length + " lot(s) en échec.\n\nErreur : " + erreurs[0]
+            + "\n\nRien n'est perdu : l'ancien document reste la source de lecture. "
+            + "Vérifiez que les règles Firestore sont publiées, puis relancez.",
+            function(){ closeModal(); });
+        }
+        if (typeof renderAdmin === "function") renderAdmin();
+      }
+
+      lots(EFF_SEANCES_COLL,    sea, _effIdSeance,    fini);
+      lots(EFF_VISITEURS_COLL,  vis, _effIdVisiteur,  fini);
+      lots(EFF_PROGRAMMES_COLL, pro, _effIdProgramme, fini);
+    });
+}
+
 function _carteMigrationLoyer() {
   var h = '<div class="sec-lbl" style="margin-top:16px">\u{1F504} Loyer : documents s\u00e9par\u00e9s</div>';
   var nc = ((LOYDB && LOYDB.contributeurs) || []).length;
@@ -10228,6 +10329,7 @@ function renderAdmin(){
   html += _carteMigrationMembres();
   html += _carteMigrationMutuelle();
   html += _carteMigrationLoyer();
+  html += _carteMigrationEffectif();
   html += _carteMigrationSocial();
   html += _carteCouverture();
   html += _carteRapprochementCotis();
@@ -19987,6 +20089,65 @@ function getPrintCSS() {
 var EFFDB = loadEffDB();
 var gUnsubEff = null;
 
+// ── Effectif : un document par enregistrement ────────────────────────────
+// Seances, visiteurs et programmes vivaient dans effectif_db/main, reecrit en
+// entier a chaque geste : deux saisies simultanees s'ecrasaient. La fusion de
+// rattrapage, qui est une union par cle, amortissait la perte mais ressuscitait
+// aussi tout ce qu'on supprimait. Chaque enregistrement prend son document.
+var EFF_SEANCES_COLL    = "effectif_seances";
+var EFF_VISITEURS_COLL  = "effectif_visiteurs";
+var EFF_PROGRAMMES_COLL = "effectif_programmes";
+var gEffParDoc    = false;
+var gEffEcritures = [];
+
+// L'identite d'une seance est sa date, celle d'un programme sa date et son
+// type : jamais l'horodatage de creation, qui differe d'un appareil a l'autre.
+function _effIdSeance(x)    { return "s_" + String((x && x.date) || "").replace(/[^0-9A-Za-z-]/g, ""); }
+function _effIdProgramme(x) {
+  if (x && x.id) return String(x.id);
+  return "prog_" + String((x && x.date) || "").replace(/-/g, "") + "_" + ((x && x.typeService) || "CF");
+}
+function _effIdVisiteur(x)  { return String((x && x.id) || ""); }
+
+function _effTouche(coll, obj, id) {
+  if (!id || !obj) return;
+  gEffEcritures.push({ coll: coll, id: id, obj: obj });
+}
+function _effToucheSuppr(coll, id) {
+  if (!id) return;
+  gEffEcritures.push({ coll: coll, id: id, obj: null });
+}
+
+function _ecrireEff() {
+  if (!gEffEcritures.length) return;
+  var file = gEffEcritures.slice();
+  gEffEcritures = [];
+  var lot = gDb.batch();
+  file.forEach(function(e){
+    var ref = gDb.collection(e.coll).doc(e.id);
+    if (e.obj) lot.set(ref, e.obj); else lot.delete(ref);
+  });
+  lot.commit().catch(function(err){
+    // Une ecriture refusee doit se voir : sinon la saisie parait enregistree
+    // alors qu'elle n'existe que sur cet appareil.
+    showToast("Effectif enregistre sur cet appareil SEULEMENT \u2014 base refusee : "
+      + ((err && err.message) || "erreur inconnue") + ".", "err");
+  });
+}
+
+function chargerEffParDoc(cb) {
+  var res = { seances: [], visiteurs: [], programmes: [] }, restants = 3;
+  function lire(coll, cle) {
+    gDb.collection(coll).get()
+      .then(function(q){ q.forEach(function(d){ res[cle].push(d.data()); }); })
+      .catch(function(){})
+      .then(function(){ if (--restants === 0) cb(res); });
+  }
+  lire(EFF_SEANCES_COLL,    "seances");
+  lire(EFF_VISITEURS_COLL,  "visiteurs");
+  lire(EFF_PROGRAMMES_COLL, "programmes");
+}
+
 // Fusion par clé, la plus récente l'emportant. Elle ne servait qu'aux
 // programmes : seances et visiteurs étaient repris bruts du distant, si bien
 // qu'une séance saisie hors ligne, ou pendant qu'un autre poste enregistrait,
@@ -20040,7 +20201,10 @@ function loadEffDB() {
 function saveEffDB(db) {
   if(!db.programmes) db.programmes = [];
   try { localStorage.setItem("ecc_effectif_db", JSON.stringify(db)); } catch(e){}
-  if(IS_CONFIGURED && gDb && gCurrentUser){
+  if(!(IS_CONFIGURED && gDb && gCurrentUser)) { gEffEcritures = []; return; }
+  if(gEffParDoc){ _ecrireEff(); return; }
+  gEffEcritures = [];
+  {
     gDb.collection("effectif_db").doc("main").set({
       seances:    db.seances||[],
       visiteurs:  db.visiteurs||[],
@@ -20055,6 +20219,18 @@ function loadEffDBFromFirebase(callback) {
   if(!IS_CONFIGURED||!gDb){ if(callback) callback(); return; }
   gDb.collection("effectif_db").doc("main").get()
     .then(function(doc){
+      var marqueur = (doc.exists && doc.data()) || {};
+      gEffParDoc = (marqueur.docsActifs === true);
+      if(gEffParDoc){
+        // Le distant fait foi : une suppression est une suppression, on ne la
+        // ressuscite pas par une union avec la copie locale.
+        chargerEffParDoc(function(parDoc){
+          EFFDB = { seances: parDoc.seances, visiteurs: parDoc.visiteurs, programmes: parDoc.programmes };
+          try{ localStorage.setItem("ecc_effectif_db", JSON.stringify(EFFDB)); }catch(e){}
+          if(callback) callback();
+        });
+        return;
+      }
       if(doc.exists){
         var d = doc.data();
         var programmes = fusionnerProgrammes(d.programmes||[], EFFDB.programmes||[]);
@@ -20075,6 +20251,10 @@ function loadEffDBFromFirebase(callback) {
 
 function subscribeEff() {
   if(!IS_CONFIGURED||!gDb) return;
+  // En documents separes, il n'y a plus de document unique a ecouter, et
+  // s'abonner aux trois collections couterait une lecture par enregistrement
+  // a chaque ouverture. Le module relit au moment ou on l'ouvre.
+  if(gEffParDoc){ if(gUnsubEff){ gUnsubEff(); gUnsubEff = null; } return; }
   if(gUnsubEff) gUnsubEff();
   gUnsubEff = gDb.collection("effectif_db").doc("main").onSnapshot(function(doc){
     if(doc.exists){
@@ -20137,6 +20317,7 @@ function saveEffectif() {
   var s={id:"eff"+Date.now(),date:date,cf:cf,cl:cl,total:cf+cl,obs:obs,
          par:gCurrentUser?gCurrentUser.nom:"", savedAt:new Date().toISOString()};
   if(idx>=0){EFFDB.seances[idx]=s;}else{EFFDB.seances.unshift(s);}
+  _effTouche(EFF_SEANCES_COLL, s, _effIdSeance(s));
   saveEffDB(EFFDB);
   document.getElementById("effmod-cf").value=""; document.getElementById("effmod-cl").value="";
   document.getElementById("effmod-total").value=""; document.getElementById("eff-obs").value="";
@@ -20174,7 +20355,9 @@ function renderEffRecent() {
   html+="</table></div>"; cont.innerHTML=html;
 }
 function delEffSeance(id){
+  var _sup=(EFFDB.seances||[]).filter(function(s){return s.id===id;})[0];
   EFFDB.seances=EFFDB.seances.filter(function(s){return s.id!==id;});
+  if(_sup) _effToucheSuppr(EFF_SEANCES_COLL, _effIdSeance(_sup));
   saveEffDB(EFFDB); renderEffRecent(); renderEffHistorique(); showToast("Séance supprimée.","");
 }
 var VIS_CATS={adherant:"Membre adhérant",passager:"Passager",temporaire:"Temporaire",invite:"Invité spécial",touriste:"Touriste"};
@@ -20186,7 +20369,11 @@ function saveVisiteur(){
   var notes=document.getElementById("vis-notes").value||"",catEl=document.querySelector("input[name='vis-cat']:checked");
   var cat=catEl?catEl.value:"passager";
   if(!EFFDB.visiteurs) EFFDB.visiteurs=[];
-  EFFDB.visiteurs.unshift({id:"vis"+Date.now(),nom:nom,tel:tel,adresse:adr,date:date,culte:culte,cat:cat,notes:notes,par:gCurrentUser?gCurrentUser.nom:""});
+  var _v={id:"vis"+Date.now()+"_"+Math.random().toString(36).slice(2,7),
+          nom:nom,tel:tel,adresse:adr,date:date,culte:culte,cat:cat,notes:notes,
+          par:gCurrentUser?gCurrentUser.nom:"", savedAt:new Date().toISOString()};
+  EFFDB.visiteurs.unshift(_v);
+  _effTouche(EFF_VISITEURS_COLL, _v, _effIdVisiteur(_v));
   saveEffDB(EFFDB);
   document.getElementById("vis-nom").value=""; document.getElementById("vis-tel").value="";
   document.getElementById("vis-adresse").value=""; document.getElementById("vis-notes").value="";
@@ -20332,6 +20519,7 @@ function delVisiteur(id){
   var v=(EFFDB.visiteurs||[]).filter(function(x){return x.id===id;})[0];
   if(v && !confirm("Supprimer d\u00e9finitivement la visite de "+(v.nom||"?")+" du "+_visDateFr(v.date)+" ?")) return;
   EFFDB.visiteurs=(EFFDB.visiteurs||[]).filter(function(x){return x.id!==id;});
+  _effToucheSuppr(EFF_VISITEURS_COLL, String(id));
   saveEffDB(EFFDB); renderVisiteurs(); showToast("Visiteur supprim\u00e9.","");
 }
 function renderEffHistorique(){
@@ -25304,6 +25492,7 @@ function _appliquerImportProgrammes(tous) {
     }
     if (idx >= 0) { EFFDB.programmes[idx] = p; majs++; }
     else { EFFDB.programmes.unshift(p); faits++; }
+    _effTouche(EFF_PROGRAMMES_COLL, p, _effIdProgramme(p));
   });
 
   if (!faits && !majs) { closeModal(); showToast("Aucun programme coch\u00e9.", "warn"); return; }
@@ -25369,6 +25558,7 @@ function saveProgramme() {
   // Sauvegarder en préservant toutes les données EFFDB
   if(!EFFDB.seances)   EFFDB.seances   = [];
   if(!EFFDB.visiteurs) EFFDB.visiteurs = [];
+  _effTouche(EFF_PROGRAMMES_COLL, prog, _effIdProgramme(prog));
   saveEffDB(EFFDB);
   showToast("Programme "+typeService+" du "+date+" sauvegardé !", "ok");
   renderHistProgramme();
@@ -25376,15 +25566,14 @@ function saveProgramme() {
   // Injection automatique des effectifs dans Finances → Recettes
   var cfTot = (prog.cfH||0)+(prog.cfF||0)+(prog.cfJ||0)+(prog.cfE||0)+(prog.cfV||0);
   var clTot = (prog.clH||0)+(prog.clF||0)+(prog.clJ||0)+(prog.clE||0)+(prog.clV||0);
+  // La poussee ne touche Finances que si le formulaire est vierge ou deja sur
+  // cette date : ecraser la date d'une saisie en cours ferait basculer des
+  // montants d'un culte sur un autre.
   if(cfTot>0 || clTot>0){
     var fDate = document.getElementById("meta-date");
-    var fCF   = document.getElementById("eff-cf");
-    var fCL   = document.getElementById("eff-cl");
-    if(fDate && date) fDate.value = date;
-    if(fCF && cfTot)  { fCF.value = cfTot; }
-    if(fCL && clTot)  { fCL.value = clTot; }
-    if(typeof recalc==="function") recalc();
-    if(typeof dirty==="function")  dirty();
+    var dateFin = fDate ? (fDate.value || "") : "";
+    if(fDate && !dateFin){ fDate.value = date; dateFin = date; }
+    if(dateFin === date) reporterEffectifsFin(date);
   }
   // Proposer de vider le formulaire pour le prochain culte
   showModal("Programme sauvegardé ✅",
@@ -25425,7 +25614,9 @@ function supprimerProgramme(date, typeService) {
       closeModal();
       if(!EFFDB.programmes) return;
       EFFDB.programmes = EFFDB.programmes.filter(function(p){
-        return !(p.date===date && (!typeService || (p.typeService||"CF")===typeService));
+        var vise = (p.date===date && (!typeService || (p.typeService||"CF")===typeService));
+        if(vise) _effToucheSuppr(EFF_PROGRAMMES_COLL, _effIdProgramme(p));
+        return !vise;
       });
       saveEffDB(EFFDB);
       renderHistProgramme();
@@ -29383,6 +29574,83 @@ function annulerValidationDistrib(ym, type) {
 // ============================================
 
 // Appelé au changement du champ Date (page Recettes)
+// ── Report des effectifs vers Finances ───────────────────────────────────
+// Les effectifs sont comptes une fois, au programme du culte et a l'ECODIM.
+// Les ressaisir dans Finances, c'est ouvrir un ecart entre deux chiffres qui
+// decrivent la meme assemblee. On va donc les chercher a la date du culte.
+//
+// Une regle, et une seule : on ne remplit que ce qui est vide. Un chiffre
+// corrige a la main dans Finances fait foi — c'est le dernier comptage, celui
+// de la personne qui tient la piece.
+function _effectifsDeLaDate(dateVal) {
+  var r = { cf: 0, cl: 0, eco: 0, sources: [] };
+  if (!dateVal) return r;
+
+  var progs = ((typeof EFFDB !== "undefined" && EFFDB.programmes) || [])
+                .filter(function(x){ return x && x.date === dateVal; });
+  // Un programme ne remplit que le bloc de son type, mais on additionne les
+  // deux cotes de chaque programme : si quelqu'un a saisi le CL sur la fiche
+  // CF, le chiffre compte quand meme.
+  progs.forEach(function(x){
+    r.cf += (x.cfH||0)+(x.cfF||0)+(x.cfJ||0)+(x.cfE||0)+(x.cfV||0);
+    r.cl += (x.clH||0)+(x.clF||0)+(x.clJ||0)+(x.clE||0)+(x.clV||0);
+  });
+  if (progs.length) r.sources.push(progs.length + " programme(s) du culte");
+
+  // A defaut de programme, la seance de comptage porte le meme chiffre.
+  if (!r.cf && !r.cl) {
+    var sea = ((typeof EFFDB !== "undefined" && EFFDB.seances) || [])
+                .filter(function(x){ return x && x.date === dateVal; })[0];
+    if (sea) { r.cf = sea.cf||0; r.cl = sea.cl||0; r.sources.push("séance de comptage"); }
+  }
+
+  // ECODIM : tout le monde present, enfants et moniteurs, comme le CF et le CL
+  // comptent les visiteurs. Les trois rubriques se lisent de la meme facon.
+  var ecos = ((typeof ECODB !== "undefined" && ECODB.sessions) || [])
+               .filter(function(x){ return x && x.date === dateVal; });
+  ecos.forEach(function(x){ r.eco += (x.filles||0)+(x.garcons||0)+(x.moniteurs||0); });
+  if (ecos.length) r.sources.push(ecos.length + " session(s) ECODIM");
+
+  return r;
+}
+
+function reporterEffectifsFin(dateVal) {
+  var note = document.getElementById("eff-report-note");
+  if (note) { note.style.display = "none"; note.innerHTML = ""; }
+  if (!dateVal) return;
+
+  var r = _effectifsDeLaDate(dateVal);
+  if (!r.cf && !r.cl && !r.eco) return;
+
+  var poses = [], gardes = [];
+  [["eff-cf", r.cf, "CF"], ["eff-cl", r.cl, "CL"], ["eff-eco", r.eco, "ECODIM"]].forEach(function(t){
+    var el = document.getElementById(t[0]);
+    if (!el || !t[1]) return;
+    var actuel = parseInt(el.value, 10) || 0;
+    if (actuel) { if (actuel !== t[1]) gardes.push(t[2] + " : " + actuel + " saisi, " + t[1] + " au comptage"); return; }
+    el.value = t[1];
+    poses.push(t[2] + " " + t[1]);
+  });
+
+  if (!poses.length && !gardes.length) return;
+  if (poses.length) { if (typeof recalc === "function") recalc(); if (typeof dirty === "function") dirty(); }
+
+  if (note) {
+    var h = "";
+    if (poses.length) {
+      h += '<div style="background:#eef7f1;border-left:3px solid #1e7d52;border-radius:7px;padding:7px 11px;font-size:.73rem;color:#14532d">'
+         + "↪ Effectifs reportés depuis " + r.sources.join(" et ") + " : <strong>" + poses.join(" · ") + "</strong>. "
+         + "Corrigez librement : votre chiffre fait foi.</div>";
+    }
+    if (gardes.length) {
+      h += '<div style="background:#fdf6e7;border-left:3px solid #e67e22;border-radius:7px;padding:7px 11px;font-size:.73rem;color:#8a5a00;margin-top:' + (poses.length ? "6px" : "0") + '">'
+         + "⚠ Écart avec le comptage — " + gardes.join(" ; ") + ". Votre saisie est conservée.</div>";
+    }
+    note.innerHTML = h;
+    note.style.display = h ? "" : "none";
+  }
+}
+
 function onDateChangeFin() {
   var dateVal = (document.getElementById("meta-date")||{}).value || "";
   var recPh   = document.getElementById("fin-date-placeholder");
@@ -29427,6 +29695,7 @@ function onDateChangeFin() {
   // Choisir une date n'est pas une saisie : ne pas marquer le formulaire
   // modifie, sans quoi la sauvegarde automatique creerait un culte vide.
   recalc();
+  reporterEffectifsFin(dateVal);
 }
 
 function _afficherRubriquesFin(){
