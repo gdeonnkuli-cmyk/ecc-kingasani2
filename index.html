@@ -25525,10 +25525,12 @@ function saveProgramme() {
     points: [],
     scH: gV("prog-sc-h"), scF: gV("prog-sc-f"),
     scJ: gV("prog-sc-j"), scV: gV("prog-sc-v"),
-    cfH: gN("prog-cf-h"), cfF: gN("prog-cf-f"), cfJ: gN("prog-cf-j"),
-    cfE: gN("prog-cf-e"), cfV: gN("prog-cf-v"),
-    clH: gN("prog-cl-h"), clF: gN("prog-cl-f"), clJ: gN("prog-cl-j"),
-    clE: gN("prog-cl-e"), clV: gN("prog-cl-v"),
+    cfH: typeService==="CF" ? gN("prog-cf-h") : 0, cfF: typeService==="CF" ? gN("prog-cf-f") : 0,
+    cfJ: typeService==="CF" ? gN("prog-cf-j") : 0, cfE: typeService==="CF" ? gN("prog-cf-e") : 0,
+    cfV: typeService==="CF" ? gN("prog-cf-v") : 0,
+    clH: typeService==="CL" ? gN("prog-cl-h") : 0, clF: typeService==="CL" ? gN("prog-cl-f") : 0,
+    clJ: typeService==="CL" ? gN("prog-cl-j") : 0, clE: typeService==="CL" ? gN("prog-cl-e") : 0,
+    clV: typeService==="CL" ? gN("prog-cl-v") : 0,
     par: gCurrentUser ? gCurrentUser.nom : "",
     savedAt: new Date().toISOString()
   };
@@ -25664,11 +25666,15 @@ function injecterEffectifsVersFinances() {
   var date  = gV("prog-date");
   if(!date){ showToast("Sélectionnez d'abord la date du culte.","err"); return; }
 
-  var cfForm = gN("prog-cf-h")+gN("prog-cf-f")+gN("prog-cf-j")+gN("prog-cf-e")+gN("prog-cf-v");
-  var clForm = gN("prog-cl-h")+gN("prog-cl-f")+gN("prog-cl-j")+gN("prog-cl-e")+gN("prog-cl-v");
+  // Le formulaire ne montre que le cote du type choisi ; l'autre bloc est
+  // masque mais ses valeurs restent dans la page. On ne lit donc que le cote
+  // affiche, sinon le reliquat du programme precedent partirait en Finances.
+  var typeAff = gV("prog-type") || "CF";
+  var cfForm = typeAff === "CF" ? gN("prog-cf-h")+gN("prog-cf-f")+gN("prog-cf-j")+gN("prog-cf-e")+gN("prog-cf-v") : 0;
+  var clForm = typeAff === "CL" ? gN("prog-cl-h")+gN("prog-cl-f")+gN("prog-cl-j")+gN("prog-cl-e")+gN("prog-cl-v") : 0;
 
-  // Le formulaire ne montre qu'un cote a la fois. Pour l'autre, et pour
-  // l'ECODIM, on prend ce que la base porte a cette date.
+  // Pour l'autre service et pour l'ECODIM, on prend ce que la base porte a
+  // cette date : le culte de Finances compte les deux assemblees.
   var base = _effectifsDeLaDate(date);
   var env = { cf: cfForm || base.cf, cl: clForm || base.cl, eco: base.eco, sources: ["le programme du culte"] };
   if(base.eco) env.sources.push("l'ECODIM du jour");
@@ -29604,13 +29610,21 @@ function _effectifsDeLaDate(dateVal) {
 
   var progs = ((typeof EFFDB !== "undefined" && EFFDB.programmes) || [])
                 .filter(function(x){ return x && x.date === dateVal; });
-  // Un programme ne remplit que le bloc de son type, mais on additionne les
-  // deux cotes de chaque programme : si quelqu'un a saisi le CL sur la fiche
-  // CF, le chiffre compte quand meme.
-  progs.forEach(function(x){
-    r.cf += (x.cfH||0)+(x.cfF||0)+(x.cfJ||0)+(x.cfE||0)+(x.cfV||0);
-    r.cl += (x.clH||0)+(x.clF||0)+(x.clJ||0)+(x.clE||0)+(x.clV||0);
-  });
+
+  // Une date porte deux programmes, un par service, et chacun compte son
+  // assemblee. On lit donc le CF sur les programmes CF et le CL sur les
+  // programmes CL : additionner les deux cotes de chaque programme comptait
+  // le CF deux fois des qu'un CL existait a la meme date.
+  //
+  // Le repli couvre les programmes enregistres avant cette correction, qui
+  // peuvent porter les deux cotes : si aucun programme ne declare le service,
+  // on prend ce qu'on trouve, plutot que de rendre zero.
+  var duType = { CF: [], CL: [] };
+  progs.forEach(function(x){ duType[(x.typeService === "CL") ? "CL" : "CF"].push(x); });
+  function sommeCF(l){ var t=0; l.forEach(function(x){ t += (x.cfH||0)+(x.cfF||0)+(x.cfJ||0)+(x.cfE||0)+(x.cfV||0); }); return t; }
+  function sommeCL(l){ var t=0; l.forEach(function(x){ t += (x.clH||0)+(x.clF||0)+(x.clJ||0)+(x.clE||0)+(x.clV||0); }); return t; }
+  r.cf = sommeCF(duType.CF.length ? duType.CF : progs);
+  r.cl = sommeCL(duType.CL.length ? duType.CL : progs);
   if (progs.length) r.sources.push(progs.length + " programme(s) du culte");
 
   // A defaut de programme, la seance de comptage porte le meme chiffre.
