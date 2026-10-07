@@ -202,7 +202,16 @@ service cloud.firestore {
     // Le culte et son archive sont la piece comptable : elles suivent le
     // module Finances. La distribution des dimes en fait partie.
     match /cultes/{doc}              { allow read, write: if aModule('finances'); }
-    match /historique/{doc}          { allow read, write: if aModule('finances'); }
+
+    // L'archive des cultes se lit aussi depuis le module Social : la caisse
+    // sociale est alimentee par les offrandes des cultes, et loadSocFromAllHistory
+    // parcourt l'historique pour les y retrouver. Tant que la contribution
+    // sociale vit DANS la piece du culte, lire l'une veut dire lire l'autre.
+    // L'ecriture, elle, reste aux finances.
+    match /historique/{doc} {
+      allow read:  if aModule('finances') || aModule('social');
+      allow write: if aModule('finances');
+    }
     match /presence/{doc}            { allow read, write: if estActif(); }
     // ── Configuration ─────────────────────────────────────────────────────
     // Clôtures de période, correspondance comptable SYCEBNL, montants des
