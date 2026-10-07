@@ -29634,11 +29634,14 @@ function _effectifsDeLaDate(dateVal) {
     if (sea) { r.cf = sea.cf||0; r.cl = sea.cl||0; r.sources.push("séance de comptage"); }
   }
 
-  // ECODIM : tout le monde present, enfants et moniteurs, comme le CF et le CL
-  // comptent les visiteurs. Les trois rubriques se lisent de la meme facon.
+  // ECODIM : filles et garcons, sans les moniteurs. Ce n'est pas un choix de
+  // ma part mais la definition deja posee par le module lui-meme, dont le
+  // bilan affiche "Total enfants = filles + garcons" et tient les moniteurs
+  // prestant a part. Deux totaux ECODIM differents dans la meme application
+  // auraient fabrique un ecart que personne n'aurait su expliquer.
   var ecos = ((typeof ECODB !== "undefined" && ECODB.sessions) || [])
                .filter(function(x){ return x && x.date === dateVal; });
-  ecos.forEach(function(x){ r.eco += (x.filles||0)+(x.garcons||0)+(x.moniteurs||0); });
+  ecos.forEach(function(x){ r.eco += (x.filles||0)+(x.garcons||0); });
   if (ecos.length) r.sources.push(ecos.length + " session(s) ECODIM");
 
   return r;
