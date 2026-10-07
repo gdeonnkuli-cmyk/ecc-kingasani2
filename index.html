@@ -71,7 +71,7 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#002F6B,
 /* LOGIN */
 #login-screen{position:fixed;inset:0;background:linear-gradient(135deg,#002F6B,#003F8E);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px}
 .login-card{background:#fff;border-radius:16px;padding:32px 28px;max-width:360px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.4)}
-.login-logo{width:52px;height:52px;background:linear-gradient(135deg,#c8a96e,#e8c97e);border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#002F6B;margin:0 auto 14px;overflow:hidden}
+.login-logo{width:52px;height:52px;background:#fff;border-radius:11px;padding:5px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:#002F6B;margin:0 auto 14px;overflow:hidden}
 .login-card h1{font-family:'Playfair Display',serif;font-size:1.2rem;color:#002F6B;text-align:center;margin-bottom:4px}
 .login-card p{font-size:.78rem;color:#6b88a4;text-align:center;margin-bottom:22px}
 .lf{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
@@ -84,7 +84,7 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#002F6B,
 .login-note{text-align:center;font-size:.72rem;color:#6b88a4;margin-top:16px;line-height:1.6}
 /* HEADER */
 .app-header{background:linear-gradient(90deg,#002756,#004BA8);border-bottom:2px solid #c8a96e;padding:11px 16px;display:flex;align-items:center;gap:11px;position:sticky;top:0;z-index:200;flex-wrap:wrap}
-.hlogo{width:38px;height:38px;background:linear-gradient(135deg,#c8a96e,#e8c97e);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:700;color:#002F6B;flex-shrink:0;overflow:hidden;transition:opacity .2s}.hlogo:hover{opacity:.85}
+.hlogo{width:38px;height:38px;background:#fff;border-radius:8px;padding:4px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:700;color:#002F6B;flex-shrink:0;overflow:hidden;transition:opacity .2s}.hlogo:hover{opacity:.85}
 .htitle{flex:1}
 .htitle h1{font-family:'Playfair Display',serif;font-size:.95rem;color:#fff}
 .htitle p{font-size:.65rem;color:#c8a96e;text-transform:uppercase;letter-spacing:.06em}
@@ -347,7 +347,7 @@ body{font-family:'DM Sans',sans-serif;background:linear-gradient(135deg,#002F6B,
 
 /* APP HEADER */
 .app-header{background:linear-gradient(90deg,var(--navy),var(--blue));border-bottom:2px solid var(--accent);padding:12px 18px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:200;flex-wrap:wrap}
-.hlogo{width:38px;height:38px;background:linear-gradient(135deg,var(--accent),var(--gold));border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:700;color:var(--navy);flex-shrink:0}
+.hlogo{width:38px;height:38px;background:#fff;border-radius:8px;padding:4px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:700;color:var(--navy);flex-shrink:0}
 .htitle h1{font-family:'Playfair Display',serif;font-size:.95rem;color:#fff}
 .htitle p{font-size:.65rem;color:var(--accent);text-transform:uppercase;letter-spacing:.07em}
 .hright{margin-left:auto;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
@@ -920,8 +920,8 @@ select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible,
 @keyframes v3In{from{opacity:0;transform:translateY(14px) scale(.985)}to{opacity:1;transform:none}}
 .login-logo{
   width:60px;height:60px;border-radius:var(--v3-r-md);
-  box-shadow:0 8px 22px rgba(226,181,99,.42);
-  font-size:25px;margin-bottom:16px;
+  box-shadow:0 6px 18px rgba(0,47,107,.14);
+  font-size:25px;margin-bottom:16px;padding:6px;
 }
 .login-card h1{font-size:1.32rem;letter-spacing:-.01em}
 .login-card p{font-size:.8rem;margin-bottom:24px}
@@ -959,7 +959,7 @@ select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible,
 .app-header{position:sticky;top:0}
 .hlogo{
   width:40px;height:40px;border-radius:var(--v3-r-md);
-  box-shadow:0 4px 14px rgba(226,181,99,.34);
+  box-shadow:0 3px 12px rgba(0,16,40,.30);
 }
 .htitle h1{font-size:1rem;letter-spacing:-.01em}
 .htitle p{font-size:.62rem;color:var(--v3-gold-l);opacity:.9}
@@ -1784,7 +1784,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
 <!-- LOGIN -->
 <div id="login-screen">
 <div class="login-card">
-  <div class="login-logo" id="login-logo-wrap"><img id="login-logo-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:11px"><span id="login-logo-txt">+</span></div>
+  <div class="login-logo" id="login-logo-wrap"><img id="login-logo-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:contain"><span id="login-logo-txt">+</span></div>
   <h1>ECC Kingasani 2</h1>
   <p>Finances et Gestion des Membres</p>
   <div class="lf"><label>Email</label><input type="email" id="li-email" placeholder="votre@email.com"></div>
@@ -1826,7 +1826,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
 
 <!-- HEADER -->
 <header class="app-header" id="app-hdr">
-  <div class="hlogo" id="hlogo-wrap" onclick="adminClickLogo()" title="Cliquer pour changer le logo (admin)"><img id="app-logo-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:8px"><span id="app-logo-txt">+</span></div>
+  <div class="hlogo" id="hlogo-wrap" onclick="adminClickLogo()" title="Cliquer pour changer le logo (admin)"><img id="app-logo-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:contain"><span id="app-logo-txt">+</span></div>
   <div class="htitle">
     <h1 id="app-title-txt">ECC / 13eme CBFC - Kingasani 2</h1>
     <p id="app-subtitle-txt" style="display:flex;align-items:center;gap:8px">
@@ -10035,7 +10035,7 @@ function renderAdmin(){
   // Logo preview
   html+="<div style='display:flex;flex-direction:column;align-items:center;gap:8px'>";
   if(savedLogo){
-    html+="<img src='"+savedLogo+"' style='width:64px;height:64px;object-fit:cover;border-radius:10px;border:2px solid #c5d8ed'>";
+    html+="<img src='"+savedLogo+"' style='width:64px;height:64px;object-fit:contain;background:#fff;padding:5px;border-radius:10px;border:2px solid #c5d8ed'>";
   } else {
     html+="<div style='width:64px;height:64px;background:linear-gradient(135deg,#c8a96e,#e8c97e);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;color:#002F6B'>+</div>";
   }
@@ -10859,25 +10859,66 @@ function handleLogoUpload(input) {
   processLogoFile(input.files[0]);
 }
 
+// Le logo s'affiche a 38 px dans l'en-tete et a 64 px sur les documents : rien
+// ne sert d'en conserver davantage. On reduit a 256 px avant d'ecrire, de sorte
+// qu'une photo prise au telephone passe sans retouche prealable.
+var LOGO_TAILLE_MAX = 256;
+
 function processLogoFile(file) {
-  if(file.size > 500*1024){
-    showToast("Image trop lourde. Maximum 500 KB.", "err");
+  if(file.size > 8*1024*1024){
+    showToast("Image trop lourde (max 8 Mo).", "err");
     return;
   }
   var reader = new FileReader();
+  reader.onerror = function(){ showToast("Lecture du fichier impossible.", "err"); };
   reader.onload = function(e) {
-    var dataUrl = e.target.result;
-    try{ localStorage.setItem("ecc_logo", dataUrl); }catch(ex){ showToast("Stockage insuffisant pour le logo.", "err"); return; }
-    applyLogoToHeader(dataUrl);
-    showToast("Logo mis a jour !", "ok");
-    renderAdmin();
+    _reduireLogo(e.target.result, function(dataUrl, reduit){
+      try{ localStorage.setItem("ecc_logo", dataUrl); }
+      catch(ex){ showToast("Stockage insuffisant pour le logo.", "err"); return; }
+      applyLogoToHeader(dataUrl);
+      appliquerFavicon(dataUrl);
+      showToast(reduit ? ("Logo mis a jour, reduit a " + LOGO_TAILLE_MAX + " px.") : "Logo mis a jour !", "ok");
+      renderAdmin();
+    }, function(){
+      showToast("Ce fichier n'est pas une image lisible.", "err");
+    });
   };
   reader.readAsDataURL(file);
+}
+
+// La reduction sort en PNG, jamais en JPEG : le JPEG ne connait pas la
+// transparence et remplacerait le fond transparent du logo par du noir.
+function _reduireLogo(dataUrl, ok, echec) {
+  var img = new Image();
+  img.onerror = function(){ echec(); };
+  img.onload = function() {
+    var w = img.naturalWidth || img.width || 0;
+    var h = img.naturalHeight || img.height || 0;
+    // Un SVG sans dimensions intrinseques renvoie 0 : on le dessine au gabarit.
+    if(!w || !h){ w = LOGO_TAILLE_MAX; h = LOGO_TAILLE_MAX; }
+    if(w <= LOGO_TAILLE_MAX && h <= LOGO_TAILLE_MAX && dataUrl.length < 300*1024){
+      ok(dataUrl, false);
+      return;
+    }
+    var f = Math.min(LOGO_TAILLE_MAX / w, LOGO_TAILLE_MAX / h, 1);
+    var lc = Math.max(1, Math.round(w * f)), hc = Math.max(1, Math.round(h * f));
+    try {
+      var c = document.createElement("canvas");
+      c.width = lc; c.height = hc;
+      c.getContext("2d").drawImage(img, 0, 0, lc, hc);
+      ok(c.toDataURL("image/png"), true);
+    } catch(ex) {
+      // Canvas indisponible : on garde l'original s'il tient en stockage.
+      ok(dataUrl, false);
+    }
+  };
+  img.src = dataUrl;
 }
 
 function removeLogo() {
   try{ localStorage.removeItem("ecc_logo"); }catch(e){}
   applyLogoToHeader(getLogo());
+  appliquerFavicon(getLogo());
   showToast("Logo personnalis\u00e9 retir\u00e9 : le logo CBFC d'origine est r\u00e9tabli.", "");
   renderAdmin();
 }
