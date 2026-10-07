@@ -24250,6 +24250,15 @@ function _renderAccueil() {
   setStyle("ah-solde","color", finSolde>=0?"#86efac":"#fca5a5");
   setEl("ah-cultes",nbCultes+" culte(s) · "+moisLabel+" · Reporté + Recettes − Dépenses = Nouveau solde");
 
+  // La position de caisse de l'eglise n'est pas une information d'accueil.
+  // Elle s'affichait a tout compte connecte, y compris a celui qui n'a ni le
+  // module Finances ni l'onglet Solde. On la reserve a qui a cet onglet :
+  // l'administrateur, les finances, le tresorier. Un compte de saisie, qui ne
+  // porte que Recettes et Depenses, ne la voit plus.
+  var _voitSolde = (typeof hasFinanceTab === "function") && hasFinanceTab("solde");
+  var _resume = document.getElementById("ah-resume-fin");
+  if (_resume) _resume.style.display = _voitSolde ? "" : "none";
+
   // Dernier culte
   if(lastCulte && lastCulte.meta){
     var m=lastCulte.meta, s=lastCulte.sums||{};
@@ -24338,6 +24347,12 @@ function _renderAccueil() {
       else if(pct2>=80) alertes.push({icon:"🟠",msg:p.label+" : "+pct2+"% du budget utilisé","mod":"finances"});
     });
   }
+  // Chaque alerte renvoie vers un module. Celui qui n'a pas le module n'a pas
+  // a connaitre le chiffre : « 75 membres avec arrieres » est une donnee du
+  // registre, pas un message d'accueil.
+  alertes = alertes.filter(function(a){
+    return (typeof hasModule !== "function") || !a.mod || hasModule(a.mod);
+  });
   var alertZone = document.getElementById("ah-alertes");
   if(alertZone){
     alertZone.style.display = alertes.length>0 ? "" : "none";
@@ -30041,6 +30056,22 @@ function filtrerCultesPeriodeDimes(hist, year, month) {
 
   var box, input, list, items = [], sel = 0;
 
+  // La palette listait les treize modules a tout le monde. Elle refusait bien
+  // l'ouverture, mais elle enoncait la carte complete de l'application a un
+  // compte qui n'en voit qu'un coin — et un intitule de module est deja une
+  // information. Elle ne propose plus que ce que le compte peut ouvrir.
+  function modulesVisibles(){
+    var u = window.gCurrentUser;
+    if (!u) return [];
+    var adm = (u.role === "admin")
+           || (window.USER_ROLES && USER_ROLES[u.email] && USER_ROLES[u.email].role === "admin");
+    return MODULES.filter(function(m){
+      if (m.id === "accueil") return true;
+      if (m.id === "admin" || m.id === "analyse") return adm;
+      return (typeof window.hasModule === "function") ? window.hasModule(m.id) : adm;
+    });
+  }
+
   function appVisible(){
     var w = document.getElementById("app-wrapper");
     return !!w && w.style.display !== "none";
@@ -30076,7 +30107,7 @@ function filtrerCultesPeriodeDimes(hist, year, month) {
 
   function collect(){
     var out = [];
-    MODULES.forEach(function(m){
+    modulesVisibles().forEach(function(m){
       out.push({ico:m.ico, lbl:m.lbl, sub:"Module", run:function(){
         if(typeof switchModule === "function") switchModule(m.id);
       }});
