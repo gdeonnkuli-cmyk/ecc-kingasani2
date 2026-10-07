@@ -28,11 +28,16 @@ service cloud.firestore {
       return request.auth != null
              && request.auth.token.email == 'gdeonnkuli@gmail.com';
     }
+    // data.role sur un document qui ne porte pas ce champ ne renvoie pas vide :
+    // il fait ECHOUER l'evaluation, et la regle refuse. Or l'auto-inscription
+    // cree un document qui ne contient que email et lastLogin — le compte se
+    // fermait donc la porte au nez des sa creation. data.get(cle, defaut) lit
+    // sans exiger que le champ existe.
     function estAdmin() {
       return estProprietaire()
              || (request.auth != null
                  && exists(/databases/$(database)/documents/accounts/$(request.auth.token.email))
-                 && get(/databases/$(database)/documents/accounts/$(request.auth.token.email)).data.role == 'admin');
+                 && get(/databases/$(database)/documents/accounts/$(request.auth.token.email)).data.get('role', '') == 'admin');
     }
 
     // ── Qui a encore le droit d'entrer ────────────────────────────────────
@@ -50,7 +55,7 @@ service cloud.firestore {
       return estProprietaire()
              || (request.auth != null
                  && (!exists(/databases/$(database)/documents/accounts/$(request.auth.token.email))
-                     || get(/databases/$(database)/documents/accounts/$(request.auth.token.email)).data.disabled != true));
+                     || get(/databases/$(database)/documents/accounts/$(request.auth.token.email)).data.get('disabled', false) != true));
     }
 
 
@@ -95,10 +100,60 @@ service cloud.firestore {
                        );
     }
 
+    // ── Les modules du compte ─────────────────────────────────────────────
+    // L'application decide qui voit quoi avec getPerms() : role admin = tout,
+    // sinon la liste perms.modules du compte, et a defaut les modules par
+    // defaut du role. Ces regles disent la meme chose, cote serveur — sans
+    // quoi le cloisonnement reste une politesse de l'interface, que la clef
+    // publique de la page permet de contourner.
+    //
+    // Le document du compte n'est lu qu'une fois par requete : Firestore met
+    // en cache les get() identiques d'une meme evaluation, ce qui vaut aussi
+    // pour les lots de 400 ecritures des bascules.
+    function compte() {
+      return get(/databases/$(database)/documents/accounts/$(request.auth.token.email)).data;
+    }
+    function compteExiste() {
+      return request.auth != null
+             && exists(/databases/$(database)/documents/accounts/$(request.auth.token.email));
+    }
+
+    // Les memes listes que getDefaultPerms() dans la page. Elles sont ecrites
+    // en clair : une regle qu'on ne peut pas lire est une regle qu'on ne peut
+    // pas verifier.
+    function modulesParDefaut(role) {
+      return role == 'finances'
+               ? ['finances','social','seminaire','eb','annonces','projets','loyer']
+           : role == 'tresorier'
+               ? ['finances','membres','social','seminaire','ecodim','effectif','eb','annonces','projets','loyer','budget']
+               : ['finances','eb','annonces','projets'];
+    }
+
+    // Un compte sans document accounts/ garde les modules par defaut du role
+    // de saisie, comme la page. Refuser ici fermerait l'eglise le jour de la
+    // publication a tous ceux qu'on n'a pas encore decrits.
+    function mesModules() {
+      return !compteExiste()
+               ? modulesParDefaut('')
+           : compte().get('role', '') == 'admin'
+               ? ['finances','membres','social','seminaire','ecodim','effectif','eb','annonces','projets','loyer','budget']
+           : (compte().get('perms', {}).get('modules', []).size() > 0)
+               ? compte().get('perms', {}).get('modules', [])
+               : modulesParDefaut(compte().get('role', ''));
+    }
+
+    // Le droit d'ouvrir un module, et donc d'en lire et d'en ecrire les
+    // donnees. Le proprietaire traverse en dur, comme pour estAdmin() et
+    // estActif() : une regle qui peut enfermer dehors celui qui la corrige
+    // n'est pas une securite.
+    function aModule(m) {
+      return estProprietaire() || (estActif() && (m in mesModules()));
+    }
+
     // ── Données de gestion : session authentifiée obligatoire ──────────────
     // Ces collections sont celles réellement utilisées par l'application.
-    match /membres_db/{doc}          { allow read, write: if estActif(); }
-    match /social_db/{doc}           { allow read, write: if estActif(); }
+    match /membres_db/{doc}          { allow read, write: if aModule('membres'); }
+    match /social_db/{doc}           { allow read, write: if aModule('social'); }
 
     // ── Assistances sociales, un document par demande ──────────────────────
     // Elles vivaient dans social_db/main, réécrit en entier à chaque
@@ -106,44 +161,48 @@ service cloud.firestore {
     // Chaque assistance a désormais son document, ce qui supprime le conflit.
     // L'ancien tableau est conservé comme archive ; cette règle doit être
     // publiée AVANT de lancer la bascule, sans quoi l'écriture est refusée.
-    match /social_assistances/{doc}  { allow read, write: if estActif(); }
+    match /social_assistances/{doc}  { allow read, write: if aModule('social'); }
 
     // ── Membres et cotisations, un document par entité ─────────────────────
     // Même bascule que pour les assistances : ils vivaient dans deux tableaux
     // de membres_db/main, réécrits en entier à chaque enregistrement. Ces deux
     // règles doivent être publiées AVANT de lancer la bascule.
-    match /membres/{doc}             { allow read, write: if estActif(); }
-    match /cotisations/{doc}         { allow read, write: if estActif(); }
+    match /membres/{doc}             { allow read, write: if aModule('membres'); }
+    match /cotisations/{doc}         { allow read, write: if aModule('membres'); }
 
     // ── Mutuelle : un document par entité ─────────────────────────────────
     // Adhérents, versements et demandes vivaient dans mutuelle_db/main,
     // réécrit en entier à chaque opération : deux personnes enregistrant en
     // même temps s'écrasaient. Ces trois règles doivent être publiées AVANT
     // de lancer la bascule, sans quoi l'écriture est refusée.
-    match /mutuelle_membres/{doc}     { allow read, write: if estActif(); }
-    match /mutuelle_cotisations/{doc} { allow read, write: if estActif(); }
-    match /mutuelle_soins/{doc}       { allow read, write: if estActif(); }
-    match /seminaire_db/{doc}        { allow read, write: if estActif(); }
-    match /ecodim_db/{doc}           { allow read, write: if estActif(); }
-    match /effectif_db/{doc}         { allow read, write: if estActif(); }
-    match /loyer_db/{doc}            { allow read, write: if estActif(); }
+    match /mutuelle_membres/{doc}     { allow read, write: if aModule('social'); }
+    match /mutuelle_cotisations/{doc} { allow read, write: if aModule('social'); }
+    match /mutuelle_soins/{doc}       { allow read, write: if aModule('social'); }
+    match /mutuelle_db/{doc}         { allow read, write: if aModule('social'); }
+    match /seminaire_db/{doc}        { allow read, write: if aModule('seminaire'); }
+    match /ecodim_db/{doc}           { allow read, write: if aModule('ecodim'); }
+    match /effectif_db/{doc}         { allow read, write: if aModule('effectif'); }
+    match /loyer_db/{doc}            { allow read, write: if aModule('loyer'); }
 
     // ── Loyer : un document par entité ────────────────────────────────────
     // Contributeurs, versements et dépenses vivaient dans loyer_db/main,
     // réécrit en entier à chaque geste : deux personnes enregistrant en même
     // temps s'écrasaient. Ces trois règles doivent être publiées AVANT de
     // lancer la bascule, sans quoi l'écriture est refusée.
-    match /loyer_contributeurs/{doc}  { allow read, write: if estActif(); }
-    match /loyer_versements/{doc}     { allow read, write: if estActif(); }
-    match /loyer_depenses/{doc}       { allow read, write: if estActif(); }
-    match /effectif_seances/{doc}     { allow read, write: if estActif(); }
-    match /effectif_visiteurs/{doc}   { allow read, write: if estActif(); }
-    match /effectif_programmes/{doc}  { allow read, write: if estActif(); }
-    match /projets/{doc}             { allow read, write: if estActif(); }
-    match /eb_demandes/{doc}         { allow read, write: if estActif(); }
-    match /annonces/{doc}            { allow read, write: if estActif(); }
-    match /cultes/{doc}              { allow read, write: if estActif(); }
-    match /historique/{doc}          { allow read, write: if estActif(); }
+    match /loyer_contributeurs/{doc}  { allow read, write: if aModule('loyer'); }
+    match /loyer_versements/{doc}     { allow read, write: if aModule('loyer'); }
+    match /loyer_depenses/{doc}       { allow read, write: if aModule('loyer'); }
+    match /effectif_seances/{doc}     { allow read, write: if aModule('effectif'); }
+    match /effectif_visiteurs/{doc}   { allow read, write: if aModule('effectif'); }
+    match /effectif_programmes/{doc}  { allow read, write: if aModule('effectif'); }
+    match /projets/{doc}             { allow read, write: if aModule('projets'); }
+    match /eb_demandes/{doc}         { allow read, write: if aModule('eb'); }
+    match /annonces/{doc}            { allow read, write: if aModule('annonces'); }
+
+    // Le culte et son archive sont la piece comptable : elles suivent le
+    // module Finances. La distribution des dimes en fait partie.
+    match /cultes/{doc}              { allow read, write: if aModule('finances'); }
+    match /historique/{doc}          { allow read, write: if aModule('finances'); }
     match /presence/{doc}            { allow read, write: if estActif(); }
     // ── Configuration ─────────────────────────────────────────────────────
     // Clôtures de période, correspondance comptable SYCEBNL, montants des
@@ -167,9 +226,15 @@ service cloud.firestore {
       allow write: if estAdmin();
     }
     match /notifications/{doc}       { allow read, write: if estActif(); }
-    match /budget_db/{doc}           { allow read, write: if estActif(); }
-    match /mutuelle_db/{doc}         { allow read, write: if estActif(); }
-    match /distrib_validations/{doc} { allow read, write: if estActif(); }
+
+    // Lu au lancement par tout compte — chargerBudgetPostes() tourne dans
+    // launchApp, avant toute ouverture de module. Fermer la lecture le ferait
+    // echouer en silence pour tout le monde. L'ecriture, elle, est tenue.
+    match /budget_db/{doc} {
+      allow read:  if estActif();
+      allow write: if aModule('finances') || aModule('budget');
+    }
+    match /distrib_validations/{doc} { allow read, write: if aModule('finances'); }
     match /connexions/{doc}          { allow read, write: if estActif(); }
 
     // ── Journal d'audit ───────────────────────────────────────────────────
@@ -193,9 +258,9 @@ service cloud.firestore {
     // .doc(code).get() — la consultation par code fonctionne donc à
     // l'identique, mais l'énumération devient impossible.
     match /fiches_publiques/{doc} {
-      allow get:   if true;                  // ouvrir SA fiche, code exact requis
-      allow list:  if estActif();            // énumération réservée à l'équipe encore ouverte
-      allow write: if estActif();            // création, mise à jour, retrait
+      allow get:   if true;                       // ouvrir SA fiche, code exact requis
+      allow list:  if aModule('membres');         // énumération réservée au registre
+      allow write: if aModule('membres');         // création, mise à jour, retrait
     }
 
     // ── Trace des consultations de fiches ─────────────────────────────────
