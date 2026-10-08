@@ -25,7 +25,7 @@
  *   Elle nomme le cache ; la changer purge l'ancien au prochain démarrage.
  */
 
-var VERSION = "2026.10.2";
+var VERSION = "2026.10.3";
 var CACHE   = "ecc-kingasani2-" + VERSION;
 
 // Le strict nécessaire pour afficher l'écran de connexion sans réseau.
