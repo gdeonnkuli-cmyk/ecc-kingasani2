@@ -7,8 +7,18 @@
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="ECC / 13e CBFC Kingasani 2 - Gestion financiere, membres et activites.">
 <title>ECC Kingasani 2 - Gestion Financiere et Membres</title>
-<link rel="icon" id="fav-icon" href="data:,">
-<link rel="apple-touch-icon" id="fav-touch" href="data:,">
+<link rel="icon" id="fav-icon" href="icones/favicon-32.png">
+<link rel="apple-touch-icon" id="fav-touch" href="icones/apple-touch-icon.png">
+<!-- Installation sur le telephone : le manifeste donne le nom, l'icone et
+     l'affichage plein ecran ; les metas Apple font la meme chose sur iOS,
+     qui ne lit pas le manifeste pour cela. -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ECC Kingasani 2">
+<!-- « black » et non « black-translucent » : la page ne gere pas encore la
+     marge haute des encoches, le contenu passerait sous l'heure. -->
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <!-- Firebase v9 compat -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
@@ -1792,6 +1802,14 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
   <button class="btn-login" id="li-btn">Se connecter</button>
   <div class="login-err" id="li-err"></div>
   <div class="login-note">Connexion reservee aux membres autorises<br>ECC / 13eme CBFC - Kingasani 2</div>
+
+  <!-- Installation : masque tant que le navigateur ne la propose pas, et
+       une fois l'application installee. -->
+  <div id="install-wrap" style="display:none;margin-top:14px;text-align:center">
+    <button class="btn-login" id="install-btn" onclick="installerApp()"
+      style="background:linear-gradient(135deg,#003F8E,#1f6fad)">⬇️ Installer sur ce téléphone</button>
+    <div style="font-size:.68rem;color:#6b88a4;margin-top:6px">Une icône sur l’écran d’accueil, et l’application s’ouvre sans navigateur.</div>
+  </div>
 
   <!-- Separateur -->
   <div style="display:flex;align-items:center;gap:10px;margin:18px 0 14px">
@@ -11267,11 +11285,22 @@ function removeLogo() {
 }
 
 // L'onglet du navigateur et l'icone d'ecran d'accueil portent le meme logo.
+//
+// Mais tant que le logo est celui d'origine, on garde les VRAIS fichiers de
+// icones/ : iOS ignore les URL « data: » pour l'icone d'ecran d'accueil et
+// met une capture de la page a la place. On ne bascule sur la data-URL que
+// pour un logo personnalise, faute de fichier a proposer.
 function appliquerFavicon(dataUrl) {
   if (!dataUrl) return;
+  var perso = (dataUrl !== LOGO_DEFAUT);
+  var cibles = {
+    "fav-icon":  perso ? dataUrl : "icones/favicon-32.png",
+    "fav-touch": perso ? dataUrl : "icones/apple-touch-icon.png"
+  };
   ["fav-icon", "fav-touch"].forEach(function(id) {
     var el = document.getElementById(id);
-    if (el && el.href !== dataUrl) el.href = dataUrl;
+    var v  = cibles[id];
+    if (el && el.getAttribute("href") !== v) el.setAttribute("href", v);
   });
 }
 
@@ -11582,8 +11611,8 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.1";
-var APP_VERSION_NOTES = "Menu d'accueil en grille, rôle Trésorier, alertes budget, rapport consolidé imprimable, injections inter-modules.";
+var APP_VERSION = "2026.10.2";
+var APP_VERSION_NOTES = "Application installable sur téléphone (icône, plein écran, ouverture hors ligne) et barème daté du taux de change.";
 
 function checkAppUpdate() {
   try {
@@ -15016,8 +15045,9 @@ function launchApp() {
   if(hasTresorier()) setTimeout(applyReadOnlyMode, 1000);
   // Vérifier les mises à jour de l'application
   checkAppUpdate();
-  // Tous les utilisateurs atterrissent sur le menu d'accueil
-  switchModule("accueil");
+  // Tous les utilisateurs atterrissent sur le menu d'accueil, sauf si un
+  // raccourci du manifeste (appui long sur l'icone) demande un module precis.
+  switchModule(_moduleDemande() || "accueil");
   // Vérifier si une mise à jour est disponible sur le serveur (après 5s)
   setTimeout(checkServerUpdate, 5000);
   // Revérifier toutes les 30 minutes
@@ -24834,6 +24864,147 @@ function imprimerRapportInline() {
 // ================================================
 // == DETECTION MISE A JOUR DEPUIS GITHUB PAGES ==
 // ================================================
+
+// ══ INSTALLATION SUR LE TÉLÉPHONE ══════════════════════════════════
+// L'application reste une page web : rien n'est reecrit, rien n'est reinstalle
+// a chaque correction. Le manifeste lui donne un nom, une icone et le plein
+// ecran ; le service worker lui permet de s'ouvrir sans reseau.
+
+var gPromptInstall = null;   // l'evenement que Chrome nous confie
+var gSWEnAttente   = null;   // la nouvelle version, prete mais pas activee
+
+function _estInstallee() {
+  try {
+    if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
+  } catch (e) {}
+  return window.navigator.standalone === true;   // iOS
+}
+
+function _estIOS() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent || "")
+      || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+// Le module demande par un raccourci du manifeste (./?m=finances).
+function _moduleDemande() {
+  try {
+    var m = (new URLSearchParams(window.location.search)).get("m");
+    if (!m) return null;
+    if (typeof hasModule === "function" && !hasModule(m)) return null;
+    return m;
+  } catch (e) { return null; }
+}
+
+function _majBoutonInstall() {
+  var w = document.getElementById("install-wrap");
+  if (!w) return;
+  // Sur iOS le navigateur ne propose rien : on montre quand meme le bouton,
+  // il expliquera le geste. Ailleurs, on attend que Chrome nous le signale.
+  var montrer = !_estInstallee() && (gPromptInstall || _estIOS());
+  w.style.display = montrer ? "" : "none";
+}
+
+window.addEventListener("beforeinstallprompt", function (e) {
+  e.preventDefault();          // on garde la main sur le moment de l'invite
+  gPromptInstall = e;
+  _majBoutonInstall();
+});
+
+window.addEventListener("appinstalled", function () {
+  gPromptInstall = null;
+  _majBoutonInstall();
+  if (typeof showToast === "function") showToast("Application install\u00e9e. Ouvrez-la depuis l\u2019\u00e9cran d\u2019accueil.", "ok");
+});
+
+function installerApp() {
+  if (gPromptInstall) {
+    gPromptInstall.prompt();
+    gPromptInstall.userChoice.then(function () {
+      gPromptInstall = null;   // l'evenement ne sert qu'une fois
+      _majBoutonInstall();
+    });
+    return;
+  }
+  var geste = _estIOS()
+    ? "<p style='margin-bottom:8px'>Sur iPhone, c\u2019est Safari qui installe \u2014 en deux gestes :</p>"
+      + "<p style='margin-bottom:6px'>1. Appuyez sur <strong>Partager</strong>, le carr\u00e9 avec une fl\u00e8che vers le haut, en bas de l\u2019\u00e9cran.</p>"
+      + "<p style='margin-bottom:8px'>2. Faites d\u00e9filer et choisissez <strong>Sur l\u2019\u00e9cran d\u2019accueil</strong>.</p>"
+      + "<p style='font-size:.76rem;color:#6b88a4'>Depuis Chrome sur iPhone, cela ne marche pas : ouvrez d\u2019abord cette page dans Safari.</p>"
+    : "<p style='margin-bottom:8px'>Ouvrez le menu de votre navigateur \u2014 les trois points en haut \u00e0 droite \u2014 puis choisissez "
+      + "<strong>Installer l\u2019application</strong>, ou <strong>Ajouter \u00e0 l\u2019\u00e9cran d\u2019accueil</strong>.</p>"
+      + "<p style='font-size:.76rem;color:#6b88a4'>Si la ligne n\u2019appara\u00eet pas, c\u2019est que ce navigateur ne sait pas installer : "
+      + "utilisez Chrome sur Android, Safari sur iPhone.</p>";
+  // La carte de connexion monte a 9999 : sans cela le modal resterait dessous.
+  var md = document.getElementById("modal");
+  if (md) md.style.zIndex = "10001";
+  if (typeof showModalHTML === "function") {
+    showModalHTML("Installer sur ce t\u00e9l\u00e9phone", geste, function () {
+      if (md) md.style.zIndex = "";
+    }, "Compris");
+  } else {
+    if (md) md.style.zIndex = "";
+    alert(geste.replace(/<[^>]*>/g, ""));
+  }
+}
+
+// iOS n'emet jamais beforeinstallprompt : sans cet appel au demarrage, le
+// bouton n'apparaitrait jamais sur iPhone.
+window.addEventListener("load", function () { _majBoutonInstall(); });
+
+// ══ SERVICE WORKER ════════════════════════════════════════════
+// Il ne sert QUE l'ouverture hors reseau. Les donnees passent par Firestore,
+// qui a sa propre persistance : sw.js ne regarde meme pas ses requetes.
+//
+// Une version qui arrive ne remplace jamais la page en cours : elle attend, et
+// c'est le bandeau de mise a jour deja en place qui propose d'actualiser.
+function appliquerMaj() {
+  var b = document.getElementById("update-banner");
+  if (b) b.remove();
+  if (gSWEnAttente) {
+    gSWEnAttente.postMessage({ type: "SKIP_WAITING" });
+    // le rechargement suit l'evenement controllerchange, ci-dessous
+    setTimeout(function () { window.location.reload(); }, 1500);  // filet
+    return;
+  }
+  window.location.reload();
+}
+
+(function () {
+  if (!("serviceWorker" in navigator)) return;
+  // Hors contexte sur (file://, http:// sur un domaine), l'enregistrement
+  // echouerait. isSecureContext couvre https, localhost et 127.0.0.1.
+  if (!window.isSecureContext) return;
+
+  var rechargee = false;
+  navigator.serviceWorker.addEventListener("controllerchange", function () {
+    if (rechargee) return;
+    rechargee = true;
+    window.location.reload();
+  });
+
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("sw.js").then(function (reg) {
+      if (reg.waiting && navigator.serviceWorker.controller) {
+        gSWEnAttente = reg.waiting;
+        if (typeof showUpdateBanner === "function") showUpdateBanner(APP_VERSION);
+      }
+      reg.addEventListener("updatefound", function () {
+        var sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener("statechange", function () {
+          // controller absent = toute premiere installation, rien a annoncer.
+          if (sw.state === "installed" && navigator.serviceWorker.controller) {
+            gSWEnAttente = sw;
+            if (typeof showUpdateBanner === "function") showUpdateBanner(APP_VERSION);
+          }
+        });
+      });
+    }).catch(function (e) {
+      console.warn("Service worker non enregistr\u00e9 :", e && e.message);
+    });
+  });
+})();
+
 function checkServerUpdate() {
   var CURRENT = APP_VERSION;
   var url = window.location.href.split('?')[0].split('#')[0];
@@ -24862,7 +25033,7 @@ function showUpdateBanner(newVersion) {
   banner.innerHTML = "<span style='font-size:1rem'>🆕</span>"
     + "<div style='flex:1'><strong>Mise à jour disponible</strong> (v"+newVersion+")<br>"
     + "<span style='opacity:.8;font-size:.72rem'>Actualisez pour obtenir les dernières fonctionnalités</span></div>"
-    + "<button onclick='location.reload(true)' style='background:#e8c97e;color:#003F8E;border:none;border-radius:7px;padding:7px 14px;font-weight:800;cursor:pointer;font-size:.78rem;white-space:nowrap'>Actualiser</button>"
+    + "<button onclick='appliquerMaj()' style='background:#e8c97e;color:#003F8E;border:none;border-radius:7px;padding:7px 14px;font-weight:800;cursor:pointer;font-size:.78rem;white-space:nowrap'>Actualiser</button>"
     + "<button onclick='document.getElementById(\"update-banner\").remove()' style='background:rgba(255,255,255,.1);color:#fff;border:none;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:.9rem;margin-left:4px'>✕</button>";
   document.body.appendChild(banner);
 }

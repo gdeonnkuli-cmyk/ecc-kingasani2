@@ -1,0 +1,34 @@
+{
+  "id": "./",
+  "name": "ECC Kingasani 2 — Gestion Financière et Membres",
+  "short_name": "ECC Kingasani 2",
+  "description": "Gestion financière, membres et activités de l'ECC / 13e CBFC Kingasani 2.",
+  "lang": "fr",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#0a1726",
+  "background_color": "#002F6B",
+  "categories": ["finance", "productivity", "business"],
+  "icons": [
+    { "src": "icones/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icones/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icones/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Saisir un culte",
+      "short_name": "Culte",
+      "url": "./?m=finances",
+      "icons": [{ "src": "icones/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Membres",
+      "short_name": "Membres",
+      "url": "./?m=membres",
+      "icons": [{ "src": "icones/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}
