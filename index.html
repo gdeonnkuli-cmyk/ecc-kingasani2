@@ -958,6 +958,16 @@ input:focus, select:focus, textarea:focus{
   .bar-table tbody td.bar-periode { order: 1; }
   .bar-table tbody td.bar-actions { order: 2; align-self: end; justify-self: end; padding-bottom: 3px; }
   .bar-table tbody td.bar-actions::before { content: none; }
+
+  /* Échéancier : cinq colonnes, dont l'intitulé qui porte tout le sens. Sur
+     un téléphone, le défilement latéral le faisait sortir de l'écran et l'on
+     ne savait plus de quelle obligation parlait la ligne. L'intitulé et
+     l'action prennent donc toute la largeur, bénéficiaire / dû / état se
+     rangeant entre les deux. */
+  .ech-table tbody td.ech-obj { grid-column: 1 / -1; }
+  .ech-table tbody td.ech-act { grid-column: 1 / -1; justify-self: end; text-align: right !important; }
+  .ech-table tbody td.ech-act::before { content: none; }
+  .ech-table tbody td.ech-du { text-align: left !important; white-space: normal !important; }
 }
 /* =====================================================================
    ECC KINGASANI 2 — DESIGN SYSTEM v3  (couche de surcharge, non destructive)
@@ -11958,8 +11968,8 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.3";
-var APP_VERSION_NOTES = "Écran de démarrage animé, application installable sur téléphone et barème daté du taux de change.";
+var APP_VERSION = "2026.10.4";
+var APP_VERSION_NOTES = "Échéancier des obligations : ce qui est dû, ce qui est réglé, et la confirmation avec justificatif.";
 
 function checkAppUpdate() {
   try {
@@ -30717,11 +30727,11 @@ function _echAffiche() {
       }
 
       corps += "<tr>"
-        + "<td data-lbl='Obligation'><div style='font-weight:600'>" + escH(d.lbl) + "</div>" + detail + "</td>"
+        + "<td data-lbl='Obligation' class='ech-obj'><div style='font-weight:600'>" + escH(d.lbl) + "</div>" + detail + "</td>"
         + "<td data-lbl='B\u00e9n\u00e9ficiaire' style='font-size:.74rem;color:var(--muted)'>" + escH(d.benef || "\u2014") + "</td>"
-        + "<td data-lbl='D\u00fb' style='text-align:right;font-family:DM Mono,monospace;font-weight:700;white-space:nowrap'>" + duTxt + ecart + "</td>"
+        + "<td data-lbl='D\u00fb' class='ech-du' style='text-align:right;font-family:DM Mono,monospace;font-weight:700;white-space:nowrap'>" + duTxt + ecart + "</td>"
         + "<td data-lbl='\u00c9tat'>" + badge + "</td>"
-        + "<td data-lbl='' style='text-align:right'>" + act
+        + "<td data-lbl='' class='ech-act' style='text-align:right'>" + act
         + ((regl && regl.photoUrl) ? " <a href='" + escH(regl.photoUrl) + "' target='_blank' title='Justificatif' style='font-size:1rem;text-decoration:none'>\uD83D\uDCF7</a>" : "")
         + "</td></tr>";
     });
@@ -30738,7 +30748,7 @@ function _echAffiche() {
        + "ceux des d\u00eemes suivent leur cycle, du lendemain du 1er dimanche du mois "
        + "au 1er dimanche du suivant, comme le r\u00e9capitulatif mensuel.</div></div>";
 
-    h += "<div style='overflow-x:auto;margin-top:10px'><table class='cotis-table' style='font-size:.78rem;min-width:620px'><thead><tr>"
+    h += "<div style='overflow-x:auto;margin-top:10px'><table class='cotis-table bar-table ech-table' style='font-size:.78rem;min-width:620px'><thead><tr>"
        + "<th>Obligation</th><th>B\u00e9n\u00e9ficiaire</th><th style='text-align:right'>D\u00fb</th><th>\u00c9tat</th><th></th>"
        + "</tr></thead><tbody>" + corps + "</tbody></table></div>";
     h += "</div></div>";
