@@ -11516,12 +11516,15 @@ function _carteBaremeEcheances() {
   h += "<div style=\'overflow-x:auto\'><table class=\'cotis-table bar-table\' style=\'min-width:520px\'><thead><tr>"
      + "<th>Obligation</th><th style=\'width:120px\'>\u00c0 partir de</th><th style=\'width:110px\'>FC</th>"
      + "<th style=\'width:100px\'>USD</th><th style=\'width:38px\'></th></tr></thead><tbody>";
-  ECH_LIGNES.forEach(function(L) {
+  ECH_TOUTES().forEach(function(L) {
     if (L.src !== "bareme") return;
     var cour = _echBareme(L.cle, ym);
     h += "<tr>"
-       + "<td data-lbl=\'Obligation\'><div style=\'font-weight:600;font-size:.78rem\'>" + escH(L.lbl) + "</div>"
-       + "<div style=\'font-size:.65rem;color:var(--muted)\'>" + escH(L.benef || "") + "</div></td>"
+       + "<td data-lbl=\'Obligation\'><div style=\'font-weight:600;font-size:.78rem\'>" + escH(L.lbl)
+       + (L.sup ? " <a onclick=\"retirerRubriqueEch(\'" + L.cle + "\')\" title=\'Retirer cette rubrique\' "
+                + "style=\'cursor:pointer;color:#c0392b;font-weight:400\'>\u2715</a>" : "") + "</div>"
+       + "<div style=\'font-size:.65rem;color:var(--muted)\'>" + escH(L.benef || "")
+       + (L.sup ? " \u00b7 rubrique de l\u2019\u00e9glise" : "") + "</div></td>"
        + "<td data-lbl=\'\u00c0 partir de\'><input type=\'month\' id=\'be-d-" + L.cle + "\' value=\'" + escHtml(ym) + "\' style=\'width:100%\'></td>"
        + "<td data-lbl=\'FC\'><input type=\'number\' id=\'be-c-" + L.cle + "\' step=\'0.01\' value=\'" + (cour ? cour.cdf : "") + "\' style=\'width:100%\'></td>"
        + "<td data-lbl=\'USD\'><input type=\'number\' id=\'be-u-" + L.cle + "\' step=\'0.01\' value=\'" + (cour ? cour.usd : "") + "\' style=\'width:100%\'></td>"
@@ -11538,8 +11541,63 @@ function _carteBaremeEcheances() {
       h += "</td></tr>";
     }
   });
-  h += "</tbody></table></div></div>";
+  h += "</tbody></table></div>";
+
+  // Ajouter une rubrique r\u00e9currente : une d\u00e9pense de plus ne doit pas
+  // demander une nouvelle version de l\u2019application.
+  h += "<div style=\'margin-top:12px;padding:10px 12px;background:#eef4fb;border:1px solid #c5d8ed;border-radius:8px\'>"
+     + "<div style=\'font-size:.72rem;font-weight:700;color:#003F8E;margin-bottom:7px\'>Ajouter une rubrique r\u00e9currente</div>"
+     + "<div style=\'display:flex;gap:7px;flex-wrap:wrap;align-items:flex-end\'>"
+     + "<div class=\'fg\' style=\'margin:0;flex:1;min-width:170px\'><label style=\'font-size:.64rem\'>Intitul\u00e9</label>"
+     + "<input type=\'text\' id=\'ech-sup-lbl\' placeholder=\'Ex. : Cotisation Comit\u00e9 Ex\u00e9cutif\'></div>"
+     + "<div class=\'fg\' style=\'margin:0;min-width:140px\'><label style=\'font-size:.64rem\'>B\u00e9n\u00e9ficiaire</label>"
+     + "<input type=\'text\' id=\'ech-sup-benef\' placeholder=\'Facultatif\'></div>"
+     + "<button class=\'btn btn-g btn-sm\' onclick=\'ajouterRubriqueEch()\'>Ajouter</button>"
+     + "</div>"
+     + "<div style=\'font-size:.66rem;color:#6b88a4;margin-top:7px\'>Elle appara\u00eetra dans l\u2019\u00e9ch\u00e9ancier de chaque mois. "
+     + "Indiquez ensuite son montant dans le tableau ci-dessus, avec sa date d\u2019effet.</div>"
+     + "</div>";
+
+  h += "</div>";
   return h;
+}
+
+function ajouterRubriqueEch() {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l\u2019administrateur.", "err"); return; }
+  var lbl = ((document.getElementById("ech-sup-lbl") || {}).value || "").trim();
+  var bn  = ((document.getElementById("ech-sup-benef") || {}).value || "").trim();
+  if (!lbl) { showToast("Donnez un intitul\u00e9 \u00e0 la rubrique.", "err"); return; }
+  var deja = ECH_TOUTES().filter(function(L) { return normStr(L.lbl) === normStr(lbl); });
+  if (deja.length) { showToast("Une obligation porte d\u00e9j\u00e0 cet intitul\u00e9.", "err"); return; }
+  // Cl\u00e9 tir\u00e9e de l\u2019horloge : renommer la rubrique plus tard ne d\u00e9tachera pas
+  // les r\u00e8glements d\u00e9j\u00e0 confirm\u00e9s sous son nom.
+  var cle = "sup_" + Date.now().toString(36);
+  gEchSup = _normaliserEchSup(gEchSup.concat([{ cle: cle, lbl: lbl, benef: bn }]));
+  _ecrireBaremeEch(function(sync) {
+    logAudit("CONFIG", "\u00c9ch\u00e9ances", "Rubrique ajout\u00e9e : " + lbl + (bn ? " (" + bn + ")" : ""));
+    showToast(sync ? "Rubrique ajout\u00e9e et synchronis\u00e9e." : "Ajout\u00e9e sur cet appareil, pas encore synchronis\u00e9e.",
+              sync ? "ok" : "warn");
+    renderAdmin();
+  });
+}
+
+function retirerRubriqueEch(cle) {
+  if (!gCurrentUser || gCurrentUser.role !== "admin") { showToast("R\u00e9serv\u00e9 \u00e0 l\u2019administrateur.", "err"); return; }
+  var L = _echLigne(cle); if (!L || !L.sup) return;
+  showModal("Retirer la rubrique \u00ab\u00a0" + L.lbl + "\u00a0\u00bb ?",
+    "Elle dispara\u00eetra de l\u2019\u00e9ch\u00e9ancier des prochains mois. "
+    + "Les r\u00e8glements d\u00e9j\u00e0 confirm\u00e9s sous cette rubrique restent enregistr\u00e9s \u2014 "
+    + "on n\u2019efface pas une attestation \u2014 mais ils ne seront plus affich\u00e9s.",
+    function(){
+      closeModal();
+      gEchSup = gEchSup.filter(function(x) { return x.cle !== cle; });
+      delete gBaremeEch[cle];
+      _ecrireBaremeEch(function(){
+        logAudit("CONFIG", "\u00c9ch\u00e9ances", "Rubrique retir\u00e9e : " + L.lbl);
+        showToast("Rubrique retir\u00e9e.", "warn");
+        renderAdmin();
+      });
+    });
 }
 
 function enregistrerBaremeEch(cle) {
@@ -30366,12 +30424,38 @@ var ECH_LIGNES = [
   { cle:"carburant",     lbl:"Carburant",                           benef:"",                src:"base",   base:1, k:0.0793, per:"mois", litres:true },
   { cle:"snel_pt",       lbl:"SNEL / REGIDESO — Pasteur Titulaire",  benef:"SNEL / REGIDESO", src:"bareme", per:"mois" },
   { cle:"budget_region", lbl:"Budget Région",                        benef:"Région",          src:"bareme", per:"mois" },
-  { cle:"qp_region",     lbl:"QP Région",                            benef:"Région",          src:"bareme", per:"mois" },
-  { cle:"qp_locale",     lbl:"QP Église locale",                     benef:"Église locale",   src:"bareme", per:"mois" }
+  { cle:"qp_region",     lbl:"QP Région",                            benef:"Région",          src:"bareme", per:"mois" }
 ];
 
+// Les rubriques que l'église ajoute elle-même. Une dépense récurrente de plus
+// ne doit pas demander une version de l'application : elle se déclare ici, et
+// se comporte comme les autres lignes au barème.
+//
+// La clé est tirée de l'horloge, jamais du libellé : renommer une rubrique ne
+// doit pas détacher les règlements déjà confirmés sous son nom.
+var gEchSup = [];
+
+function _normaliserEchSup(l) {
+  var out = [], vus = {};
+  for (var i = 0; i < (l || []).length; i++) {
+    var e = l[i] || {};
+    var cle = String(e.cle || "");
+    if (!/^sup_[0-9a-z]+$/.test(cle) || vus[cle]) continue;
+    var lbl = String(e.lbl || "").trim();
+    if (!lbl) continue;
+    vus[cle] = 1;
+    out.push({ cle: cle, lbl: lbl.slice(0, 80), benef: String(e.benef || "").trim().slice(0, 60),
+               src: "bareme", per: "mois", sup: true });
+  }
+  return out;
+}
+
+// Toutes les obligations : celles de l'application, puis celles de l'église.
+function ECH_TOUTES() { return ECH_LIGNES.concat(gEchSup); }
+
 function _echLigne(cle) {
-  for (var i = 0; i < ECH_LIGNES.length; i++) if (ECH_LIGNES[i].cle === cle) return ECH_LIGNES[i];
+  var t = ECH_TOUTES();
+  for (var i = 0; i < t.length; i++) if (t[i].cle === cle) return t[i];
   return null;
 }
 
@@ -30401,30 +30485,39 @@ function _normaliserBaremeEch(b) {
 
 function chargerBaremeEch(cb) {
   try {
-    var l = localStorage.getItem("ecc_bareme_echeances");
-    if (l) gBaremeEch = _normaliserBaremeEch(JSON.parse(l));
+    var brut = JSON.parse(localStorage.getItem("ecc_bareme_echeances") || "null");
+    if (brut) {
+      // Les rubriques d'abord : le barème rejette les clés qu'il ne connaît
+      // pas, et ne les connaît qu'une fois les rubriques chargées.
+      gEchSup = _normaliserEchSup(brut.sup);
+      gBaremeEch = _normaliserBaremeEch(brut.lignes || brut);
+    }
   } catch (e) {}
   if (!IS_CONFIGURED || !gDb) { if (cb) cb(); return; }
   gDb.collection("config").doc("echeances").get()
     .then(function(doc) {
       var d = (doc.exists && doc.data()) || null;
+      if (d) gEchSup = _normaliserEchSup(d.sup);
       var dist = d ? _normaliserBaremeEch(d.lignes) : {};
       // Un barème distant vide n'efface pas celui de l'appareil.
       var vide = true; for (var k in dist) { vide = false; break; }
-      if (!vide) {
-        gBaremeEch = dist;
-        try { localStorage.setItem("ecc_bareme_echeances", JSON.stringify(gBaremeEch)); } catch (e) {}
-      }
+      if (!vide) gBaremeEch = dist;
+      _echCacheLocal();
       if (cb) cb();
     })
     .catch(function(){ if (cb) cb(); });
 }
 
+function _echCacheLocal() {
+  try { localStorage.setItem("ecc_bareme_echeances", JSON.stringify({ lignes: gBaremeEch, sup: gEchSup })); } catch (e) {}
+}
+
 function _ecrireBaremeEch(cb) {
-  try { localStorage.setItem("ecc_bareme_echeances", JSON.stringify(gBaremeEch)); } catch (e) {}
+  _echCacheLocal();
   if (!IS_CONFIGURED || !gDb) { if (cb) cb(false); return; }
   gDb.collection("config").doc("echeances").set({
     lignes: gBaremeEch,
+    sup: gEchSup,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     updatedBy: gCurrentUser ? gCurrentUser.email : ""
   }, { merge: true })
@@ -30484,8 +30577,8 @@ function _echDues(ym) {
   var bMois  = _echBases(cultesMois);
   var bDimes = _echBases(cultesDimes);
 
-  return ECH_LIGNES.map(function(L) {
-    var o = { cle: L.cle, lbl: L.lbl, benef: L.benef, src: L.src, litres: !!L.litres,
+  return ECH_TOUTES().map(function(L) {
+    var o = { cle: L.cle, lbl: L.lbl, benef: L.benef, src: L.src, litres: !!L.litres, sup: !!L.sup,
               per: L.per, cdf: 0, usd: 0, assise: 0, nbCultes: (L.per === "dimes" ? cultesDimes.length : cultesMois.length) };
     if (L.src === "base") {
       var base = (L.per === "dimes" ? bDimes : bMois)[L.base] || 0;
