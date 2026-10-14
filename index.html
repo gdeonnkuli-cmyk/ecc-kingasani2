@@ -968,6 +968,14 @@ input:focus, select:focus, textarea:focus{
   .ech-table tbody td.ech-act { grid-column: 1 / -1; justify-self: end; text-align: right !important; }
   .ech-table tbody td.ech-act::before { content: none; }
   .ech-table tbody td.ech-du { text-align: left !important; white-space: normal !important; }
+
+  /* Barème des échéances : même raison que ci-dessus. « SNEL / REGIDESO —
+     Pasteur Titulaire » demande 219 px et n'en recevait que 152 : la moitié
+     du libellé passait sous le champ voisin, et une rubrique ajoutée par
+     l'église, au nom plus long encore, aurait été illisible. */
+  .be-table tbody td.be-obj { grid-column: 1 / -1; }
+  .be-table tbody td.be-val { grid-column: 1 / -1; justify-self: end; padding-top: 2px; }
+  .be-table tbody td.be-val::before { content: none; }
 }
 /* =====================================================================
    ECC KINGASANI 2 — DESIGN SYSTEM v3  (couche de surcharge, non destructive)
@@ -1573,6 +1581,20 @@ body.dark-mode [style*="border:1px solid #e5eaf0"]{border-color:var(--v3-line)!i
   .taux-box input{width:66px}
   .er.rr>.rtag,.er.dr>.rtag{font-size:.78rem!important}
   .add-btn{min-height:42px;font-size:.82rem}
+}
+/* Barème des échéances : les trois champs d'une même ligne — date d'effet,
+   FC, USD — doivent avoir la même assise. Posés nus dans une cellule de
+   tableau, ils n'héritaient d'aucun rembourrage : le champ « month » tombait
+   à 26 px sur téléphone, la moitié de ses voisins, et sans le rayon ni le
+   fond du reste de l'application. On lui donne une classe propre plutôt que
+   d'élargir une règle de tableau qui servirait ailleurs. */
+.be-in{padding:7px 10px;border:1.5px solid var(--border);border-radius:7px;
+  font-family:'DM Sans',sans-serif;font-size:.84rem;color:var(--text);
+  background:var(--light);outline:none;width:100%;box-sizing:border-box}
+.be-in:focus{border-color:var(--mid);box-shadow:0 0 0 3px rgba(31,111,173,.1)}
+@media (max-width:1024px) and (pointer:coarse){
+  /* Même cible tactile que les champs encadrés par .fg ailleurs dans l'écran. */
+  .be-in{font-size:16px!important;padding:9px 11px!important;min-height:42px}
 }
 /* Paysage tactile : colonnes de montants élargies pour absorber les 16px */
 @media (max-width:900px) and (orientation:landscape) and (pointer:coarse){
@@ -11523,22 +11545,22 @@ function _carteBaremeEcheances() {
      + "<strong>Chaque montant vaut \u00e0 partir du mois indiqu\u00e9</strong>, jusqu\u2019\u00e0 la d\u00e9cision suivante ; "
      + "au moment de confirmer un r\u00e8glement, le montant reste modifiable si la facture diff\u00e8re."
      + "</div>";
-  h += "<div style=\'overflow-x:auto\'><table class=\'cotis-table bar-table\' style=\'min-width:520px\'><thead><tr>"
+  h += "<div style=\'overflow-x:auto\'><table class=\'cotis-table bar-table be-table\' style=\'min-width:520px\'><thead><tr>"
      + "<th>Obligation</th><th style=\'width:120px\'>\u00c0 partir de</th><th style=\'width:110px\'>FC</th>"
      + "<th style=\'width:100px\'>USD</th><th style=\'width:38px\'></th></tr></thead><tbody>";
   ECH_TOUTES().forEach(function(L) {
     if (L.src !== "bareme") return;
     var cour = _echBareme(L.cle, ym);
     h += "<tr>"
-       + "<td data-lbl=\'Obligation\'><div style=\'font-weight:600;font-size:.78rem\'>" + escH(L.lbl)
+       + "<td class=\'be-obj\' data-lbl=\'Obligation\'><div style=\'font-weight:600;font-size:.78rem\'>" + escH(L.lbl)
        + (L.sup ? " <a onclick=\"retirerRubriqueEch(\'" + L.cle + "\')\" title=\'Retirer cette rubrique\' "
                 + "style=\'cursor:pointer;color:#c0392b;font-weight:400\'>\u2715</a>" : "") + "</div>"
        + "<div style=\'font-size:.65rem;color:var(--muted)\'>" + escH(L.benef || "")
        + (L.sup ? " \u00b7 rubrique de l\u2019\u00e9glise" : "") + "</div></td>"
-       + "<td data-lbl=\'\u00c0 partir de\'><input type=\'month\' id=\'be-d-" + L.cle + "\' value=\'" + escHtml(ym) + "\' style=\'width:100%\'></td>"
-       + "<td data-lbl=\'FC\'><input type=\'number\' id=\'be-c-" + L.cle + "\' step=\'0.01\' value=\'" + (cour ? cour.cdf : "") + "\' style=\'width:100%\'></td>"
-       + "<td data-lbl=\'USD\'><input type=\'number\' id=\'be-u-" + L.cle + "\' step=\'0.01\' value=\'" + (cour ? cour.usd : "") + "\' style=\'width:100%\'></td>"
-       + "<td style=\'text-align:center\'><button class=\'btn btn-g btn-sm\' style=\'padding:2px 8px\' onclick=\"enregistrerBaremeEch(\'" + L.cle + "\')\">\u2713</button></td>"
+       + "<td data-lbl=\'\u00c0 partir de\'><input type=\'month\' class=\'be-in\' id=\'be-d-" + L.cle + "\' value=\'" + escHtml(ym) + "\'></td>"
+       + "<td data-lbl=\'FC\'><input type=\'number\' class=\'be-in\' id=\'be-c-" + L.cle + "\' step=\'0.01\' value=\'" + (cour ? cour.cdf : "") + "\'></td>"
+       + "<td data-lbl=\'USD\'><input type=\'number\' class=\'be-in\' id=\'be-u-" + L.cle + "\' step=\'0.01\' value=\'" + (cour ? cour.usd : "") + "\'></td>"
+       + "<td class=\'be-val\' style=\'text-align:center\'><button class=\'btn btn-g btn-sm\' style=\'padding:2px 8px\' onclick=\"enregistrerBaremeEch(\'" + L.cle + "\')\">\u2713</button></td>"
        + "</tr>";
     var hist = gBaremeEch[L.cle] || [];
     if (hist.length) {
@@ -11968,7 +11990,7 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.4";
+var APP_VERSION = "2026.10.5";
 var APP_VERSION_NOTES = "Échéancier des obligations : ce qui est dû, ce qui est réglé, et la confirmation avec justificatif.";
 
 function checkAppUpdate() {
