@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#0a1726">
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="ECC / 13e CBFC Kingasani 2 - Gestion financiere, membres et activites.">
-<title>ECC Kingasani 2 - Gestion Financiere et Membres</title>
+<title>ECC/CBFC-KINGASANI 2 - Gestion Financiere et Membres</title>
 <link rel="icon" id="fav-icon" href="icones/favicon-32.png">
 <link rel="apple-touch-icon" id="fav-touch" href="icones/apple-touch-icon.png">
 <!-- Installation sur le telephone : le manifeste donne le nom, l'icone et
@@ -15,7 +15,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="ECC Kingasani 2">
+<meta name="apple-mobile-web-app-title" content="ECC/CBFC-KINGASANI 2">
 <!-- « black » et non « black-translucent » : la page ne gere pas encore la
      marge haute des encoches, le contenu passerait sous l'heure. -->
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -978,7 +978,7 @@ input:focus, select:focus, textarea:focus{
   .be-table tbody td.be-val::before { content: none; }
 }
 /* =====================================================================
-   ECC KINGASANI 2 — DESIGN SYSTEM v3  (couche de surcharge, non destructive)
+   ECC/CBFC-KINGASANI 2 — DESIGN SYSTEM v3  (couche de surcharge, non destructive)
    Objectif : environnement plus lisible, plus moderne, plus attractif.
    Aucune règle ci-dessous ne modifie la structure DOM ni la logique JS.
    ===================================================================== */
@@ -1927,7 +1927,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
   <div id="boot-tuile"><img src="icones/icon-maskable-512.png" alt=""></div>
   <div id="boot-bas">
     <div id="boot-mots">
-      <div class="b1">ECC Kingasani 2</div>
+      <div class="b1">ECC/CBFC-KINGASANI 2</div>
       <div class="b2">Finances et Gestion des Membres</div>
     </div>
     <div id="boot-fil"><i></i></div>
@@ -1977,7 +1977,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
 <div id="login-screen">
 <div class="login-card">
   <div class="login-logo" id="login-logo-wrap"><img id="login-logo-img" src="" alt="" style="display:none;width:100%;height:100%;object-fit:contain"><span id="login-logo-txt">+</span></div>
-  <h1>ECC Kingasani 2</h1>
+  <h1>ECC/CBFC-KINGASANI 2</h1>
   <p>Finances et Gestion des Membres</p>
   <div class="lf"><label>Email</label><input type="email" id="li-email" placeholder="votre@email.com"></div>
   <div class="lf"><label>Mot de passe</label><input type="password" id="li-pwd" placeholder="........"></div>
@@ -2105,7 +2105,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
 <div class="module" id="module-accueil" style="display:none;background:#003F8E;margin:-12px;padding:16px;min-height:calc(100vh - 200px);border-radius:0">
   <!-- En-tête simple -->
   <div class="ah-entete" style="text-align:center;margin-bottom:14px;padding-top:8px">
-    <div class="ah-titre" style="font-size:.95rem;font-weight:700;color:#fff;letter-spacing:.02em">CBFC-KINGASANI 2</div>
+    <div class="ah-titre" style="font-size:.95rem;font-weight:700;color:#fff;letter-spacing:.02em">ECC/CBFC-KINGASANI 2</div>
     <div id="ah-mois" style="font-size:.7rem;color:rgba(255,255,255,.6);margin-top:3px">Chargement...</div>
   </div>
 
@@ -4498,7 +4498,7 @@ function pad4(n){var s=String(n);while(s.length<4)s="0"+s;return s;}
 
 
 // ================================================
-// ECC KINGASANI 2 - APPLICATION COMPLETE
+// ECC/CBFC-KINGASANI 2 - APPLICATION COMPLETE
 // Module Finances + Module Membres - ES5
 // ================================================
 
@@ -4687,7 +4687,7 @@ function switchModule(name) {
 // == FINANCES JS ==
 
 // ================================================
-// ECC KINGASANI 2 - ES5 + FIREBASE
+// ECC/CBFC-KINGASANI 2 - ES5 + FIREBASE
 // ================================================
 
 // == FIREBASE CONFIG ==
@@ -6903,7 +6903,7 @@ function printHistory() {
 
   var win = _fenetreImpression("width=1000,height=750"); if(!win) return;
   win.document.write("<!DOCTYPE html><html><head><meta charset='UTF-8'>");
-  win.document.write("<title>Historique ECC Kingasani 2 — "+period+"</title>");
+  win.document.write("<title>Historique ECC/CBFC-KINGASANI 2 — "+period+"</title>");
   win.document.write("<style>");
   win.document.write("body{font-family:Arial,sans-serif;font-size:11.5px;color:#002F6B;margin:24px 28px}");
   win.document.write("h1{font-size:17px;color:#003F8E;margin:0 0 2px}");
@@ -6966,7 +6966,7 @@ function printHistory() {
   win.document.write("<td class='cumul-final' style='text-align:right;font-family:monospace;font-size:13px;"+totNCls.replace("color","color")+";background:#2e75b6;color:#fff'>"+fmt(soldeCumul)+" CDF</td>");
   win.document.write("</tr></tbody></table>");
 
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Rapport généré automatiquement | Taux de référence : 1 USD = "+t+" CDF</div>");
+  win.document.write("<div class='footer'>ECC/CBFC-KINGASANI 2 — Rapport généré automatiquement | Taux de référence : 1 USD = "+t+" CDF</div>");
   win.document.write("</body></html>");
   win.document.close();
 }
@@ -11710,7 +11710,7 @@ function imprimerEcheancier() {
     win.document.write("<table><thead><tr><th>Obligation</th><th>B\u00e9n\u00e9ficiaire</th><th>D\u00fb</th><th>Pay\u00e9</th>"
       + "<th>\u00c9tat</th><th>Date</th><th>Confirm\u00e9 par</th><th>R\u00e9f\u00e9rence</th></tr></thead><tbody>"
       + rows + "</tbody></table>");
-    win.document.write("<div class='footer'>ECC Kingasani 2 \u2014 \u00c9tat des obligations g\u00e9n\u00e9r\u00e9 le "
+    win.document.write("<div class='footer'>ECC/CBFC-KINGASANI 2 \u2014 \u00c9tat des obligations g\u00e9n\u00e9r\u00e9 le "
       + new Date().toLocaleDateString("fr-FR") + " | \u00c9ch\u00e9ance au " + ECH_JOUR_LIMITE + " du mois suivant</div>");
     win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>\uD83D\uDDA8\uFE0F Imprimer / PDF</button></div>");
     win.document.write("</body></html>");
@@ -11990,7 +11990,7 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.5";
+var APP_VERSION = "2026.10.6";
 var APP_VERSION_NOTES = "Échéancier des obligations : ce qui est dû, ce qui est réglé, et la confirmation avec justificatif.";
 
 function checkAppUpdate() {
@@ -12514,7 +12514,7 @@ function showToast(msg,type){
 // == MEMBRES JS ==
 
 // ================================================
-// ECC KINGASANI 2 - GESTION DES MEMBRES - ES5
+// ECC/CBFC-KINGASANI 2 - GESTION DES MEMBRES - ES5
 // ================================================
 
 var MOIS_LABELS = ["","Janv","Fevr","Mars","Avr","Mai","Juin","Juil","Aout","Sept","Oct","Nov","Dec"];
@@ -14228,7 +14228,7 @@ function printFiche() {
     win.document.write("new QRCode(document.getElementById('qr-print'),{text:'"+qrUrl+"',width:80,height:80,colorDark:'#003F8E',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M});");
     win.document.write("}});<\/script>");
   }
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Fiche générée le "+new Date().toLocaleDateString("fr-FR")+"</div>");
+  win.document.write("<div class='footer'>ECC/CBFC-KINGASANI 2 — Fiche générée le "+new Date().toLocaleDateString("fr-FR")+"</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>🖨️ Imprimer / PDF</button></div>");
   win.document.write("</body></html>");
   win.document.close();
@@ -14427,7 +14427,7 @@ function enregistrerPaiement() {
 
 function showReceipt(cotis) {
   var m=findMembre(cotis.membreId); if(!m) return;
-  var logo=""; var title="ECC KINGASANI 2"; var sub="";
+  var logo=""; var title="ECC/CBFC-KINGASANI 2"; var sub="";
   try{ logo=getSceau(); title=localStorage.getItem("ecc_app_title")||title; sub=localStorage.getItem("ecc_app_sub")||""; }catch(e){}
   var html="<div class='receipt'>";
   html+="<div class='receipt-hdr'>";
@@ -15032,7 +15032,7 @@ function doPrintMembres(fStatut, fSexe, fAdhesion, fCotis, fActivite, fTri) {
   win.document.write('<div class="recap"><h4>Répartition par statut</h4><div class="kpi-grid" style="grid-template-columns:repeat('+nCols+',1fr)">'+recapStatut+'</div></div>');
   win.document.write('<table><thead><tr><th>N°</th><th>Nom &amp; Prénom</th><th>Sexe</th><th>Statut</th><th>Activité</th><th>Adhésion</th><th>Téléphone</th><th>Cotis.</th><th>Arriérés</th></tr></thead><tbody>');
   win.document.write(rows+'</tbody></table>');
-  win.document.write('<div class="footer">ECC Kingasani 2 — Imprimé le '+new Date().toLocaleDateString('fr-FR')+'</div>');
+  win.document.write('<div class="footer">ECC/CBFC-KINGASANI 2 — Imprimé le '+new Date().toLocaleDateString('fr-FR')+'</div>');
   win.document.write('<div class="no-print" style="margin-top:18px;text-align:center"><button onclick="window.print()" style="padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700">Imprimer / PDF</button></div>');
   win.document.write('</body></html>');
   win.document.close();
@@ -16764,7 +16764,7 @@ function printHistSem() {
   win.document.write("<table><thead><tr><th>Date</th><th>Titre</th><th>Responsable</th><th>Lieu</th><th>Particip.</th><th>Recettes CDF</th><th>Depenses CDF</th><th>Solde CDF</th></tr></thead><tbody>");
   win.document.write(rows);
   win.document.write("</tbody></table>");
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Historique Seminaires genere le "+new Date().toLocaleDateString("fr-FR")+" | Chaque session est convertie au taux de son enregistrement</div>");
+  win.document.write("<div class='footer'>ECC/CBFC-KINGASANI 2 — Historique Seminaires genere le "+new Date().toLocaleDateString("fr-FR")+" | Chaque session est convertie au taux de son enregistrement</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>🖨️ Imprimer / PDF</button></div>");
   win.document.write("</body></html>");
   win.document.close();
@@ -17243,7 +17243,7 @@ function printHistEco() {
   win.document.write("<table><thead><tr><th>Date</th><th>Titre</th><th>Responsable</th><th>Lieu</th><th>Enfants</th><th>Monit.</th><th>Recettes CDF</th><th>Depenses CDF</th><th>Solde CDF</th></tr></thead><tbody>");
   win.document.write(rows);
   win.document.write("</tbody></table>");
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Historique ECODIMs genere le "+new Date().toLocaleDateString("fr-FR")+" | Chaque seance est convertie au taux de son enregistrement</div>");
+  win.document.write("<div class='footer'>ECC/CBFC-KINGASANI 2 — Historique ECODIMs genere le "+new Date().toLocaleDateString("fr-FR")+" | Chaque seance est convertie au taux de son enregistrement</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>🖨️ Imprimer / PDF</button></div>");
   win.document.write("</body></html>");
   win.document.close();
@@ -17459,7 +17459,7 @@ function exportEcoSessionXLS() {
   var depRows = document.getElementById("eco-dep-rows");
   var rec=sumRowsEco("eco-rec-rows"),dep=sumRowsEco("eco-dep-rows");
   var h = "<table border='1'>";
-  h += "<tr style='background:#002F6B;color:white;font-size:14pt;font-weight:bold'><td colspan='6'>RAPPORT ECODIM - ECC KINGASANI 2</td></tr>";
+  h += "<tr style='background:#002F6B;color:white;font-size:14pt;font-weight:bold'><td colspan='6'>RAPPORT ECODIM - ECC/CBFC-KINGASANI 2</td></tr>";
   h += "<tr style='background:#003F8E;color:white'><td colspan='2'>Intitule</td><td colspan='4'>"+titre+"</td></tr>";
   h += "<tr><td colspan='2'>Date</td><td colspan='4'>"+date+"</td></tr>";
   h += "<tr><td colspan='2'>Lieu</td><td colspan='4'>"+lieu+"</td></tr>";
@@ -17503,7 +17503,7 @@ function exportEcoHistCSV() {
 
 function exportEcoHistXLS() {
   var h = "<table border='1'>";
-  h += "<tr style='background:#002F6B;color:white;font-size:14pt;font-weight:bold'><td colspan='10'>HISTORIQUE ECODIMS - ECC KINGASANI 2</td></tr>";
+  h += "<tr style='background:#002F6B;color:white;font-size:14pt;font-weight:bold'><td colspan='10'>HISTORIQUE ECODIMS - ECC/CBFC-KINGASANI 2</td></tr>";
   h += "<tr style='background:#eef4fb;font-weight:bold'><td>Date</td><td>Intitule</td><td>Lieu</td><td>Responsable</td><td>Participants</td><td>Rec. CDF</td><td>Rec. USD</td><td>Dep. CDF</td><td>Dep. USD</td><td>Solde CDF</td></tr>";
   var totRec=0,totDep=0;
   for(var i=0;i<ECODB.sessions.length;i++){
@@ -17650,7 +17650,7 @@ function exportSocCompletXLS() {
   var tot = sumRecS();
   var dep = sumDepS();
   var h = "<table border='1'>";
-  h += "<tr style='background:#002F6B;color:white;font-size:14pt;font-weight:bold'><td colspan='5'>RAPPORT SOCIAL - ECC KINGASANI 2 - "+date+"</td></tr>";
+  h += "<tr style='background:#002F6B;color:white;font-size:14pt;font-weight:bold'><td colspan='5'>RAPPORT SOCIAL - ECC/CBFC-KINGASANI 2 - "+date+"</td></tr>";
   h += "<tr><td colspan='5'></td></tr>";
   h += "<tr style='background:#003F8E;color:white;font-weight:bold'><td colspan='5'>RECETTES</td></tr>";
   h += "<tr style='background:#eef4fb;font-weight:bold'><td>Date</td><td>Libelle</td><td>CDF</td><td>USD</td><td>Note</td></tr>";
@@ -17711,7 +17711,7 @@ function exportSemSessionXLS() {
   var depRows = document.getElementById("sem-dep-rows");
   var rec=sumRowsSem("sem-rec-rows"),dep=sumRowsSem("sem-dep-rows");
   var h = "<table border='1'>";
-  h += "<tr style='background:#002F6B;color:white;font-size:14pt;font-weight:bold'><td colspan='6'>RAPPORT SEMINAIRE - ECC KINGASANI 2</td></tr>";
+  h += "<tr style='background:#002F6B;color:white;font-size:14pt;font-weight:bold'><td colspan='6'>RAPPORT SEMINAIRE - ECC/CBFC-KINGASANI 2</td></tr>";
   h += "<tr style='background:#003F8E;color:white'><td colspan='2'>Intitule</td><td colspan='4'>"+titre+"</td></tr>";
   h += "<tr><td colspan='2'>Date</td><td colspan='4'>"+date+"</td></tr>";
   h += "<tr><td colspan='2'>Lieu</td><td colspan='4'>"+lieu+"</td></tr>";
@@ -17755,7 +17755,7 @@ function exportSemHistCSV() {
 
 function exportSemHistXLS() {
   var h = "<table border='1'>";
-  h += "<tr style='background:#002F6B;color:white;font-size:14pt;font-weight:bold'><td colspan='10'>HISTORIQUE SEMINAIRES - ECC KINGASANI 2</td></tr>";
+  h += "<tr style='background:#002F6B;color:white;font-size:14pt;font-weight:bold'><td colspan='10'>HISTORIQUE SEMINAIRES - ECC/CBFC-KINGASANI 2</td></tr>";
   h += "<tr style='background:#eef4fb;font-weight:bold'><td>Date</td><td>Intitule</td><td>Lieu</td><td>Responsable</td><td>Participants</td><td>Rec. CDF</td><td>Rec. USD</td><td>Dep. CDF</td><td>Dep. USD</td><td>Solde CDF</td></tr>";
   var totRec=0,totDep=0;
   for(var i=0;i<SEMDB.sessions.length;i++){
@@ -20846,7 +20846,7 @@ function printLoyerRapport() {
   win.document.write("<td style='text-align:right;font-family:monospace'>"+fmt(Math.round(totVerse))+"</td>");
   win.document.write("<td style='text-align:right;font-family:monospace'>"+fmt(Math.round(totDu))+"</td><td></td></tr>");
   win.document.write("</tbody></table>");
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Rapport Loyer généré le "+new Date().toLocaleDateString("fr-FR")+" | Chaque versement est converti au taux de son enregistrement</div>");
+  win.document.write("<div class='footer'>ECC/CBFC-KINGASANI 2 — Rapport Loyer généré le "+new Date().toLocaleDateString("fr-FR")+" | Chaque versement est converti au taux de son enregistrement</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>🖨️ Imprimer / PDF</button></div>");
   win.document.write("</body></html>");
   win.document.close();
@@ -21391,7 +21391,7 @@ function printEffHistorique(){
   win.document.write(buildPrintHeader("Historique de l'Effectif"));
   win.document.write("<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px'><div style='background:#eef4fb;border-radius:7px;padding:8px;text-align:center'><div style='font-size:9px;color:#6b88a4;font-weight:700'>SÉANCES</div><div style='font-size:16px;font-weight:800;color:#003F8E'>"+seances.length+"</div></div><div style='background:#eef4fb;border-radius:7px;padding:8px;text-align:center'><div style='font-size:9px;color:#6b88a4;font-weight:700'>CF</div><div style='font-size:16px;font-weight:800;color:#003F8E'>"+totCF+"</div></div><div style='background:#eef4fb;border-radius:7px;padding:8px;text-align:center'><div style='font-size:9px;color:#6b88a4;font-weight:700'>CL</div><div style='font-size:16px;font-weight:800;color:#003F8E'>"+totCL+"</div></div><div style='background:#f0faf4;border-radius:7px;padding:8px;text-align:center'><div style='font-size:9px;color:#6b88a4;font-weight:700'>TOTAL</div><div style='font-size:16px;font-weight:800;color:#15803d'>"+totG+"</div></div></div>");
   win.document.write("<table style='width:100%;border-collapse:collapse;font-size:10px'><tr style='background:#003F8E;color:#fff'><th style='padding:6px 9px;text-align:left'>Date</th><th style='padding:6px 9px'>CF</th><th style='padding:6px 9px'>CL</th><th style='padding:6px 9px'>Total</th><th style='padding:6px 9px;text-align:left'>Observation</th></tr>"+rows+"</table>");
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Effectif généré le "+new Date().toLocaleDateString("fr-FR")+"</div>");
+  win.document.write("<div class='footer'>ECC/CBFC-KINGASANI 2 — Effectif généré le "+new Date().toLocaleDateString("fr-FR")+"</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>Imprimer / PDF</button></div>");
   win.document.write("</body></html>"); win.document.close();
 }
@@ -21430,7 +21430,7 @@ function printVisiteurs(){
   win.document.write("<p style='font-size:10px;color:#6b88a4;margin-bottom:10px'>"+escH(f.libelle)+"</p>");
   win.document.write(_visStatsHTML(st));
   win.document.write("<table style='width:100%;border-collapse:collapse;font-size:9.5px'><tr style='background:#003F8E;color:#fff'>"+entetes+"</tr>"+rows+"</table>");
-  win.document.write("<div class='footer'>ECC Kingasani 2 \u2014 Historique des visites g\u00e9n\u00e9r\u00e9 le "+new Date().toLocaleDateString("fr-FR")+"</div>");
+  win.document.write("<div class='footer'>ECC/CBFC-KINGASANI 2 \u2014 Historique des visites g\u00e9n\u00e9r\u00e9 le "+new Date().toLocaleDateString("fr-FR")+"</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>Imprimer / PDF</button></div>");
   win.document.write("</body></html>"); win.document.close();
 }
@@ -22159,7 +22159,7 @@ function printExercice2025() {
   win.document.write("<li>Les comptes de classe 2 (" + fmt(_ex25Rubrique(E.depenses[3]).total) + " FC) sont des immobilisations, pas des charges.</li>");
   win.document.write("<li>La provision de " + fmt(E.provisionNonDecaissee) + " FC n'est pas sortie de caisse : trésorerie réelle " + fmt(syn.generale.solde + E.provisionNonDecaissee) + " FC.</li>");
   win.document.write("</ul>");
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Archive de l'exercice 2025, éditée le " + new Date().toLocaleDateString("fr-FR") + "</div>");
+  win.document.write("<div class='footer'>ECC/CBFC-KINGASANI 2 — Archive de l'exercice 2025, éditée le " + new Date().toLocaleDateString("fr-FR") + "</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>Imprimer / PDF</button></div>");
   win.document.write("</body></html>"); win.document.close();
 }
@@ -22533,7 +22533,7 @@ function printExercice(annee) {
     + "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:5px 9px'>+ Recettes</td><td style='padding:5px 9px;text-align:right'>" + fmt(inst.totalRecettes) + "</td></tr>"
     + "<tr style='border-bottom:1px solid #eef2f6'><td style='padding:5px 9px'>− Dépenses</td><td style='padding:5px 9px;text-align:right'>" + fmt(inst.totalDepenses) + "</td></tr>"
     + "<tr style='background:#f0faf4;font-weight:800'><td style='padding:6px 9px'>= Solde reporté sur " + suivante + "</td><td style='padding:6px 9px;text-align:right'>" + fmt(inst.soldeSortant) + "</td></tr></table>");
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Exercice " + annee + ", édité le " + new Date().toLocaleDateString("fr-FR") + "</div>");
+  win.document.write("<div class='footer'>ECC/CBFC-KINGASANI 2 — Exercice " + annee + ", édité le " + new Date().toLocaleDateString("fr-FR") + "</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>Imprimer / PDF</button></div>");
   win.document.write("</body></html>"); win.document.close();
 }
@@ -23248,7 +23248,7 @@ function printEtat(key) {
       + "<td style='padding:5px 8px;text-align:right'>" + fmt(e.totalDu) + "</td><td style='padding:5px 8px;text-align:right'>" + fmt(e.totalFait) + "</td>"
       + "<td style='padding:5px 8px;text-align:right'>" + (Math.abs(e.ecart) < 1 ? "✓" : fmt(e.ecart)) + "</td></tr></table>");
   });
-  win.document.write("<div class='footer'>ECC Kingasani 2 — État " + escH(def.label) + ", édité le " + new Date().toLocaleDateString("fr-FR") + "</div>");
+  win.document.write("<div class='footer'>ECC/CBFC-KINGASANI 2 — État " + escH(def.label) + ", édité le " + new Date().toLocaleDateString("fr-FR") + "</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>Imprimer / PDF</button></div>");
   win.document.write("</body></html>"); win.document.close();
 }
@@ -23915,7 +23915,7 @@ function printBudget() {
   win.document.write("<table>" + entete + D.rows + "</table>");
   win.document.write("<table><tr style='background:#eef4fb'><td style='padding:6px 9px;font-weight:800'>SOLDE RÉEL DU MOIS (recettes − dépenses réalisées)</td>"
     + "<td style='padding:6px 9px;text-align:right;font-weight:800;font-family:monospace;color:" + (soldeReel >= 0 ? "#15803d" : "#c0392b") + "'>" + fmt(soldeReel) + " FC</td></tr></table>");
-  win.document.write("<div class='footer'>ECC Kingasani 2 — Budget généré le " + new Date().toLocaleDateString("fr-FR") + "</div>");
+  win.document.write("<div class='footer'>ECC/CBFC-KINGASANI 2 — Budget généré le " + new Date().toLocaleDateString("fr-FR") + "</div>");
   win.document.write("<div class='no-print' style='margin-top:18px;text-align:center'><button onclick='window.print()' style='padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700'>Imprimer / PDF</button></div>");
   win.document.write("</body></html>"); win.document.close();
 }
@@ -24535,7 +24535,7 @@ function doRapportConsolide(type, periode) {
     win.document.write('<p style="font-size:9px;color:#b45309;margin:2px 0 10px">⚠️ Montant théorique basé sur les mois cochés × tarif unitaire.</p>');
   }
 
-  win.document.write('<div class="footer">ECC Kingasani 2 — Rapport généré le '+new Date().toLocaleDateString('fr-FR')+' à '+new Date().toLocaleTimeString('fr-FR')+'</div>');
+  win.document.write('<div class="footer">ECC/CBFC-KINGASANI 2 — Rapport généré le '+new Date().toLocaleDateString('fr-FR')+' à '+new Date().toLocaleTimeString('fr-FR')+'</div>');
   win.document.write('<div class="no-print" style="margin-top:18px;text-align:center"><button onclick="window.print()" style="padding:8px 20px;background:#003F8E;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700">🖨️ Imprimer / PDF</button></div>');
   win.document.write('</body></html>');
   win.document.close();
@@ -26919,7 +26919,7 @@ function printProgramme(type, dateParam) {
 
 
 // ================================================
-// == WHATSAPP + SMS — ECC KINGASANI 2 ==
+// == WHATSAPP + SMS — ECC/CBFC-KINGASANI 2 ==
 // ================================================
 
 // Config Africa's Talking (remplie dans Admin)
@@ -27110,7 +27110,7 @@ function smsArrieres(membre) {
   if(!arr||arr<=0){ showToast("Ce membre est à jour.","ok"); return; }
   if(!membre.tel){ showToast("Numéro manquant pour "+membre.nom+".","warn"); return; }
   var msg = "Bonjour "+(membre.prenom||membre.nom||"")+", votre cotisation "+yr
-    +" a "+arr+" mois(s) en retard. Merci de regulariser. ECC Kingasani 2";
+    +" a "+arr+" mois(s) en retard. Merci de regulariser. ECC/CBFC-KINGASANI 2";
   showToast("Envoi SMS en cours...","ok");
   envoyerSMS(membre.tel, msg, function(ok, info){
     showToast(ok?"SMS envoyé à "+membre.nom+"✅":"Echec SMS: "+info, ok?"ok":"err");
@@ -27138,7 +27138,7 @@ function smsAnnonceGroupe(message, membres) {
 // Modal envoi SMS groupé annonce
 function modalSMSAnnonce(annonce) {
   var mbActifs = (DB&&DB.membres||[]).filter(function(m){ return (m.activite||"actif")==="actif" && m.tel; });
-  var msg = escH(annonce.titre)+": "+escH(annonce.message||annonce.contenu||"")+" - ECC Kingasani 2";
+  var msg = escH(annonce.titre)+": "+escH(annonce.message||annonce.contenu||"")+" - ECC/CBFC-KINGASANI 2";
   var html = "<div style='font-size:.82rem'>"
     +"<div style='margin-bottom:8px;color:#6b88a4'>Message à envoyer aux <strong>"+mbActifs.length+"</strong> membres actifs avec numéro :</div>"
     +"<textarea id='sms-annonce-msg' style='width:100%;height:80px;font-size:.75rem;padding:6px;border:1px solid #c5d8ed;border-radius:6px;box-sizing:border-box'>"+msg+"</textarea>"
@@ -27153,7 +27153,7 @@ function modalSMSAnnonce(annonce) {
 
 
 // ================================================
-// == MUTUELLE SANTE — ECC KINGASANI 2 ==
+// == MUTUELLE SANTE — ECC/CBFC-KINGASANI 2 ==
 // ================================================
 
 var MUTDB = { membres:[], cotisations:[], soins:[], partenaire:{}, regles:null };
@@ -28880,7 +28880,7 @@ function exportHistoriqueCultesXLSX() {
 
 
 // ================================================
-// == MODULE ANALYSE FINANCIÈRE — ECC KINGASANI 2 ==
+// == MODULE ANALYSE FINANCIÈRE — ECC/CBFC-KINGASANI 2 ==
 // ================================================
 
 function initAnalyse() {
@@ -29387,7 +29387,7 @@ function anaInterpretTendance(pente, moyenne) {
 
 
 // ================================================
-// == MODE SOMBRE — ECC KINGASANI 2 ==
+// == MODE SOMBRE — ECC/CBFC-KINGASANI 2 ==
 // ================================================
 
 function toggleDarkMode() {
@@ -29550,7 +29550,7 @@ function exportHistoriqueSeminaireXLSX() {
 
 
 // ================================================
-// == MODULE COMPTABILITÉ SYCEBNL — ECC KINGASANI 2 ==
+// == MODULE COMPTABILITÉ SYCEBNL — ECC/CBFC-KINGASANI 2 ==
 // ================================================
 
 // Plan comptable simplifié SYCEBNL
@@ -29776,7 +29776,7 @@ function genererSycebnl() {
 
 
 // ================================================
-// == IMPRESSION FICHES MEMBRES PAR PLAGE — ECC KINGASANI 2 ==
+// == IMPRESSION FICHES MEMBRES PAR PLAGE — ECC/CBFC-KINGASANI 2 ==
 // ================================================
 
 // Construit le HTML d'UNE fiche individuelle (réutilisé par printFiche et printFichesPlage)
@@ -29867,7 +29867,7 @@ function buildFicheHTML(m, options) {
     h += "<div style='font-size:9px;font-weight:700;color:#003F8E;margin-top:1px'>ECC-Kingasani2</div>";
     h += "</div></div>";
   }
-  h += "<div class='footer'>ECC Kingasani 2 — Fiche générée le "+new Date().toLocaleDateString("fr-FR")+"</div>";
+  h += "<div class='footer'>ECC/CBFC-KINGASANI 2 — Fiche générée le "+new Date().toLocaleDateString("fr-FR")+"</div>";
   h += "</div>";
   return h;
 }
@@ -31321,7 +31321,7 @@ function filtrerCultesPeriodeDimes(hist, year, month) {
 
 <script id="ux-v3">
 /* =====================================================================
-   ECC KINGASANI 2 — UX v3 : couche additive (aucune logique métier modifiée)
+   ECC/CBFC-KINGASANI 2 — UX v3 : couche additive (aucune logique métier modifiée)
    1. Palette de commandes (Ctrl/Cmd + K) : navigation instantanée
    2. Bouton « retour en haut »
    3. Mode sombre aligné sur la préférence système au 1er lancement
