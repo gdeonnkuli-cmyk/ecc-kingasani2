@@ -12045,7 +12045,7 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.9";
+var APP_VERSION = "2026.10.10";
 var APP_VERSION_NOTES = "Échéancier des obligations : ce qui est dû, ce qui est réglé, et la confirmation avec justificatif.";
 
 function checkAppUpdate() {
@@ -15667,12 +15667,19 @@ function loadUserPermsFromFirestore(email, callback, refus) {
         } else if(ac.perms && ac.perms.modules) {
           gCurrentUser.perms = ac.perms;
         }
-        if(ac.socialSaisie !== undefined) {
+        // Les autorisations qui ne sont pas des listes se recopiaient une par
+        // une, et « saisieGuidee » avait été oubliée : le drapeau partait bien
+        // dans accounts/ à la création, mais la connexion ne le relisait
+        // jamais. Le compte cochait la case, et ne voyait rien. On recopie
+        // donc la liste des clés, pour que la prochaine autorisation ajoutée
+        // n'ait pas à être pensée ici une seconde fois.
+        var _drapeaux = ["socialSaisie","semSaisie","ecoSaisie","saisieGuidee","readOnly"];
+        for(var _di=0; _di<_drapeaux.length; _di++){
+          var _k = _drapeaux[_di];
+          if(ac[_k] === undefined) continue;
           if(!gCurrentUser.perms) gCurrentUser.perms = {modules:[], financeTabs:[]};
-          gCurrentUser.perms.socialSaisie = ac.socialSaisie;
+          gCurrentUser.perms[_k] = ac[_k];
         }
-        if(ac.semSaisie !== undefined && gCurrentUser.perms) gCurrentUser.perms.semSaisie = ac.semSaisie;
-        if(ac.ecoSaisie !== undefined && gCurrentUser.perms) gCurrentUser.perms.ecoSaisie = ac.ecoSaisie;
         if(ac.projTabs !== undefined && gCurrentUser.perms) {
           gCurrentUser.perms.projTabs = ac.projTabs;
         }
