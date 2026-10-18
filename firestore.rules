@@ -212,6 +212,37 @@ service cloud.firestore {
       allow read:  if aModule('finances') || aModule('social');
       allow write: if aModule('finances');
     }
+    // ── Saisies guidées : des propositions, pas des pièces ────────────────
+    // Un compte en saisie guidée dépose ici ce qu'il a compté. Rien n'entre
+    // dans « historique » de sa main : c'est un administrateur ou le
+    // directeur financier qui contrôle puis enregistre la pièce. La règle
+    // doit tenir cette séparation, sans quoi elle ne vivrait que dans la
+    // page — et la page appartient au visiteur.
+    //
+    // Créer : tout compte ayant le module Finances, pour lui-même seulement.
+    //   Le document doit porter son propre courriel et l'état « soumis » :
+    //   nul ne dépose au nom d'un autre, nul ne s'auto-valide.
+    // Lire : son auteur, et les validateurs.
+    // Changer l'état (valider, renvoyer) : les validateurs seuls.
+    match /saisies_guidees/{doc} {
+      function estSien() {
+        return request.auth != null
+               && resource.data.get('parEmail', '') == request.auth.token.email;
+      }
+      function estValideur() {
+        return estProprietaire()
+               || (estActif() && request.auth != null
+                   && get(/databases/$(database)/documents/accounts/$(request.auth.token.email))
+                        .data.get('role', '') in ['admin', 'finances']);
+      }
+      allow read:   if aModule('finances') && (estSien() || estValideur());
+      allow create: if aModule('finances')
+                    && request.resource.data.get('parEmail', '') == request.auth.token.email
+                    && request.resource.data.get('statut', '') == 'soumis';
+      allow update: if estValideur();
+      allow delete: if estProprietaire();
+    }
+
     match /presence/{doc}            { allow read, write: if estActif(); }
     // ── Configuration ─────────────────────────────────────────────────────
     // Clôtures de période, correspondance comptable SYCEBNL, montants des

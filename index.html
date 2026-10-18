@@ -1596,6 +1596,18 @@ body.dark-mode [style*="border:1px solid #e5eaf0"]{border-color:var(--v3-line)!i
   /* Même cible tactile que les champs encadrés par .fg ailleurs dans l'écran. */
   .be-in{font-size:16px!important;padding:9px 11px!important;min-height:42px}
 }
+/* Saisie guidée : la rubrique sortante s'efface vers la gauche, l'entrante
+   arrive de la droite. Assez pour qu'on voie qu'on avance, assez bref pour
+   ne jamais faire attendre. */
+#guidee-corps{transition:opacity .16s ease, transform .16s ease}
+#guidee-corps.g-sort{opacity:0;transform:translateX(-14px)}
+#guidee-corps.g-entre{opacity:0;transform:translateX(14px)}
+@media (prefers-reduced-motion: reduce){
+  /* Un mouvement imposé à qui l'a désactivé sur son appareil n'est pas une
+     attention, c'est une gêne : on garde l'enchaînement, sans le glissement. */
+  #guidee-corps{transition:none}
+  #guidee-corps.g-sort,#guidee-corps.g-entre{opacity:1;transform:none}
+}
 /* Paysage tactile : colonnes de montants élargies pour absorber les 16px */
 @media (max-width:900px) and (orientation:landscape) and (pointer:coarse){
   .rc,.er.rr,.tot-bar.rc{grid-template-columns:1.5fr 46px 124px 124px .7fr 26px!important}
@@ -2193,6 +2205,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
 <div class="module active" id="module-finances">
 <nav class="tabs" id="app-tabs">
   <button onclick="switchModule('accueil')" style="background:none;border:none;color:rgba(255,255,255,.7);cursor:pointer;font-size:.75rem;padding:6px 10px;border-right:1px solid rgba(255,255,255,.15);margin-right:4px;white-space:nowrap;flex-shrink:0">← Accueil</button>
+  <button class="tab" id="tab-btn-guidee" onclick="showTab('guidee')" style="display:none">🧭 Saisie guidée</button>
   <button class="tab active" id="tab-btn-recettes" onclick="showTab('recettes')">Recettes</button>
   <button class="tab" id="tab-btn-depenses" onclick="showTab('depenses')">Depenses</button>
   <button class="tab" id="tab-btn-solde" onclick="showTab('solde')">Solde</button>
@@ -2208,7 +2221,18 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
 <div class="main" id="fin-main" style="display:none">
 
 <!-- RECETTES -->
+<!-- SAISIE GUIDÉE : un parcours rubrique par rubrique, pour les comptes
+     auxquels l'administrateur l'active. Ce qui y est saisi n'est pas une
+     pièce : c'est une proposition qui attend validation. -->
+<div class="page" id="page-guidee">
+  <div id="guidee-corps"></div>
+</div>
+
 <div class="page active" id="page-recettes">
+  <!-- Saisies guidées : la file de ce qui attend un contrôle, et le bandeau
+       qui rappelle qu'on est en train d'en contrôler une. -->
+  <div id="guidee-file" style="display:none"></div>
+  <div id="guidee-bandeau" style="display:none;margin-bottom:10px"></div>
   <div id="presence-bar" style="display:none;background:#eef4fb;border-radius:7px;padding:6px 11px;margin-bottom:10px;border:1px solid #c5d8ed;flex-wrap:wrap;gap:6px;align-items:center"></div>
   <div id="brouillon-bar" style="display:none;border-radius:7px;padding:9px 12px;margin-bottom:10px;font-size:.79rem"></div>
   <div class="val-panel" id="val-top"></div>
@@ -4595,7 +4619,9 @@ function switchModule(name) {
   if (name === "finances") {
     var fm = document.getElementById("fin-main");
     if (fm) fm.style.display = "block";
-    showTab("recettes");
+    // Un compte en saisie guidee n'a pas l'onglet Recettes : l'ouvrir
+    // dessus le laisserait devant une page masquee.
+    showTab(estSaisieGuidee() ? "guidee" : "recettes");
   }
   if (name === "membres") {
     showTab("dashboard");
@@ -5691,6 +5717,9 @@ function _preparerPiece(data, suite) {
 }
 
 function saveToHistory() {
+  // Si cette pièce vient d'une saisie guidée en cours de contrôle, la
+  // proposition est marquée validée : elle quitte la file.
+  if (typeof _guideeMarquerValidee === "function") _guideeMarquerValidee();
   if (!IS_CONFIGURED) {
     saveToHistLocal();
     showToast("⚠️ Sauvegardé en LOCAL seulement — non visible sur les autres appareils.", "err");
@@ -7043,7 +7072,7 @@ function clearHist() {
 function showTab(name) {
   var finMain = document.getElementById("fin-main");
   if (finMain && finMain.style.display === "none") finMain.style.display = "block";
-  var pages=["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","etats","echeances","budget","admin"];
+  var pages=["guidee","recettes","depenses","solde","distrib","historique","dashboard","export","exercices","etats","echeances","budget","admin"];
   for(var i=0;i<pages.length;i++){
     var pg=document.getElementById("page-"+pages[i]);
     var tb=document.getElementById("tab-btn-"+pages[i]);
@@ -7062,9 +7091,15 @@ function showTab(name) {
     var ftab = document.getElementById("tab-btn-"+FINANCE_TABS[ti].key);
     if(ftab) ftab.style.display = hasFinanceTab(FINANCE_TABS[ti].key) ? "" : "none";
   }
+  // Onglet de la saisie guidee : reserve aux comptes pour lesquels elle est
+  // activee. Pour eux, hasFinanceTab masque deja Recettes et Depenses.
+  var gBtn = document.getElementById("tab-btn-guidee");
+  if(gBtn) gBtn.style.display = estSaisieGuidee() ? "" : "none";
   // Onglet budget : admin + directeur financier uniquement
   var budgetBtn = document.getElementById("tab-btn-budget");
   if(budgetBtn) budgetBtn.style.display = canEditBudget() ? "" : "none";
+  if(name==="guidee") renderSaisieGuidee();
+  if(name==="recettes" && typeof chargerFileSaisiesGuidees === "function") chargerFileSaisiesGuidees();
   if(name==="historique")renderHistory();
   if(name==="dashboard")buildDashboard();
   if(name==="distrib")calcDistrib();
@@ -10633,6 +10668,7 @@ function renderAdmin(){
       if(acPerms2.socialSaisie===true) saisiesBadges += "<span style='background:#fee2e2;color:#b45309;padding:1px 5px;border-radius:8px;font-size:.58rem;font-weight:700;margin:1px'>Social</span> ";
       if(acPerms2.semSaisie===true) saisiesBadges += "<span style='background:#eef4fb;color:#003F8E;padding:1px 5px;border-radius:8px;font-size:.58rem;font-weight:700;margin:1px'>Seminaire</span> ";
       if(acPerms2.ecoSaisie===true) saisiesBadges += "<span style='background:#f5f3ff;color:#7c3aed;padding:1px 5px;border-radius:8px;font-size:.58rem;font-weight:700;margin:1px'>ECODIM</span> ";
+      if(acPerms2.saisieGuidee===true) saisiesBadges += "<span style='background:#eef7f1;color:#1e7d52;padding:1px 5px;border-radius:8px;font-size:.58rem;font-weight:700;margin:1px'>🧭 Guidée</span> ";
       if(!saisiesBadges) saisiesBadges = "<span style='color:#adb5bd;font-size:.62rem'>Aucune saisie speciale</span>";
     }
     html+="<td style='padding:7px 9px'>"+saisiesBadges+"</td>";
@@ -10933,7 +10969,7 @@ function _normaliserPerms(perms, role) {
     projTabs:    liste(out.projTabs,    def.projTabs || ["achat","travaux","mo"])
   };
   // Les autorisations de saisie ne sont pas des listes : on les reprend telles.
-  ["socialSaisie","semSaisie","ecoSaisie","readOnly"].forEach(function(k){
+  ["socialSaisie","semSaisie","ecoSaisie","readOnly","saisieGuidee"].forEach(function(k){
     if (out[k] !== undefined) r[k] = out[k];
   });
   return r;
@@ -10942,7 +10978,7 @@ function _normaliserPerms(perms, role) {
 // Recuperer les permissions effectives d un compte
 function getPerms(ac) {
   if(!ac) return _normaliserPerms(null, "");
-  if(ac.role==="admin") return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","etats"], projTabs:["achat","travaux","mo"]};
+  if(ac.role==="admin") return {modules:["finances","membres","social","seminaire","ecodim","effectif","eb","annonces","projets","loyer"], financeTabs:["recettes","depenses","solde","distrib","historique","dashboard","export","exercices","etats"], projTabs:["achat","travaux","mo"], saisieGuidee:false};
   if(ac.perms) return _normaliserPerms(ac.perms, ac.role);
   return _normaliserPerms(getDefaultPerms(ac.role), ac.role);
 }
@@ -10979,6 +11015,10 @@ function hasEcoSaisie() {
 function hasFinanceTab(tab) {
   if(!gCurrentUser) return false;
   if(gCurrentUser.role==="admin") return true;
+  // Le mode guide REMPLACE la saisie classique pour ce compte : lui laisser
+  // les deux chemins reviendrait a lui rouvrir le mur de rubriques que le
+  // parcours est precisement la pour eviter.
+  if(estSaisieGuidee() && (tab==="recettes" || tab==="depenses")) return false;
   var perms = getPerms(gCurrentUser);
   for(var i=0;i<perms.financeTabs.length;i++) if(perms.financeTabs[i]===tab) return true;
   return false;
@@ -11167,6 +11207,7 @@ function saveNewAccount() {
       socialSaisie: perms.socialSaisie || false,
       semSaisie: perms.semSaisie || false,
       ecoSaisie: perms.ecoSaisie || false,
+      saisieGuidee: perms.saisieGuidee || false,
       projTabs: perms.projTabs || ["achat","travaux","mo"]
     }).then(function(){
       showToast("Permissions synchronisees !", "ok");
@@ -11249,6 +11290,7 @@ function saveEditAccount() {
       socialSaisie: newPerms.socialSaisie || false,
       semSaisie: newPerms.semSaisie || false,
       ecoSaisie: newPerms.ecoSaisie || false,
+      saisieGuidee: newPerms.saisieGuidee || false,
       projTabs: newPerms.projTabs || ["achat","travaux","mo"]
     }).then(function(){
       showToast("Permissions synchronisees !", "ok");
@@ -11340,6 +11382,14 @@ function buildModuleCheckboxes(currentPerms, prefix) {
   html += "<label style='display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.78rem;font-weight:600;color:#7c3aed;padding:7px 10px;background:#f5f3ff;border-radius:6px;border:1px solid #c4b5fd'>";
   html += "<input type='checkbox' id='"+prefix+"eco-saisie' "+(ecoSaisie?"checked":"")+" style='accent-color:#7c3aed'>";
   html += "⛪ Autoriser la saisie des recettes ECODIM</label>";
+  // Saisie guidee : ce compte ne voit plus les ecrans Recettes et Depenses
+  // classiques, et ce qu'il saisit attend une validation avant de devenir une
+  // piece. C'est une restriction, pas une permission de plus.
+  var guidee = currentPerms.saisieGuidee === true;
+  html += "<label style='display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:.78rem;font-weight:600;color:#1e7d52;padding:7px 10px;background:#eef7f1;border-radius:6px;border:1px solid #a5dcc4'>";
+  html += "<input type='checkbox' id='"+prefix+"saisie-guidee' "+(guidee?"checked":"")+" style='accent-color:#1e7d52;margin-top:2px'>";
+  html += "<span>🧭 Saisie guidée, rubrique par rubrique"
+       +  "<div style='font-weight:400;font-size:.69rem;color:#4a6b5a;margin-top:2px'>Les écrans Recettes et Dépenses classiques lui sont masqués. Ses saisies attendent votre validation avant de devenir des pièces.</div></span></label>";
   html += "</div>";
   html += "<div style='font-size:.69rem;font-weight:700;color:#6b88a4;text-transform:uppercase;letter-spacing:.06em;margin:10px 0 6px'>Onglets Finances</div>";
   html += "<div style='display:grid;grid-template-columns:1fr 1fr;gap:5px'>";
@@ -11383,12 +11433,14 @@ function readPermsFromModal(prefix) {
   var semSaisie = elSem ? elSem.checked : false;
   var elEco = document.getElementById(prefix+"eco-saisie");
   var ecoSaisie = elEco ? elEco.checked : false;
+  var elGui = document.getElementById(prefix+"saisie-guidee");
+  var saisieGuidee = elGui ? elGui.checked : false;
   var projTabs=[];
   for(var p=0;p<PROJ_SUBTABS.length;p++){
     var el3=document.getElementById(prefix+"projtab-"+PROJ_SUBTABS[p].key);
     if(el3&&el3.checked) projTabs.push(PROJ_SUBTABS[p].key);
   }
-  return {modules:mods, financeTabs:tabs, socialSaisie:socialSaisie, semSaisie:semSaisie, ecoSaisie:ecoSaisie, projTabs:projTabs};
+  return {modules:mods, financeTabs:tabs, socialSaisie:socialSaisie, semSaisie:semSaisie, ecoSaisie:ecoSaisie, saisieGuidee:saisieGuidee, projTabs:projTabs};
 }
 
 // == LOGO & TITRE FUNCTIONS ==
@@ -11990,7 +12042,7 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.6";
+var APP_VERSION = "2026.10.8";
 var APP_VERSION_NOTES = "Échéancier des obligations : ce qui est dû, ce qui est réglé, et la confirmation avec justificatif.";
 
 function checkAppUpdate() {
@@ -31317,6 +31369,604 @@ function filtrerCultesPeriodeDimes(hist, year, month) {
   });
 }
 
+</script>
+
+<script id="saisie-guidee">
+/* =====================================================================
+   SAISIE GUIDÉE — un parcours rubrique par rubrique
+   =====================================================================
+   Pourquoi : la saisie classique pose 54 rubriques d'un coup — 19 recettes
+   et 35 dépenses. Pour quelqu'un qui tient la caisse une fois par mois,
+   c'est un mur : on en saute, on se trompe de ligne, on renonce.
+   Ici les rubriques défilent une ou deux à la fois, avec trois gestes
+   seulement : saisir, passer, revenir.
+
+   Trois règles tenues de bout en bout :
+
+   1. « Passer » ne laisse AUCUNE ligne. Une rubrique écartée ne doit pas
+      peupler la pièce d'un zéro que personne n'a voulu : la pièce produite
+      par ce parcours est en tout point celle qu'aurait produite la saisie
+      classique, mêmes lignes, mêmes totaux.
+   2. Ce que l'on saisit ici n'est jamais une pièce. C'est une proposition,
+      déposée dans « saisies_guidees », qui attend qu'un administrateur ou
+      le directeur financier la contrôle et l'enregistre. La séparation des
+      tâches n'est pas un détail : celui qui compte n'arrête pas la caisse.
+   3. La validation NE RÉÉCRIT PAS le chemin d'enregistrement. Elle recharge
+      la proposition dans l'écran classique et laisse le validateur
+      enregistrer avec le bouton habituel. Un deuxième chemin d'écriture
+      aurait divergé du premier à la première évolution.
+   ===================================================================== */
+
+// Le compte est-il en saisie guidée ? L'administrateur ne l'est jamais :
+// c'est lui qui valide.
+function estSaisieGuidee() {
+  if (!gCurrentUser) return false;
+  if (gCurrentUser.role === "admin") return false;
+  try { return getPerms(gCurrentUser).saisieGuidee === true; } catch (e) { return false; }
+}
+
+// Qui contrôle les propositions : l'administrateur et le directeur financier.
+function peutValiderSaisieGuidee() {
+  if (!gCurrentUser) return false;
+  if (gCurrentUser.role === "admin") return true;
+  if (gCurrentUser.role === "finances") return !estSaisieGuidee();
+  return false;
+}
+
+// ── Les étapes du parcours ──────────────────────────────────────────
+// Construites à partir des mêmes listes que la saisie classique : une
+// rubrique ajoutée là se retrouve ici sans rien écrire de plus.
+function _guideeEtapes() {
+  var et = [];
+  (CF_DEF || []).forEach(function (l) {
+    et.push({ genre: "rec", cont: "cf", culte: "CF", lbl: l, bloc: "Recettes · Culte Francophone" });
+  });
+  (CL_DEF || []).forEach(function (l) {
+    et.push({ genre: "rec", cont: "cl", culte: "CL", lbl: l, bloc: "Recettes · Culte Lingalophone" });
+  });
+  // Une dépense qui porte une CLÉ n'est pas constatée, elle est calculée :
+  // son montant vaut base × clé, et c'est la Distribution qui le produit,
+  // puis « Injecter → Dépenses » qui le pose. La demander ici inviterait à
+  // taper un montant qui contredit sa propre clé — une erreur qui ne se voit
+  // qu'à la distribution du mois, quand les comptes ne tombent plus.
+  //
+  // Le parcours ne garde donc que les dépenses sans clé : celles qu'on paie
+  // et qu'on constate. Sur 35 rubriques, 27 sont calculées et 8 restent.
+  [["dep-cm", CM_DEF, "Dépenses · Culte du mois"],
+   ["dep-fr", FR_DEF, "Dépenses · Frais de fonctionnement"],
+   ["dep-co", CO_DEF, "Dépenses · Contributions"]].forEach(function (t) {
+    (t[1] || []).forEach(function (o) {
+      if (o.c) return;                    // calculée par la Distribution
+      et.push({ genre: "dep", cont: t[0], lbl: o.l, cle: "", bloc: t[2] });
+    });
+  });
+  return et;
+}
+
+// Combien de rubriques le parcours laisse de côté, et pourquoi : il faut
+// pouvoir le dire à celui qui saisit, sinon il cherche « Modérateurs 10 % »
+// et croit à un oubli.
+function _guideeCalculees() {
+  var n = 0;
+  [CM_DEF, FR_DEF, CO_DEF].forEach(function (a) {
+    (a || []).forEach(function (o) { if (o && o.c) n++; });
+  });
+  return n;
+}
+
+// Combien de rubriques par écran : 1 ou 2, au choix de celui qui saisit.
+function _guideeParEcran() {
+  var v = 1;
+  try { v = parseInt(localStorage.getItem("ecc_guidee_par_ecran"), 10) || 1; } catch (e) {}
+  return (v === 2) ? 2 : 1;
+}
+function guideeParEcran(n) {
+  try { localStorage.setItem("ecc_guidee_par_ecran", String(n === 2 ? 2 : 1)); } catch (e) {}
+  gGuidee.pos = 0;
+  renderSaisieGuidee();
+}
+
+// ── L'état du parcours en cours ─────────────────────────────────────
+var gGuidee = {
+  phase: "accueil",   // accueil | entete | rubriques | recap
+  pos: 0,             // index de la première rubrique affichée
+  etapes: [],
+  valeurs: {},        // index -> {cdf, usd, note}
+  passees: {},        // index -> true
+  meta: {},
+  brouillons: [],     // propositions déjà déposées par ce compte
+  idEnCours: null
+};
+
+function _guideeCle(i) { return "e" + i; }
+
+// ── Rendu ───────────────────────────────────────────────────────────
+function renderSaisieGuidee() {
+  var c = document.getElementById("guidee-corps");
+  if (!c) return;
+  if (!estSaisieGuidee() && !peutValiderSaisieGuidee()) {
+    c.innerHTML = "<p style='color:var(--muted);font-size:.82rem'>Cet écran n'est pas activé pour votre compte.</p>";
+    return;
+  }
+  if (!gGuidee.etapes.length) gGuidee.etapes = _guideeEtapes();
+
+  if (gGuidee.phase === "accueil")   { c.innerHTML = _guideeAccueil();   return; }
+  if (gGuidee.phase === "entete")    { c.innerHTML = _guideeEntete();    return; }
+  if (gGuidee.phase === "recap")     { c.innerHTML = _guideeRecap();     return; }
+  c.innerHTML = _guideeRubriques();
+  _guideeFocus();
+}
+
+function _guideeAccueil() {
+  var h = "<div class='card'><div class='card-hdr'><h2>Saisie guidée</h2>"
+        + "<span class='badge'>" + gGuidee.etapes.length + " rubriques</span></div><div class='card-body'>";
+  h += "<div style='font-size:.78rem;color:var(--muted);line-height:1.55;margin-bottom:10px'>"
+     + "Les rubriques se présentent une à une. Pour chacune : inscrivez le montant, "
+     + "ou appuyez sur <strong>Non applicable</strong> si elle ne concerne pas ce culte. "
+     + "Rien n'est enregistré en comptabilité tant que la saisie n'a pas été contrôlée.</div>";
+  h += "<div style='background:var(--pale);border-left:3px solid var(--mid);border-radius:7px;"
+     + "padding:8px 11px;font-size:.72rem;color:var(--text);line-height:1.5;margin-bottom:12px'>"
+     + "Ce parcours ne demande pas les " + _guideeCalculees() + " dépenses à clé de répartition "
+     + "(part des dîmes, collations, loyer…). Ce ne sont pas des montants que l'on constate : "
+     + "ils se calculent sur les recettes, à la Distribution. Vous n'avez donc pas à les chercher ici.</div>";
+
+  h += "<div style='display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px'>"
+     + "<span style='font-size:.73rem;color:var(--muted)'>Rubriques par écran :</span>";
+  [1, 2].forEach(function (n) {
+    var actif = (_guideeParEcran() === n);
+    h += "<button class='btn btn-sm " + (actif ? "btn-g" : "btn-o") + "' onclick='guideeParEcran(" + n + ")'>"
+       + n + "</button>";
+  });
+  h += "</div>";
+
+  h += "<button class='btn btn-g' style='width:100%;padding:12px' onclick='guideeDemarrer()'>Commencer une saisie</button>";
+  h += "</div></div>";
+
+  h += _guideeMesBrouillons();
+  return h;
+}
+
+function _guideeMesBrouillons() {
+  var l = gGuidee.brouillons || [];
+  if (!l.length) return "";
+  var h = "<div class='card'><div class='card-hdr'><h2>Mes saisies déposées</h2></div><div class='card-body'>";
+  h += "<table class='cotis-table bar-table' style='min-width:0'><thead><tr><th>Culte</th><th>État</th></tr></thead><tbody>";
+  l.forEach(function (b) {
+    var et = { soumis:  ["#e67e22", "En attente de contrôle"],
+               valide:  ["#1e7d52", "Validée et enregistrée"],
+               rejete:  ["#c0392b", "Renvoyée pour correction"] }[b.statut] || ["#6b88a4", b.statut || "—"];
+    h += "<tr><td data-lbl='Culte'><strong>" + escH(_jourFr(b.date || "")) + "</strong>"
+       + (b.motif ? "<div style='font-size:.66rem;color:#c0392b;margin-top:2px'>" + escH(b.motif) + "</div>" : "")
+       + "</td>"
+       + "<td data-lbl='État'><span style='background:" + et[0] + "1f;color:" + et[0] + ";border:1px solid " + et[0]
+       + "55;padding:2px 8px;border-radius:10px;font-size:.66rem;font-weight:700'>" + et[1] + "</span></td></tr>";
+  });
+  h += "</tbody></table></div></div>";
+  return h;
+}
+
+function guideeDemarrer() {
+  gGuidee.phase = "entete";
+  gGuidee.pos = 0;
+  gGuidee.valeurs = {};
+  gGuidee.passees = {};
+  gGuidee.meta = {};
+  gGuidee.idEnCours = null;
+  renderSaisieGuidee();
+}
+
+function _guideeEntete() {
+  var m = gGuidee.meta || {};
+  var h = "<div class='card'><div class='card-hdr'><h2>Le culte</h2><span class='badge'>Étape 1</span></div><div class='card-body'>";
+  h += "<div class='mgrid'>"
+     + "<div class='fg'><label>Date du culte *</label><input type='date' id='g-date' value='" + escHtml(m.date || "") + "'></div>"
+     + "<div class='fg'><label>Responsable *</label><input type='text' id='g-resp' placeholder='Nom' value='" + escHtml(m.resp || "") + "'></div>"
+     + "<div class='fg'><label>Effectif CF</label><input type='number' min='0' id='g-cf' placeholder='0' value='" + escHtml(m.cf || "") + "'></div>"
+     + "<div class='fg'><label>Effectif CL</label><input type='number' min='0' id='g-cl' placeholder='0' value='" + escHtml(m.cl || "") + "'></div>"
+     + "<div class='fg'><label>Effectif ECODIM</label><input type='number' min='0' id='g-eco' placeholder='0' value='" + escHtml(m.eco || "") + "'></div>"
+     + "</div>";
+  h += "<div style='display:flex;gap:8px;margin-top:14px;flex-wrap:wrap'>"
+     + "<button class='btn btn-o' onclick='guideeRetourAccueil()'>Annuler</button>"
+     + "<button class='btn btn-g' style='flex:1;min-width:140px' onclick='guideeValiderEntete()'>Continuer</button>"
+     + "</div></div></div>";
+  return h;
+}
+
+function guideeRetourAccueil() {
+  gGuidee.phase = "accueil";
+  renderSaisieGuidee();
+}
+
+function guideeValiderEntete() {
+  var d = (document.getElementById("g-date") || {}).value || "";
+  var r = ((document.getElementById("g-resp") || {}).value || "").trim();
+  if (!d) { showToast("Indiquez la date du culte.", "err"); return; }
+  if (!r) { showToast("Indiquez le responsable.", "err"); return; }
+  gGuidee.meta = {
+    date: d, resp: r,
+    cf:  (document.getElementById("g-cf")  || {}).value || "",
+    cl:  (document.getElementById("g-cl")  || {}).value || "",
+    eco: (document.getElementById("g-eco") || {}).value || ""
+  };
+  gGuidee.phase = "rubriques";
+  gGuidee.pos = 0;
+  _guideeTransition(renderSaisieGuidee);
+}
+
+// Une transition brève : assez pour qu'on voie la rubrique changer, assez
+// courte pour ne jamais faire attendre. 160 ms, réglable sur cette ligne.
+var GUIDEE_TRANSITION_MS = 160;
+function _guideeTransition(apres) {
+  var c = document.getElementById("guidee-corps");
+  if (!c) { apres(); return; }
+  c.classList.add("g-sort");
+  setTimeout(function () {
+    apres();
+    var c2 = document.getElementById("guidee-corps");
+    if (c2) { c2.classList.remove("g-sort"); c2.classList.add("g-entre");
+      setTimeout(function () { if (c2) c2.classList.remove("g-entre"); }, GUIDEE_TRANSITION_MS + 40); }
+  }, GUIDEE_TRANSITION_MS);
+}
+
+function _guideeRubriques() {
+  var n = _guideeParEcran();
+  var tot = gGuidee.etapes.length;
+  var fin = Math.min(gGuidee.pos + n, tot);
+  var faites = 0;
+  for (var k = 0; k < gGuidee.pos; k++) faites++;
+
+  var h = "";
+  // Progression : on doit savoir où l'on en est, et ce qu'il reste.
+  var pct = Math.round((gGuidee.pos / tot) * 100);
+  h += "<div style='margin-bottom:12px'>"
+     + "<div style='display:flex;justify-content:space-between;font-size:.7rem;color:var(--muted);margin-bottom:5px'>"
+     + "<span>Rubrique " + (gGuidee.pos + 1) + (fin > gGuidee.pos + 1 ? " et " + fin : "") + " sur " + tot + "</span>"
+     + "<span>" + pct + " %</span></div>"
+     + "<div style='height:6px;background:var(--pale);border-radius:99px;overflow:hidden'>"
+     + "<div style='height:100%;width:" + pct + "%;background:linear-gradient(90deg,#1f6fad,#1e7d52);"
+     + "border-radius:99px;transition:width .25s ease'></div></div></div>";
+
+  for (var i = gGuidee.pos; i < fin; i++) {
+    var e = gGuidee.etapes[i];
+    var v = gGuidee.valeurs[_guideeCle(i)] || {};
+    var estRec = (e.genre === "rec");
+    h += "<div class='card' style='margin-bottom:10px'>";
+    h += "<div class='card-hdr'><h2 style='font-size:.9rem'>" + escH(e.lbl) + "</h2>"
+       + "<span class='badge'>" + escH(estRec ? e.culte : "Dépense") + "</span></div>";
+    h += "<div class='card-body'>";
+    h += "<div style='font-size:.68rem;color:var(--muted);margin-bottom:9px'>" + escH(e.bloc)
+       + (e.cle ? " · clé " + escH(e.cle) : "") + "</div>";
+    h += "<div class='mgrid'>"
+       + "<div class='fg'><label>Montant en francs</label>"
+       + "<input type='number' step='0.01' min='0' id='gv-cdf-" + i + "' placeholder='0' value='" + escHtml(v.cdf || "") + "'></div>"
+       + "<div class='fg'><label>Montant en dollars</label>"
+       + "<input type='number' step='0.01' min='0' id='gv-usd-" + i + "' placeholder='0' value='" + escHtml(v.usd || "") + "'></div>"
+       + "<div class='fg'><label>" + (estRec ? "Note" : "Bénéficiaire") + "</label>"
+       + "<input type='text' id='gv-note-" + i + "' placeholder='Facultatif' value='" + escHtml(v.note || "") + "'></div>"
+       + "</div>";
+    h += "</div></div>";
+  }
+
+  h += "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:4px'>";
+  if (gGuidee.pos > 0)
+    h += "<button class='btn btn-o' onclick='guideePrecedent()'>← Retour</button>";
+  h += "<button class='btn btn-d' onclick='guideePasser()'>Non applicable</button>";
+  h += "<button class='btn btn-g' style='flex:1;min-width:130px' onclick='guideeSuivant()'>"
+     + (fin >= tot ? "Terminer" : "Suivant →") + "</button>";
+  h += "</div>";
+  h += "<div style='text-align:center;margin-top:10px'>"
+     + "<a onclick='guideeAllerRecap()' style='cursor:pointer;font-size:.72rem;color:var(--muted);text-decoration:underline'>"
+     + "Passer tout le reste et vérifier</a></div>";
+  return h;
+}
+
+function _guideeFocus() {
+  var el = document.getElementById("gv-cdf-" + gGuidee.pos);
+  if (el) { try { el.focus(); } catch (e) {} }
+}
+
+// Lire ce qui est à l'écran avant de bouger : sans cela, un montant tapé
+// puis un « Retour » le perdrait.
+function _guideeLire() {
+  var n = _guideeParEcran();
+  var fin = Math.min(gGuidee.pos + n, gGuidee.etapes.length);
+  for (var i = gGuidee.pos; i < fin; i++) {
+    var c = document.getElementById("gv-cdf-" + i);
+    var u = document.getElementById("gv-usd-" + i);
+    var t = document.getElementById("gv-note-" + i);
+    if (!c && !u) continue;
+    var cdf = (c && c.value) || "", usd = (u && u.value) || "", note = (t && t.value) || "";
+    if (cdf || usd || note) {
+      gGuidee.valeurs[_guideeCle(i)] = { cdf: cdf, usd: usd, note: note };
+      delete gGuidee.passees[_guideeCle(i)];
+    } else {
+      delete gGuidee.valeurs[_guideeCle(i)];
+    }
+  }
+}
+
+function guideeSuivant() {
+  _guideeLire();
+  var n = _guideeParEcran();
+  if (gGuidee.pos + n >= gGuidee.etapes.length) { guideeAllerRecap(); return; }
+  gGuidee.pos += n;
+  _guideeTransition(renderSaisieGuidee);
+}
+
+function guideePrecedent() {
+  _guideeLire();
+  gGuidee.pos = Math.max(0, gGuidee.pos - _guideeParEcran());
+  _guideeTransition(renderSaisieGuidee);
+}
+
+// « Non applicable » : la rubrique est marquée vue et écartée, et ne
+// produira AUCUNE ligne dans la pièce.
+function guideePasser() {
+  var n = _guideeParEcran();
+  var fin = Math.min(gGuidee.pos + n, gGuidee.etapes.length);
+  for (var i = gGuidee.pos; i < fin; i++) {
+    delete gGuidee.valeurs[_guideeCle(i)];
+    gGuidee.passees[_guideeCle(i)] = true;
+  }
+  if (fin >= gGuidee.etapes.length) { guideeAllerRecap(); return; }
+  gGuidee.pos = fin;
+  _guideeTransition(renderSaisieGuidee);
+}
+
+function guideeAllerRecap() {
+  _guideeLire();
+  gGuidee.phase = "recap";
+  _guideeTransition(renderSaisieGuidee);
+}
+
+// ── Récapitulatif avant dépôt ───────────────────────────────────────
+function _guideeLignes() {
+  var r = { cf: [], cl: [], cm: [], fr: [], co: [] };
+  gGuidee.etapes.forEach(function (e, i) {
+    var v = gGuidee.valeurs[_guideeCle(i)];
+    if (!v) return;                       // passée ou laissée vide : aucune ligne
+    var cdf = parseFloat(v.cdf) || 0, usd = parseFloat(v.usd) || 0;
+    if (cdf <= 0 && usd <= 0) return;     // un montant nul n'est pas une écriture
+    if (e.genre === "rec") {
+      r[e.cont].push({ l: e.lbl, cdf: v.cdf || "", usd: v.usd || "", n: v.note || "" });
+    } else {
+      var k = e.cont.replace("dep-", "");
+      r[k].push({ l: e.lbl, c: e.cle || "", cdf: v.cdf || "", usd: v.usd || "", n: v.note || "" });
+    }
+  });
+  return r;
+}
+
+function _guideeRecap() {
+  var l = _guideeLignes();
+  var taux = (typeof getTaux === "function") ? getTaux() : 2800;
+  var rCDF = 0, rUSD = 0, dCDF = 0, dUSD = 0;
+  ["cf", "cl"].forEach(function (k) { l[k].forEach(function (x) { rCDF += parseFloat(x.cdf) || 0; rUSD += parseFloat(x.usd) || 0; }); });
+  ["cm", "fr", "co"].forEach(function (k) { l[k].forEach(function (x) { dCDF += parseFloat(x.cdf) || 0; dUSD += parseFloat(x.usd) || 0; }); });
+  var nb = l.cf.length + l.cl.length + l.cm.length + l.fr.length + l.co.length;
+  var nbPassees = 0; for (var kk in gGuidee.passees) if (gGuidee.passees[kk]) nbPassees++;
+
+  var h = "<div class='card'><div class='card-hdr'><h2>Vérification</h2><span class='badge'>Avant dépôt</span></div><div class='card-body'>";
+  h += "<div style='font-size:.78rem;margin-bottom:10px'>Culte du <strong>" + escH(_jourFr(gGuidee.meta.date || ""))
+     + "</strong> · responsable <strong>" + escH(gGuidee.meta.resp || "") + "</strong></div>";
+
+  h += "<div class='mgrid' style='margin-bottom:12px'>"
+     + _guideeTuile("Recettes", rCDF, rUSD, "#1e7d52")
+     + _guideeTuile("Dépenses", dCDF, dUSD, "#c0392b")
+     + _guideeTuile("Solde", rCDF - dCDF, rUSD - dUSD, "#1f6fad")
+     + "</div>";
+
+  h += "<div style='font-size:.72rem;color:var(--muted);margin-bottom:10px'>"
+     + nb + " rubrique(s) renseignée(s) · " + nbPassees + " déclarée(s) non applicable(s) · "
+     + (gGuidee.etapes.length - nb - nbPassees) + " laissée(s) vide(s). "
+     + "Les rubriques non applicables et les rubriques vides ne créent aucune ligne.</div>";
+
+  if (nb) {
+    h += "<table class='cotis-table bar-table' style='min-width:0'><thead><tr><th>Rubrique</th><th style='text-align:right'>FC</th><th style='text-align:right'>USD</th></tr></thead><tbody>";
+    [["cf", "Recettes CF"], ["cl", "Recettes CL"], ["cm", "Dépenses · culte"], ["fr", "Dépenses · fonctionnement"], ["co", "Contributions"]].forEach(function (t) {
+      l[t[0]].forEach(function (x) {
+        h += "<tr><td data-lbl='Rubrique'><div style='font-weight:600;font-size:.76rem'>" + escH(x.l) + "</div>"
+           + "<div style='font-size:.64rem;color:var(--muted)'>" + escH(t[1]) + (x.n ? " · " + escH(x.n) : "") + "</div></td>"
+           + "<td data-lbl='FC' style='text-align:right'>" + (parseFloat(x.cdf) ? fmt(parseFloat(x.cdf)) : "—") + "</td>"
+           + "<td data-lbl='USD' style='text-align:right'>" + (parseFloat(x.usd) ? fmt(parseFloat(x.usd)) : "—") + "</td></tr>";
+      });
+    });
+    h += "</tbody></table>";
+  } else {
+    h += "<div style='background:#fdf6e7;border-left:3px solid #e67e22;border-radius:7px;padding:9px 12px;font-size:.75rem;color:#8a5a00'>"
+       + "Aucune rubrique renseignée : il n'y a rien à déposer.</div>";
+  }
+
+  h += "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:14px'>"
+     + "<button class='btn btn-o' onclick='guideeReprendre()'>← Reprendre les rubriques</button>"
+     + (nb ? "<button class='btn btn-g' style='flex:1;min-width:150px' onclick='guideeDeposer()'>Déposer pour validation</button>" : "")
+     + "</div>";
+  h += "<div style='font-size:.68rem;color:var(--muted);margin-top:9px;line-height:1.5'>"
+     + "Le dépôt n'enregistre rien en comptabilité. Un administrateur ou le directeur financier "
+     + "contrôlera cette saisie avant qu'elle ne devienne une pièce.</div>";
+  h += "</div></div>";
+  return h;
+}
+
+function _guideeTuile(titre, cdf, usd, coul) {
+  return "<div style='background:var(--light);border:1px solid var(--border);border-radius:9px;padding:9px 11px'>"
+       + "<div style='font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em'>" + escH(titre) + "</div>"
+       + "<div style='font-weight:700;color:" + coul + ";font-size:.92rem'>" + fmt(cdf) + " FC</div>"
+       + (usd ? "<div style='font-size:.72rem;color:" + coul + "'>" + fmt(usd) + " $</div>" : "")
+       + "</div>";
+}
+
+function guideeReprendre() {
+  gGuidee.phase = "rubriques";
+  gGuidee.pos = 0;
+  _guideeTransition(renderSaisieGuidee);
+}
+
+// ── Dépôt de la proposition ─────────────────────────────────────────
+function guideeDeposer() {
+  var l = _guideeLignes();
+  var taux = (typeof getTaux === "function") ? getTaux() : 2800;
+  var rCDF = 0, rUSD = 0, dCDF = 0, dUSD = 0;
+  ["cf", "cl"].forEach(function (k) { l[k].forEach(function (x) { rCDF += parseFloat(x.cdf) || 0; rUSD += parseFloat(x.usd) || 0; }); });
+  ["cm", "fr", "co"].forEach(function (k) { l[k].forEach(function (x) { dCDF += parseFloat(x.cdf) || 0; dUSD += parseFloat(x.usd) || 0; }); });
+
+  // La proposition porte EXACTEMENT la forme d'une pièce : meta, lignes,
+  // totaux. La validation pourra la recharger dans l'écran classique sans
+  // conversion, donc sans occasion de divergence.
+  var passees = [];
+  gGuidee.etapes.forEach(function (e, i) { if (gGuidee.passees[_guideeCle(i)]) passees.push(e.lbl); });
+
+  var prop = {
+    statut: "soumis",
+    parEmail: (gCurrentUser && gCurrentUser.email) || "",
+    parNom:   (gCurrentUser && gCurrentUser.nom) || "",
+    deposeLe: new Date().toISOString(),
+    date: gGuidee.meta.date || "",
+    passees: passees,
+    piece: {
+      meta: { date: gGuidee.meta.date || "", effCF: gGuidee.meta.cf || "", effCL: gGuidee.meta.cl || "",
+              effEco: gGuidee.meta.eco || "", resp: gGuidee.meta.resp || "", taux: String(taux),
+              repCDF: "", repUSD: "", cntCDF: "", cntUSD: "", justifEcart: "" },
+      savedAt: new Date().toISOString(),
+      sums: { rCDF: rCDF, rUSD: rUSD, dCDF: dCDF, dUSD: dUSD, nCDF: rCDF - dCDF, nUSD: rUSD - dUSD },
+      cf: l.cf, cl: l.cl, cm: l.cm, fr: l.fr, co: l.co, ot: []
+    }
+  };
+
+  if (!IS_CONFIGURED || !gDb) {
+    showToast("Connexion au serveur requise pour déposer une saisie.", "err");
+    return;
+  }
+  var id = "sg_" + (gGuidee.meta.date || "").replace(/-/g, "") + "_" + Date.now();
+  gDb.collection("saisies_guidees").doc(id).set(prop).then(function () {
+    showToast("Saisie déposée. Elle attend le contrôle.", "ok");
+    gGuidee.phase = "accueil";
+    guideeChargerBrouillons(renderSaisieGuidee);
+  }).catch(function (e) {
+    // Une écriture refusée doit se voir : un dépôt muet ferait croire au
+    // dépôt alors que rien n'est parti.
+    showToast("Dépôt refusé : " + (e && e.message ? e.message : "erreur inconnue"), "err");
+  });
+}
+
+function guideeChargerBrouillons(apres) {
+  if (!IS_CONFIGURED || !gDb || !gCurrentUser) { if (apres) apres(); return; }
+  gDb.collection("saisies_guidees").where("parEmail", "==", gCurrentUser.email).get()
+    .then(function (snap) {
+      var l = [];
+      snap.forEach(function (d) { var o = d.data() || {}; o.id = d.id; l.push(o); });
+      l.sort(function (a, b) { return String(b.deposeLe || "").localeCompare(String(a.deposeLe || "")); });
+      gGuidee.brouillons = l.slice(0, 12);
+      if (apres) apres();
+    })
+    .catch(function () { if (apres) apres(); });
+}
+
+// ── Côté contrôleur : la file des saisies à valider ─────────────────
+var gGuideeFile = [];
+var gGuideeEnControle = null;
+
+function chargerFileSaisiesGuidees(apres) {
+  if (!IS_CONFIGURED || !gDb || !peutValiderSaisieGuidee()) { if (apres) apres(); return; }
+  gDb.collection("saisies_guidees").where("statut", "==", "soumis").get()
+    .then(function (snap) {
+      var l = [];
+      snap.forEach(function (d) { var o = d.data() || {}; o.id = d.id; l.push(o); });
+      l.sort(function (a, b) { return String(a.deposeLe || "").localeCompare(String(b.deposeLe || "")); });
+      gGuideeFile = l;
+      _afficherFileGuidee();
+      if (apres) apres();
+    })
+    .catch(function () { if (apres) apres(); });
+}
+
+function _afficherFileGuidee() {
+  var z = document.getElementById("guidee-file");
+  if (!z) return;
+  if (!peutValiderSaisieGuidee() || !gGuideeFile.length) { z.style.display = "none"; z.innerHTML = ""; return; }
+  var h = "<div class='card' style='border:2px solid #e67e22'>"
+        + "<div class='card-hdr' style='background:linear-gradient(90deg,#e67e22,#c05d10)'>"
+        + "<h2>Saisies guidées à contrôler</h2><span class='badge'>" + gGuideeFile.length + "</span></div><div class='card-body'>";
+  h += "<div style='font-size:.72rem;color:var(--muted);margin-bottom:10px'>"
+     + "Ouvrir une saisie la charge dans cet écran. Contrôlez-la, corrigez si besoin, "
+     + "puis enregistrez avec « Valider et Sauvegarder » comme d'habitude.</div>";
+  h += "<table class='cotis-table bar-table' style='min-width:0'><thead><tr><th>Culte</th><th>Déposée par</th><th></th></tr></thead><tbody>";
+  gGuideeFile.forEach(function (b) {
+    var p = b.piece || {}, s = p.sums || {};
+    h += "<tr><td data-lbl='Culte'><strong>" + escH(_jourFr(b.date || "")) + "</strong>"
+       + "<div style='font-size:.65rem;color:var(--muted)'>" + fmt(s.rCDF || 0) + " FC de recettes · "
+       + fmt(s.dCDF || 0) + " FC de dépenses</div></td>"
+       + "<td data-lbl='Déposée par'>" + escH(b.parNom || b.parEmail || "") + "</td>"
+       + "<td data-lbl='' style='text-align:right;white-space:nowrap'>"
+       + "<button class='btn btn-g btn-sm' style='padding:3px 9px' onclick=\"guideeOuvrirControle('" + escHtml(b.id) + "')\">Ouvrir</button> "
+       + "<button class='btn btn-d btn-sm' style='padding:3px 9px' onclick=\"guideeRenvoyer('" + escHtml(b.id) + "')\">Renvoyer</button>"
+       + "</td></tr>";
+  });
+  h += "</tbody></table></div></div>";
+  z.innerHTML = h;
+  z.style.display = "";
+}
+
+// Charger la proposition dans l'écran classique. On ne duplique pas le
+// chemin d'enregistrement : c'est le bouton habituel qui écrit la pièce.
+function guideeOuvrirControle(id) {
+  var b = null;
+  for (var i = 0; i < gGuideeFile.length; i++) if (gGuideeFile[i].id === id) b = gGuideeFile[i];
+  if (!b || !b.piece) { showToast("Saisie introuvable.", "err"); return; }
+  restoreState(b.piece);
+  gGuideeEnControle = id;
+  gEditingHistId = null;
+  if (typeof _afficherRubriquesFin === "function") _afficherRubriquesFin();
+  showTab("recettes");
+  window.scrollTo(0, 0);
+  var bar = document.getElementById("guidee-bandeau");
+  if (bar) {
+    bar.innerHTML = "<div style='background:#eef7f1;border-left:4px solid #1e7d52;border-radius:8px;padding:10px 13px;font-size:.76rem;color:#14532d'>"
+      + "🧭 Vous contrôlez la saisie de <strong>" + escH(b.parNom || b.parEmail || "") + "</strong> pour le culte du <strong>"
+      + escH(_jourFr(b.date || "")) + "</strong>."
+      + (b.passees && b.passees.length ? "<div style='font-size:.69rem;margin-top:4px;color:#4a6b5a'>Rubriques déclarées non applicables : "
+          + escH(b.passees.join(" · ")) + "</div>" : "")
+      + "<div style='font-size:.69rem;margin-top:4px;color:#4a6b5a'>Enregistrez avec « Valider et Sauvegarder » pour en faire une pièce.</div></div>";
+    bar.style.display = "";
+  }
+  showToast("Saisie chargée pour contrôle.", "ok");
+}
+
+// Marque la proposition validée. Appelé au moment où la pièce part à
+// l'enregistrement : si cet enregistrement échouait, la proposition
+// resterait marquée validée à tort — c'est pourquoi l'échec d'écriture est
+// annoncé à l'écran par le chemin d'enregistrement lui-même.
+function _guideeMarquerValidee() {
+  if (!gGuideeEnControle || !IS_CONFIGURED || !gDb) return;
+  var id = gGuideeEnControle;
+  gGuideeEnControle = null;
+  gDb.collection("saisies_guidees").doc(id).update({
+    statut: "valide",
+    validePar: (gCurrentUser && gCurrentUser.email) || "",
+    valideLe: new Date().toISOString()
+  }).then(function () { chargerFileSaisiesGuidees(); })
+    .catch(function (e) { showToast("Pièce enregistrée, mais la saisie n'a pas pu être marquée validée : "
+      + (e && e.message ? e.message : "erreur"), "err"); });
+  var bar = document.getElementById("guidee-bandeau");
+  if (bar) { bar.style.display = "none"; bar.innerHTML = ""; }
+}
+
+function guideeRenvoyer(id) {
+  var b = null;
+  for (var i = 0; i < gGuideeFile.length; i++) if (gGuideeFile[i].id === id) b = gGuideeFile[i];
+  if (!b) return;
+  var motif = prompt("Motif du renvoi — il sera montré à " + (b.parNom || b.parEmail || "l'auteur") + " :", "");
+  if (motif === null) return;
+  motif = String(motif).trim();
+  if (!motif) { showToast("Indiquez un motif : un renvoi sans raison ne se corrige pas.", "err"); return; }
+  if (!IS_CONFIGURED || !gDb) { showToast("Connexion au serveur requise.", "err"); return; }
+  gDb.collection("saisies_guidees").doc(id).update({
+    statut: "rejete", motif: motif,
+    validePar: (gCurrentUser && gCurrentUser.email) || "",
+    valideLe: new Date().toISOString()
+  }).then(function () { showToast("Saisie renvoyée.", "ok"); chargerFileSaisiesGuidees(); })
+    .catch(function (e) { showToast("Renvoi refusé : " + (e && e.message ? e.message : "erreur"), "err"); });
+}
 </script>
 
 <script id="ux-v3">
