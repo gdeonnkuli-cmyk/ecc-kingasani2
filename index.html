@@ -1599,14 +1599,15 @@ body.dark-mode [style*="border:1px solid #e5eaf0"]{border-color:var(--v3-line)!i
 /* Saisie guidée : la rubrique sortante s'efface vers la gauche, l'entrante
    arrive de la droite. Assez pour qu'on voie qu'on avance, assez bref pour
    ne jamais faire attendre. */
-#guidee-corps{transition:opacity .16s ease, transform .16s ease}
-#guidee-corps.g-sort{opacity:0;transform:translateX(-14px)}
-#guidee-corps.g-entre{opacity:0;transform:translateX(14px)}
+#guidee-corps,#conf-corps{transition:opacity .16s ease, transform .16s ease}
+#guidee-corps.g-sort,#conf-corps.g-sort{opacity:0;transform:translateX(-14px)}
+#guidee-corps.g-entre,#conf-corps.g-entre{opacity:0;transform:translateX(14px)}
 @media (prefers-reduced-motion: reduce){
   /* Un mouvement imposé à qui l'a désactivé sur son appareil n'est pas une
      attention, c'est une gêne : on garde l'enchaînement, sans le glissement. */
-  #guidee-corps{transition:none}
-  #guidee-corps.g-sort,#guidee-corps.g-entre{opacity:1;transform:none}
+  #guidee-corps,#conf-corps{transition:none}
+  #guidee-corps.g-sort,#guidee-corps.g-entre,
+  #conf-corps.g-sort,#conf-corps.g-entre{opacity:1;transform:none}
 }
 /* Paysage tactile : colonnes de montants élargies pour absorber les 16px */
 @media (max-width:900px) and (orientation:landscape) and (pointer:coarse){
@@ -2407,6 +2408,7 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
       <h2>Distribution - Cles de Repartition</h2><span class="badge">6 bases</span>
       <div style="margin-left:auto;display:flex;gap:6px">
         <button class="btn btn-g btn-sm" onclick="calcDistrib()">Calculer</button>
+        <button class="btn btn-o btn-sm" onclick="confDemarrer()" title="Passer les lignes calculées une par une">🧭 Confirmer une à une</button>
         <button class="btn btn-p btn-sm" onclick="injectDep()" title="Injecte les montants validés dans l'onglet Dépenses">⬇️ Injecter → Dépenses</button>
       </div>
     </div>
@@ -2429,8 +2431,9 @@ body.dark-mode .cnt-ecart.ko{background:rgba(255,107,107,.13);border-color:rgba(
         </div>
         <div id="recap-mensuel-body" style="margin-top:8px;font-size:.78rem;color:var(--muted)">Choisissez un mois puis Actualiser.</div>
       </div>
+      <div id="conf-corps" style="display:none"></div>
       <div id="distrib-body"><p style="text-align:center;padding:20px;color:#6b88a4">Cliquez Calculer pour demarrer.</p></div>
-      <div style="margin-top:8px;padding:8px 12px;background:#fffbeb;border:1px solid #fcd34d;border-radius:7px;font-size:.72rem;color:#92400e;line-height:1.6">
+      <div id="distrib-flux" style="margin-top:8px;padding:8px 12px;background:#fffbeb;border:1px solid #fcd34d;border-radius:7px;font-size:.72rem;color:#92400e;line-height:1.6">
         <strong>Flux de travail :</strong> 1) Saisir les recettes → 2) Cliquer <em>Calculer</em> → 3) Valider les lignes (bouton "En attente") → 4) Cliquer <em>Injecter → Dépenses</em> pour reporter les montants dans l'onglet Dépenses.
       </div>
     </div>
@@ -12042,7 +12045,7 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.8";
+var APP_VERSION = "2026.10.10";
 var APP_VERSION_NOTES = "Échéancier des obligations : ce qui est dû, ce qui est réglé, et la confirmation avec justificatif.";
 
 function checkAppUpdate() {
@@ -15664,12 +15667,19 @@ function loadUserPermsFromFirestore(email, callback, refus) {
         } else if(ac.perms && ac.perms.modules) {
           gCurrentUser.perms = ac.perms;
         }
-        if(ac.socialSaisie !== undefined) {
+        // Les autorisations qui ne sont pas des listes se recopiaient une par
+        // une, et « saisieGuidee » avait été oubliée : le drapeau partait bien
+        // dans accounts/ à la création, mais la connexion ne le relisait
+        // jamais. Le compte cochait la case, et ne voyait rien. On recopie
+        // donc la liste des clés, pour que la prochaine autorisation ajoutée
+        // n'ait pas à être pensée ici une seconde fois.
+        var _drapeaux = ["socialSaisie","semSaisie","ecoSaisie","saisieGuidee","readOnly"];
+        for(var _di=0; _di<_drapeaux.length; _di++){
+          var _k = _drapeaux[_di];
+          if(ac[_k] === undefined) continue;
           if(!gCurrentUser.perms) gCurrentUser.perms = {modules:[], financeTabs:[]};
-          gCurrentUser.perms.socialSaisie = ac.socialSaisie;
+          gCurrentUser.perms[_k] = ac[_k];
         }
-        if(ac.semSaisie !== undefined && gCurrentUser.perms) gCurrentUser.perms.semSaisie = ac.semSaisie;
-        if(ac.ecoSaisie !== undefined && gCurrentUser.perms) gCurrentUser.perms.ecoSaisie = ac.ecoSaisie;
         if(ac.projTabs !== undefined && gCurrentUser.perms) {
           gCurrentUser.perms.projTabs = ac.projTabs;
         }
@@ -31966,6 +31976,335 @@ function guideeRenvoyer(id) {
     valideLe: new Date().toISOString()
   }).then(function () { showToast("Saisie renvoyée.", "ok"); chargerFileSaisiesGuidees(); })
     .catch(function (e) { showToast("Renvoi refusé : " + (e && e.message ? e.message : "erreur"), "err"); });
+}
+</script>
+
+<script id="confirmation-distribution">
+/* =====================================================================
+   DISTRIBUTION — CONFIRMATION LIGNE PAR LIGNE
+   =====================================================================
+   Le tableau de la Distribution tient 28 lignes sur six bases. Sur un
+   téléphone, les valider une à une au doigt revient à viser des boutons
+   « En attente » larges comme un ongle, dans un tableau qui déborde.
+   On finit par appuyer sur « Tout valider », ce qui n'est plus un
+   contrôle mais une signature en blanc.
+
+   Ce parcours présente chaque ligne seule, avec de quoi juger : sa base,
+   le montant de cette base, sa clé, le brut et l'arrondi. Deux gestes
+   seulement — conforme, ou laissé en caisse.
+
+   Il ne crée AUCUN état parallèle : il écrit dans gValidation, le même
+   objet que les boutons du tableau. Fermer le parcours au milieu laisse
+   donc le tableau exactement dans l'état où le parcours l'a mis. Un
+   second registre de validation aurait divergé du premier, et personne
+   n'aurait su lequel faisait foi.
+
+   Ce n'est pas une saisie : c'est l'acte de contrôle. Il reste donc sur
+   l'écran Distribution, que les comptes en saisie guidée n'ont pas.
+   ===================================================================== */
+
+var gConf = { ouvert: false, pos: 0, lignes: [] };
+
+// Les lignes à confirmer, dans l'ordre du tableau. Les lignes « reste en
+// caisse » en sont exclues : elles ne se valident pas, elles se constatent.
+// Leur demander un geste serait demander un geste pour rien.
+function _confLignes() {
+  var b = _confBases();
+  var out = [];
+  for (var i = 0; i < DISTRIB_ITEMS.length; i++) {
+    var it = DISTRIB_ITEMS[i];
+    if (it.info) continue;
+    var base = (it.base === 0) ? 0 : getBaseVal(it, b);
+    var brut = (it.base === 0) ? 0 : base * it.cle;
+    out.push({ label: it.label, cle: it.cle, base: it.base, sec: it.sec,
+               montantBase: base, brut: brut, arrondi: arrondi(brut),
+               manuelle: (it.base === 0) });
+  }
+  return out;
+}
+
+function _confBases() {
+  function v(id) { var e = document.getElementById(id); return (e && parseFloat(e.value)) || 0; }
+  var b = { b1: v("base-b1"), b2: v("base-b2"), b4: v("base-b4"), b5: v("base-b5"), b6: v("base-b6") };
+  try { b.b7 = getBases().b7 || 0; } catch (e) { b.b7 = 0; }
+  return b;
+}
+
+function _confNomBase(n) {
+  return { 1: "Base 1 — Offrandes ordinaires / Familles",
+           2: "Base 2 — Offrandes Prophète",
+           4: "Base 4 — Journée Spéciale",
+           5: "Base 5 — Dîmes collectées",
+           6: "Base 6 — Cotisation Ration Pasteurs",
+           7: "Base 7 — Cotisations loyer du culte",
+           0: "Montant à saisir" }[n] || ("Base " + n);
+}
+
+function confDemarrer() {
+  gConf.lignes = _confLignes();
+  if (!gConf.lignes.length) { showToast("Cliquez d'abord sur Calculer.", "err"); return; }
+  var vides = gConf.lignes.filter(function (l) { return l.montantBase > 0; }).length;
+  if (!vides) { showToast("Aucune base n'est renseignée : il n'y a rien à confirmer.", "err"); return; }
+  gConf.ouvert = true;
+  gConf.pos = 0;
+  _confBascule(true);
+  renderConfirmation();
+}
+
+function confFermer() {
+  gConf.ouvert = false;
+  _confBascule(false);
+  renderDistrib();   // le tableau reprend l'état que le parcours a posé
+}
+
+// Une seule chose à lire à la fois : le tableau se retire pendant le parcours.
+function _confBascule(ouvert) {
+  var c = document.getElementById("conf-corps");
+  if (c) c.style.display = ouvert ? "" : "none";
+  // Le tableau ET la note qui décrit le chemin classique : pendant le
+  // parcours, elle dirait de viser des boutons qui ne sont plus à l'écran.
+  ["distrib-body", "distrib-flux"].forEach(function (id) {
+    var e = document.getElementById(id);
+    if (e) e.style.display = ouvert ? "none" : "";
+  });
+}
+
+var CONF_TRANSITION_MS = 160;
+function _confTransition(apres) {
+  var c = document.getElementById("conf-corps");
+  if (!c) { apres(); return; }
+  c.classList.add("g-sort");
+  setTimeout(function () {
+    apres();
+    var c2 = document.getElementById("conf-corps");
+    if (c2) { c2.classList.remove("g-sort"); c2.classList.add("g-entre");
+      setTimeout(function () { if (c2) c2.classList.remove("g-entre"); }, CONF_TRANSITION_MS + 40); }
+  }, CONF_TRANSITION_MS);
+}
+
+function renderConfirmation() {
+  var c = document.getElementById("conf-corps");
+  if (!c) return;
+  if (gConf.pos >= gConf.lignes.length) { c.innerHTML = _confRecap(); return; }
+  c.innerHTML = _confEtape();
+}
+
+function _confEtape() {
+  var l = gConf.lignes[gConf.pos];
+  var tot = gConf.lignes.length;
+  var pct = Math.round((gConf.pos / tot) * 100);
+  var dejaVal = gValidation[l.label] === true;
+
+  var h = "<div style='margin-bottom:12px'>"
+        + "<div style='display:flex;justify-content:space-between;font-size:.7rem;color:var(--muted);margin-bottom:5px'>"
+        + "<span>Ligne " + (gConf.pos + 1) + " sur " + tot + "</span><span>" + pct + " %</span></div>"
+        + "<div style='height:6px;background:var(--pale);border-radius:99px;overflow:hidden'>"
+        + "<div style='height:100%;width:" + pct + "%;background:linear-gradient(90deg,#1f6fad,#1e7d52);"
+        + "border-radius:99px;transition:width .25s ease'></div></div></div>";
+
+  h += "<div class='card' style='margin-bottom:10px'>";
+  h += "<div class='card-hdr'><h2 style='font-size:.92rem'>" + escH(l.label) + "</h2>"
+     + (dejaVal ? "<span class='badge' style='background:#1e7d52;color:#fff'>déjà conforme</span>" : "")
+     + "</div><div class='card-body'>";
+
+  h += "<div style='font-size:.68rem;color:var(--muted);margin-bottom:10px'>" + escH(l.sec) + "</div>";
+
+  if (l.manuelle) {
+    // La seule ligne sans clé : son montant se saisit, il ne se calcule pas.
+    h += "<div class='fg'><label>Montant à décaisser (FC)</label>"
+       + "<input type='number' step='0.01' min='0' id='conf-manuel' placeholder='0' value='"
+       + escHtml(_confMontantManuel()) + "'></div>";
+    h += "<div style='font-size:.7rem;color:var(--muted);margin-top:6px'>"
+       + "Cette ligne n'a pas de clé : aucune base ne la calcule.</div>";
+  } else {
+    // Le calcul, posé à plat : on doit pouvoir le refaire de tête.
+    h += "<div style='background:var(--light);border:1px solid var(--border);border-radius:9px;padding:11px 13px;margin-bottom:10px'>";
+    h += "<div style='display:flex;justify-content:space-between;font-size:.74rem;padding:3px 0'>"
+       + "<span style='color:var(--muted)'>" + escH(_confNomBase(l.base)) + "</span>"
+       + "<span class='mono' style='font-weight:600'>" + fmt(l.montantBase) + " FC</span></div>";
+    h += "<div style='display:flex;justify-content:space-between;font-size:.74rem;padding:3px 0'>"
+       + "<span style='color:var(--muted)'>Clé de répartition</span>"
+       + "<span class='mono' style='font-weight:600'>" + l.cle.toFixed(4) + "</span></div>";
+    h += "<div style='display:flex;justify-content:space-between;font-size:.74rem;padding:3px 0;border-top:1px solid var(--border);margin-top:5px;padding-top:7px'>"
+       + "<span style='color:var(--muted)'>Brut</span>"
+       + "<span class='mono'>" + fmt(l.brut) + " FC</span></div>";
+    h += "<div style='display:flex;justify-content:space-between;font-size:.9rem;padding:3px 0;font-weight:700'>"
+       + "<span style='color:var(--text)'>À décaisser</span>"
+       + "<span class='mono' style='color:#1e7d52'>" + fmt(l.arrondi) + " FC</span></div>";
+    h += "</div>";
+
+    if (l.cle === 1) {
+      h += "<div style='background:#fdf6e7;border-left:3px solid #e67e22;border-radius:7px;padding:8px 11px;"
+         + "font-size:.72rem;color:#8a5a00;margin-bottom:9px'>"
+         + "Clé à 1,00 : cette ligne reçoit la <strong>totalité</strong> de sa base. Ce n'est pas un partage.</div>";
+    }
+    if (l.base === 5 && !_confEstLiberation()) {
+      // Le piège du cycle des dîmes : hors jour de libération, décaisser
+      // cette répartition la comptera deux fois le jour venu.
+      h += "<div style='background:#fdecea;border-left:3px solid #c0392b;border-radius:7px;padding:9px 12px;"
+         + "font-size:.73rem;color:#8a1c12;margin-bottom:9px'>"
+         + "<strong>Ce dimanche n'est pas le jour de libération des dîmes.</strong> "
+         + "Ces dîmes restent en caisse jusqu'au jour de la libération. Décaisser leur répartition "
+         + "aujourd'hui la compterait <strong>deux fois</strong>. Laissez cette ligne en caisse.</div>";
+    }
+
+    h += "<div style='text-align:center'>"
+       + "<a onclick='confCorrigerBase()' style='cursor:pointer;font-size:.72rem;color:var(--mid);text-decoration:underline'>"
+       + "Corriger le montant de cette base</a></div>";
+  }
+
+  h += "</div></div>";
+
+  h += "<div style='display:flex;gap:8px;flex-wrap:wrap'>";
+  if (gConf.pos > 0) h += "<button class='btn btn-o' onclick='confPrecedent()'>← Retour</button>";
+  h += "<button class='btn btn-d' onclick='confEnCaisse()'>Laisser en caisse</button>";
+  h += "<button class='btn btn-g' style='flex:1;min-width:130px' onclick='confConforme()'>Conforme →</button>";
+  h += "</div>";
+  h += "<div style='text-align:center;margin-top:10px'>"
+     + "<a onclick='confFermer()' style='cursor:pointer;font-size:.72rem;color:var(--muted);text-decoration:underline'>"
+     + "Quitter et revenir au tableau</a></div>";
+  return h;
+}
+
+function _confEstLiberation() {
+  var d = (document.getElementById("meta-date") || {}).value || "";
+  return (typeof _estCulteDeLiberation === "function") ? _estCulteDeLiberation(d) : true;
+}
+
+function _confMontantManuel() {
+  var l = gConf.lignes[gConf.pos];
+  if (!l) return "";
+  var el = document.getElementById("mn_" + l.label.replace(/[^a-zA-Z0-9]/g, "_"));
+  return (el && el.value) || "";
+}
+
+// Corriger une base depuis le parcours : la correction va dans le MÊME champ
+// que l'écran classique, et marque la base comme saisie à la main — sinon le
+// prochain « Calculer » l'écraserait sans prévenir.
+function confCorrigerBase() {
+  var l = gConf.lignes[gConf.pos];
+  if (!l || l.manuelle) return;
+  var champ = document.getElementById("base-b" + l.base);
+  if (!champ) { showToast("Cette base est calculée automatiquement et ne se corrige pas ici.", "err"); return; }
+  var actuel = champ.value || "";
+  var v = prompt(_confNomBase(l.base) + "\n\nMontant en francs :", actuel);
+  if (v === null) return;
+  v = String(v).trim().replace(",", ".");
+  if (v !== "" && (isNaN(parseFloat(v)) || parseFloat(v) < 0)) {
+    showToast("Montant invalide.", "err"); return;
+  }
+  champ.value = v;
+  champ.dataset.manual = 1;
+  var pos = gConf.pos;
+  gConf.lignes = _confLignes();      // toutes les lignes de cette base changent
+  gConf.pos = pos;
+  renderConfirmation();
+  showToast("Base corrigée. Les lignes qui en dépendent sont recalculées.", "ok");
+}
+
+function confConforme() {
+  var l = gConf.lignes[gConf.pos];
+  if (l.manuelle) {
+    var el = document.getElementById("conf-manuel");
+    var montant = (el && el.value) || "";
+    var cible = document.getElementById("mn_" + l.label.replace(/[^a-zA-Z0-9]/g, "_"));
+    // Le champ du tableau n'existe que si le tableau a été rendu : on le
+    // reconstruit au besoin, pour que la valeur ne se perde pas.
+    if (!cible) { _confBascule(false); renderDistrib(); _confBascule(true);
+                  cible = document.getElementById("mn_" + l.label.replace(/[^a-zA-Z0-9]/g, "_")); }
+    if (cible) cible.value = montant;
+    l.arrondi = arrondi(parseFloat(montant) || 0);
+  }
+  gValidation[l.label] = true;
+  _confAvancer();
+}
+
+function confEnCaisse() {
+  var l = gConf.lignes[gConf.pos];
+  gValidation[l.label] = false;
+  _confAvancer();
+}
+
+function _confAvancer() {
+  gConf.pos++;
+  _confTransition(renderConfirmation);
+}
+
+function confPrecedent() {
+  gConf.pos = Math.max(0, gConf.pos - 1);
+  _confTransition(renderConfirmation);
+}
+
+// ── Récapitulatif ───────────────────────────────────────────────────
+function _confRecap() {
+  var dec = 0, caisse = 0, ecart = 0, nbDec = 0, nbCaisse = 0;
+  var listeDec = [], listeCaisse = [];
+  gConf.lignes.forEach(function (l) {
+    var m = l.arrondi;
+    if (gValidation[l.label] === true) { dec += m; nbDec++; listeDec.push(l); }
+    else { caisse += m; nbCaisse++; if (m > 0) listeCaisse.push(l); }
+    if (!l.manuelle) ecart += (l.brut - l.arrondi);
+  });
+
+  var h = "<div class='card'><div class='card-hdr'><h2>Confirmation terminée</h2>"
+        + "<span class='badge'>" + nbDec + " / " + gConf.lignes.length + "</span></div><div class='card-body'>";
+
+  h += "<div class='mgrid' style='margin-bottom:12px'>"
+     + _confTuile("À décaisser", dec, "#1e7d52")
+     + _confTuile("Laissé en caisse", caisse, "#e67e22")
+     + _confTuile("Arrondis", ecart, "#1f6fad")
+     + "</div>";
+
+  h += "<div style='font-size:.73rem;color:var(--muted);margin-bottom:10px'>"
+     + nbDec + " ligne(s) déclarée(s) conforme(s) · " + nbCaisse + " laissée(s) en caisse.</div>";
+
+  if (listeCaisse.length) {
+    h += "<div style='background:#fdf6e7;border-left:3px solid #e67e22;border-radius:7px;padding:9px 12px;"
+       + "font-size:.73rem;color:#8a5a00;margin-bottom:11px'>"
+       + "<strong>Restent en caisse :</strong> "
+       + escH(listeCaisse.map(function (x) { return x.label + " (" + fmt(x.arrondi) + " FC)"; }).join(" · "))
+       + "</div>";
+  }
+
+  if (listeDec.length) {
+    h += "<table class='cotis-table bar-table' style='min-width:0'><thead><tr>"
+       + "<th>Bénéficiaire</th><th style='text-align:right'>À décaisser</th></tr></thead><tbody>";
+    listeDec.forEach(function (l) {
+      h += "<tr><td data-lbl='Bénéficiaire'><div style='font-weight:600;font-size:.76rem'>" + escH(l.label) + "</div>"
+         + "<div style='font-size:.64rem;color:var(--muted)'>" + escH(_confNomBase(l.base))
+         + (l.manuelle ? "" : " · clé " + l.cle.toFixed(4)) + "</div></td>"
+         + "<td data-lbl='À décaisser' style='text-align:right' class='mono'>" + fmt(l.arrondi) + " FC</td></tr>";
+    });
+    h += "</tbody></table>";
+  }
+
+  h += "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:14px'>"
+     + "<button class='btn btn-o' onclick='confRevoir()'>← Revoir les lignes</button>"
+     + "<button class='btn btn-o' onclick='confFermer()'>Revenir au tableau</button>"
+     + (nbDec ? "<button class='btn btn-p' style='flex:1;min-width:150px' onclick='confInjecter()'>⬇️ Injecter → Dépenses</button>" : "")
+     + "</div>";
+  h += "<div style='font-size:.68rem;color:var(--muted);margin-top:9px;line-height:1.5'>"
+     + "L'injection porte les montants conformes dans l'onglet Dépenses. Les lignes laissées "
+     + "en caisse n'y sont pas portées.</div>";
+  h += "</div></div>";
+  return h;
+}
+
+function _confTuile(titre, montant, coul) {
+  return "<div style='background:var(--light);border:1px solid var(--border);border-radius:9px;padding:9px 11px'>"
+       + "<div style='font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em'>" + escH(titre) + "</div>"
+       + "<div style='font-weight:700;color:" + coul + ";font-size:.92rem' class='mono'>" + fmt(montant) + " FC</div></div>";
+}
+
+function confRevoir() {
+  gConf.pos = 0;
+  _confTransition(renderConfirmation);
+}
+
+// L'injection n'est pas réécrite : c'est injectDep(), celle du tableau.
+function confInjecter() {
+  confFermer();
+  injectDep();
 }
 </script>
 
