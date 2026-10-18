@@ -12042,7 +12042,7 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.7";
+var APP_VERSION = "2026.10.8";
 var APP_VERSION_NOTES = "Échéancier des obligations : ce qui est dû, ce qui est réglé, et la confirmation avec justificatif.";
 
 function checkAppUpdate() {
@@ -31424,14 +31424,34 @@ function _guideeEtapes() {
   (CL_DEF || []).forEach(function (l) {
     et.push({ genre: "rec", cont: "cl", culte: "CL", lbl: l, bloc: "Recettes · Culte Lingalophone" });
   });
+  // Une dépense qui porte une CLÉ n'est pas constatée, elle est calculée :
+  // son montant vaut base × clé, et c'est la Distribution qui le produit,
+  // puis « Injecter → Dépenses » qui le pose. La demander ici inviterait à
+  // taper un montant qui contredit sa propre clé — une erreur qui ne se voit
+  // qu'à la distribution du mois, quand les comptes ne tombent plus.
+  //
+  // Le parcours ne garde donc que les dépenses sans clé : celles qu'on paie
+  // et qu'on constate. Sur 35 rubriques, 27 sont calculées et 8 restent.
   [["dep-cm", CM_DEF, "Dépenses · Culte du mois"],
    ["dep-fr", FR_DEF, "Dépenses · Frais de fonctionnement"],
    ["dep-co", CO_DEF, "Dépenses · Contributions"]].forEach(function (t) {
     (t[1] || []).forEach(function (o) {
-      et.push({ genre: "dep", cont: t[0], lbl: o.l, cle: o.c || "", bloc: t[2] });
+      if (o.c) return;                    // calculée par la Distribution
+      et.push({ genre: "dep", cont: t[0], lbl: o.l, cle: "", bloc: t[2] });
     });
   });
   return et;
+}
+
+// Combien de rubriques le parcours laisse de côté, et pourquoi : il faut
+// pouvoir le dire à celui qui saisit, sinon il cherche « Modérateurs 10 % »
+// et croit à un oubli.
+function _guideeCalculees() {
+  var n = 0;
+  [CM_DEF, FR_DEF, CO_DEF].forEach(function (a) {
+    (a || []).forEach(function (o) { if (o && o.c) n++; });
+  });
+  return n;
 }
 
 // Combien de rubriques par écran : 1 ou 2, au choix de celui qui saisit.
@@ -31480,10 +31500,15 @@ function renderSaisieGuidee() {
 function _guideeAccueil() {
   var h = "<div class='card'><div class='card-hdr'><h2>Saisie guidée</h2>"
         + "<span class='badge'>" + gGuidee.etapes.length + " rubriques</span></div><div class='card-body'>";
-  h += "<div style='font-size:.78rem;color:var(--muted);line-height:1.55;margin-bottom:12px'>"
+  h += "<div style='font-size:.78rem;color:var(--muted);line-height:1.55;margin-bottom:10px'>"
      + "Les rubriques se présentent une à une. Pour chacune : inscrivez le montant, "
      + "ou appuyez sur <strong>Non applicable</strong> si elle ne concerne pas ce culte. "
      + "Rien n'est enregistré en comptabilité tant que la saisie n'a pas été contrôlée.</div>";
+  h += "<div style='background:var(--pale);border-left:3px solid var(--mid);border-radius:7px;"
+     + "padding:8px 11px;font-size:.72rem;color:var(--text);line-height:1.5;margin-bottom:12px'>"
+     + "Ce parcours ne demande pas les " + _guideeCalculees() + " dépenses à clé de répartition "
+     + "(part des dîmes, collations, loyer…). Ce ne sont pas des montants que l'on constate : "
+     + "ils se calculent sur les recettes, à la Distribution. Vous n'avez donc pas à les chercher ici.</div>";
 
   h += "<div style='display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px'>"
      + "<span style='font-size:.73rem;color:var(--muted)'>Rubriques par écran :</span>";
