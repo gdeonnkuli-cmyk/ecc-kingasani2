@@ -229,9 +229,15 @@ service cloud.firestore {
         return request.auth != null
                && resource.data.get('parEmail', '') == request.auth.token.email;
       }
+      // get() sur un document ABSENT ne renvoie pas vide : il fait echouer
+      // l'evaluation, et la regle refuse. Un valideur dont le document de
+      // compte n'existe pas encore se serait donc vu refuser la lecture de la
+      // file — et la lecture passe par ici des que le document n'est pas le
+      // sien. exists() garde la porte, comme ailleurs dans ce fichier.
       function estValideur() {
         return estProprietaire()
                || (estActif() && request.auth != null
+                   && exists(/databases/$(database)/documents/accounts/$(request.auth.token.email))
                    && get(/databases/$(database)/documents/accounts/$(request.auth.token.email))
                         .data.get('role', '') in ['admin', 'finances']);
       }
