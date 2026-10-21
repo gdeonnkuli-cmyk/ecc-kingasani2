@@ -5189,67 +5189,135 @@ function launchAppFin() {
   launchApp();
 }
 
-document.getElementById("lo-btn").onclick = function() {
-  if (gIsDirty && !confirm("Des donnees non sauvegardees. Continuer ?")) return;
-  if (gUnsubDoc) { gUnsubDoc(); gUnsubDoc = null; }
+// Fermeture de session : un seul chemin, partage par le bouton « Se
+// deconnecter » et par la fermeture automatique. Les deux faisaient la meme
+// chose a deux endroits, et seule la premiere version recevait les
+// corrections ; la presence et la surveillance de session, elles, n'etaient
+// arretees ni par l'une ni par l'autre.
+function _fermerSession() {
+  if (gUnsubDoc)     { gUnsubDoc();     gUnsubDoc = null; }
+  if (gUnsubSession) { gUnsubSession(); gUnsubSession = null; }
+  // Le battement de presence lit gCurrentUser.nom toutes les soixante
+  // secondes. Laisse tourner apres la deconnexion, il levait une erreur a
+  // chaque battement, pour toujours, et l'utilisateur restait affiche « en
+  // ligne » aux autres postes.
+  if (gPresenceInterval) { clearInterval(gPresenceInterval); gPresenceInterval = null; }
+  if (IS_CONFIGURED && gDb && gCurrentUser && gCurrentUser.uid) {
+    gDb.collection("presence").doc(gCurrentUser.uid)
+      .update({ online: false }).catch(function(){});
+  }
+  stopInactivityTimer();
   if (IS_CONFIGURED && gAuth) gAuth.signOut();
   safeStyle("login-screen","display","flex");
   safeStyle("app-wrapper","display","none");
   clearRows(); gIsDirty = false; gCurrentUser = null; window.__appLaunched = false;
-  stopInactivityTimer();
+}
+
+document.getElementById("lo-btn").onclick = function() {
+  if (gIsDirty && !confirm("Des donnees non sauvegardees. Continuer ?")) return;
+  _fermerSession();
 };
 
 // ================================================
-// == DECONNEXION AUTOMATIQUE (10 min inactivite) ==
+// == DECONNEXION AUTOMATIQUE POUR INACTIVITE ==
 // ================================================
+// Un appareil laisse ouvert sur une session ouverte, c'est le tiroir-caisse
+// laisse ouvert : celui qui passe derriere l'ecran enregistre une recette, et
+// le journal d'audit designera le caissier. Le delai se compte en inactivite
+// reelle et non en duree de session : tant que quelqu'un touche l'appareil,
+// rien ne se ferme, meme au bout de trois heures de comptage.
+//
+// Pour changer le delai, cette seule ligne suffit : le preavis et le decompte
+// s'en deduisent. Deux nombres a tenir d'accord, c'est un nombre de trop.
+//
+// Le prefixe SESSION_ n'est pas decoratif : INACTIVITE_JOURS et
+// INACTIVITE_PREAVIS existent deja plus bas et comptent la dormance d'un
+// COMPTE en jours. Un INACTIVITE_PREAVIS ici se faisait ecraser par celui-la,
+// et le preavis tombait a sept secondes.
+var SESSION_INACTIVE_MIN = 20;   // sans aucune action, la session se ferme
+var SESSION_PREAVIS_S    = 60;   // secondes de preavis, prises dans ce delai
+
 var gInactivityTimer = null;
-var INACTIVITY_LIMIT = 10 * 60 * 1000; // 10 minutes en ms
-var gInactivityWarning = null;
-var gWarningTimer = null;
+var gWarningTimer    = null;
+var gDecompteTimer   = null;
+var gEcheanceSession = 0;      // instant de fermeture, en ms
+var gDernierGeste    = 0;      // bride les evenements continus
 
 function resetInactivityTimer() {
-  if(!gCurrentUser) return;
+  if (!gCurrentUser) return;
   clearTimeout(gInactivityTimer);
   clearTimeout(gWarningTimer);
-  // Masquer le warning si visible
+  if (gDecompteTimer) { clearInterval(gDecompteTimer); gDecompteTimer = null; }
   var warn = document.getElementById("inactivity-warning");
-  if(warn) warn.style.display = "none";
-  // Warning à 9 minutes
-  gWarningTimer = setTimeout(function(){
-    showInactivityWarning();
-  }, 9 * 60 * 1000);
-  // Déconnexion à 10 minutes
-  gInactivityTimer = setTimeout(function(){
-    autoLogout();
-  }, INACTIVITY_LIMIT);
+  if (warn) warn.style.display = "none";
+
+  gEcheanceSession = Date.now() + SESSION_INACTIVE_MIN * 60000;
+  gWarningTimer    = setTimeout(showInactivityWarning,
+                                (SESSION_INACTIVE_MIN * 60 - SESSION_PREAVIS_S) * 1000);
+  gInactivityTimer = setTimeout(autoLogout, SESSION_INACTIVE_MIN * 60000);
+}
+
+// Un mouvement de souris ou un defilement emet des dizaines d'evenements par
+// seconde. Les relayer tous revenait a reprogrammer quatre minuteries a chaque
+// pixel parcouru ; sur un telephone d'entree de gamme, cela se voit. Cinq
+// secondes de granularite ne changent rien a un delai de vingt minutes — mais
+// pendant le preavis, le moindre geste doit rendre la main tout de suite.
+function _gesteUtilisateur() {
+  if (!gCurrentUser) return;
+  var warn = document.getElementById("inactivity-warning");
+  var enPreavis = warn && warn.style.display !== "none";
+  if (!enPreavis && Date.now() - gDernierGeste < 5000) return;
+  gDernierGeste = Date.now();
+  resetInactivityTimer();
 }
 
 function showInactivityWarning() {
+  // Le bouton est la seule issue offerte a qui apercoit le preavis de loin.
+  // A vingt-deux pixels de haut il se visait mal au doigt, et le manquer
+  // fermait la session : il fait desormais la taille des champs de saisie.
   var warn = document.getElementById("inactivity-warning");
-  if(!warn){
+  if (!warn) {
     warn = document.createElement("div");
     warn.id = "inactivity-warning";
     warn.style.cssText = "position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:#f0a500;color:#fff;padding:10px 18px;border-radius:10px;font-size:.8rem;font-weight:700;z-index:9998;box-shadow:0 4px 12px rgba(0,0,0,.3);text-align:center;max-width:280px";
-    warn.innerHTML = "⚠️ Déconnexion dans 1 minute pour inactivité.<br><button onclick='resetInactivityTimer()' style='margin-top:6px;background:#fff;color:#b45309;border:none;padding:4px 12px;border-radius:6px;cursor:pointer;font-weight:700;font-size:.75rem'>Je suis encore là</button>";
+    warn.innerHTML = "⚠️ Déconnexion dans <span id='inactivity-decompte'>"
+      + SESSION_PREAVIS_S + "</span> s pour inactivité."
+      + "<br><button onclick='resetInactivityTimer()' style='margin-top:8px;background:#fff;color:#b45309;border:none;padding:10px 18px;min-height:40px;border-radius:8px;cursor:pointer;font-weight:700;font-size:.8rem'>Je suis encore là</button>";
     document.body.appendChild(warn);
   }
   warn.style.display = "block";
+
+  // Le decompte se lit sur l'echeance, pas sur un compteur qu'on decremente :
+  // une minuterie d'arriere-plan que le navigateur ralentit afficherait sinon
+  // un nombre faux, et l'avertissement perdrait sa raison d'etre.
+  function tic() {
+    var el = document.getElementById("inactivity-decompte");
+    if (!el) return;
+    var reste = Math.max(0, Math.ceil((gEcheanceSession - Date.now()) / 1000));
+    el.textContent = reste;
+  }
+  tic();
+  if (gDecompteTimer) clearInterval(gDecompteTimer);
+  gDecompteTimer = setInterval(tic, 1000);
 }
 
 function autoLogout() {
-  if(!gCurrentUser) return;
-  var warn = document.getElementById("inactivity-warning");
-  if(warn) warn.style.display = "none";
-  if(gUnsubDoc) { gUnsubDoc(); gUnsubDoc = null; }
-  if(IS_CONFIGURED && gAuth) gAuth.signOut();
-  safeStyle("login-screen","display","flex");
-  safeStyle("app-wrapper","display","none");
-  clearRows(); gIsDirty = false; gCurrentUser = null; window.__appLaunched = false;
-  // Show message on login screen
+  if (!gCurrentUser) return;
+  // Ce qui est tape et pas encore enregistre doit survivre a la fermeture.
+  // Le brouillon automatique ne passe que toutes les soixante secondes : sans
+  // cette ecriture, une minute de comptage disparaissait avec la session.
+  if (gIsDirty) { try { saveDraft(); } catch (e) {} }
+  var avaitBrouillon = gIsDirty;
+  _fermerSession();
+  // Dire pourquoi, sur l'ecran de connexion : une session qui se ferme sans
+  // explication passe pour une panne, et on cherche la panne.
   setTimeout(function(){
     var err = document.getElementById("li-err");
-    if(err){
-      err.textContent = "Session expirée après 10 min d'inactivité. Reconnectez-vous.";
+    if (err) {
+      err.textContent = "Session fermée après " + SESSION_INACTIVE_MIN
+        + " min d'inactivité."
+        + (avaitBrouillon ? " Votre saisie est gardée en brouillon." : "")
+        + " Reconnectez-vous.";
       err.className = "login-err show";
     }
   }, 100);
@@ -5258,18 +5326,40 @@ function autoLogout() {
 function stopInactivityTimer() {
   clearTimeout(gInactivityTimer);
   clearTimeout(gWarningTimer);
+  if (gDecompteTimer) clearInterval(gDecompteTimer);
   gInactivityTimer = null;
-  gWarningTimer = null;
+  gWarningTimer    = null;
+  gDecompteTimer   = null;
   var warn = document.getElementById("inactivity-warning");
-  if(warn) warn.style.display = "none";
+  if (warn) warn.style.display = "none";
+}
+
+// Un telephone qui dort suspend les minuteries de la page : au retour au
+// premier plan, celle des vingt minutes peut n'avoir jamais sonne, et la
+// session serait restee ouverte toute la nuit dans la poche. L'echeance, elle,
+// est une date : on la relit au reveil plutot que de se fier au minuteur.
+// Revenir au premier plan ne vaut pas activite — le premier geste, lui, oui.
+function _veilleAuRetour() {
+  if (document.hidden || !gCurrentUser || !gEcheanceSession) return;
+  var reste = gEcheanceSession - Date.now();
+  if (reste <= 0) { autoLogout(); return; }
+  clearTimeout(gInactivityTimer);
+  clearTimeout(gWarningTimer);
+  gInactivityTimer = setTimeout(autoLogout, reste);
+  if (reste > SESSION_PREAVIS_S * 1000) {
+    gWarningTimer = setTimeout(showInactivityWarning, reste - SESSION_PREAVIS_S * 1000);
+  } else {
+    showInactivityWarning();   // le preavis a ete manque pendant la veille
+  }
 }
 
 function startInactivityTracking() {
-  // Events qui réinitialisent le timer
+  // Evenements qui valent « quelqu'un est bien la »
   var events = ["mousemove","mousedown","keypress","touchstart","scroll","click","input","change"];
   events.forEach(function(ev){
-    document.addEventListener(ev, resetInactivityTimer, {passive:true});
+    document.addEventListener(ev, _gesteUtilisateur, {passive:true});
   });
+  document.addEventListener("visibilitychange", _veilleAuRetour);
   resetInactivityTimer();
 }
 
@@ -12045,8 +12135,8 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.10";
-var APP_VERSION_NOTES = "Échéancier des obligations : ce qui est dû, ce qui est réglé, et la confirmation avec justificatif.";
+var APP_VERSION = "2026.10.11";
+var APP_VERSION_NOTES = "La session se ferme seule après 20 minutes sans activité, avec une minute de préavis et la saisie gardée en brouillon.";
 
 function checkAppUpdate() {
   try {
