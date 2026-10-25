@@ -7163,6 +7163,13 @@ function clearHist() {
 
 // == TABS ==
 function showTab(name) {
+  // Quitter la saisie guidee au milieu d'une rubrique ne doit pas perdre ce
+  // qui est tape : on relit les champs avant que l'ecran ne disparaisse,
+  // ce qui ecrit aussi le filet local.
+  if (name !== "guidee" && typeof gGuidee === "object" && gGuidee
+      && gGuidee.phase === "rubriques" && typeof _guideeLire === "function") {
+    try { _guideeLire(); } catch (e) {}
+  }
   var finMain = document.getElementById("fin-main");
   if (finMain && finMain.style.display === "none") finMain.style.display = "block";
   var pages=["guidee","recettes","depenses","solde","distrib","historique","dashboard","export","exercices","etats","echeances","budget","admin"];
@@ -7191,7 +7198,18 @@ function showTab(name) {
   // Onglet budget : admin + directeur financier uniquement
   var budgetBtn = document.getElementById("tab-btn-budget");
   if(budgetBtn) budgetBtn.style.display = canEditBudget() ? "" : "none";
-  if(name==="guidee") renderSaisieGuidee();
+  if(name==="guidee") {
+    renderSaisieGuidee();
+    // Les brouillons vivent sur le serveur : sans cette lecture, ouvrir
+    // l'ecran ne montrait aucune des saisies deja enregistrees. On rend
+    // d'abord, on complete ensuite — et seulement si l'on est reste sur
+    // l'accueil, pour ne pas reconstruire un ecran de saisie sous les doigts.
+    if (typeof guideeChargerBrouillons === "function") {
+      guideeChargerBrouillons(function () {
+        if (gGuidee.phase === "accueil") renderSaisieGuidee();
+      });
+    }
+  }
   if(name==="recettes" && typeof chargerFileSaisiesGuidees === "function") chargerFileSaisiesGuidees();
   if(name==="historique")renderHistory();
   if(name==="dashboard")buildDashboard();
@@ -12135,8 +12153,8 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.11";
-var APP_VERSION_NOTES = "La session se ferme seule après 20 minutes sans activité, avec une minute de préavis et la saisie gardée en brouillon.";
+var APP_VERSION = "2026.10.12";
+var APP_VERSION_NOTES = "Saisie guidée : enregistrer un brouillon avant de soumettre, et reprendre une saisie là où elle s’est arrêtée.";
 
 function checkAppUpdate() {
   try {
@@ -31574,11 +31592,101 @@ var gGuidee = {
   valeurs: {},        // index -> {cdf, usd, note}
   passees: {},        // index -> true
   meta: {},
-  brouillons: [],     // propositions déjà déposées par ce compte
-  idEnCours: null
+  brouillons: [],     // brouillons et saisies déjà déposées par ce compte
+  idEnCours: null,    // document serveur de la saisie en cours, s'il existe
+  creeLe: null,       // date de première écriture, qui ne doit pas bouger
+  motifPrec: null     // motif du renvoi auquel cette reprise répond
 };
 
 function _guideeCle(i) { return "e" + i; }
+
+// ── Trois niveaux de sauvegarde ─────────────────────────────────────
+// 1. Le filet local, ci-dessous : à chaque geste, le parcours est écrit
+//    dans le navigateur. Il ne demande rien, ne coûte rien, et rattrape
+//    ce qui n'était rattrapé par personne — changer d'écran, fermer
+//    l'application, ou la fermeture automatique de session au bout de
+//    vingt minutes. Il ne quitte pas l'appareil.
+// 2. Le brouillon déposé sur le serveur, à la demande : il survit au
+//    changement d'appareil, et se reprend d'un téléphone à l'autre.
+// 3. Le dépôt pour validation, qui seul fait entrer la saisie dans la
+//    file du contrôleur.
+//
+// Les deux premiers n'engagent personne : rien de ce qui est sauvegardé
+// n'est une pièce, et rien n'arrive au contrôleur avant le dépôt.
+var GUIDEE_LOCAL_PREFIXE = "ecc_guidee_encours_";
+
+function _guideeCleLocale() {
+  return GUIDEE_LOCAL_PREFIXE + ((gCurrentUser && gCurrentUser.email) || "anonyme");
+}
+
+// Un parcours à peine commencé n'a rien à sauvegarder : sans ce garde-fou,
+// ouvrir l'écran puis le quitter proposerait de « reprendre » le vide.
+function _guideeARetenir() {
+  if (gGuidee.meta && gGuidee.meta.date) return true;
+  for (var k in gGuidee.valeurs) if (gGuidee.valeurs[k]) return true;
+  for (var k2 in gGuidee.passees) if (gGuidee.passees[k2]) return true;
+  return false;
+}
+
+function _guideeSauverLocal() {
+  if (!_guideeARetenir()) return;
+  try {
+    localStorage.setItem(_guideeCleLocale(), JSON.stringify({
+      phase: gGuidee.phase, pos: gGuidee.pos, meta: gGuidee.meta,
+      valeurs: gGuidee.valeurs, passees: gGuidee.passees,
+      idEnCours: gGuidee.idEnCours, a: new Date().toISOString()
+    }));
+  } catch (e) { /* stockage plein ou refusé : le serveur reste le recours */ }
+}
+
+function _guideeLireLocal() {
+  try {
+    var s = localStorage.getItem(_guideeCleLocale());
+    return s ? JSON.parse(s) : null;
+  } catch (e) { return null; }
+}
+
+function _guideeOublierLocal() {
+  try { localStorage.removeItem(_guideeCleLocale()); } catch (e) {}
+}
+
+// Recharger une pièce — brouillon du serveur ou saisie renvoyée — dans le
+// parcours. L'appariement se fait sur le conteneur ET le libellé : « Dîmes »
+// existe au culte francophone comme au lingalophone, et le libellé seul
+// aurait reversé l'un dans l'autre.
+function _guideeChargerPiece(b) {
+  gGuidee.etapes  = _guideeEtapes();
+  gGuidee.valeurs = {};
+  gGuidee.passees = {};
+  var p = b.piece || {}, m = p.meta || {};
+  gGuidee.meta = { date: m.date || "", resp: m.resp || "", cf: m.effCF || "",
+                   cl: m.effCL || "", eco: m.effEco || "" };
+
+  var idx = {};
+  gGuidee.etapes.forEach(function (e, i) {
+    var k = (e.genre === "rec") ? e.cont : e.cont.replace("dep-", "");
+    idx[k + "\u0000" + e.lbl] = i;
+  });
+  ["cf", "cl", "cm", "fr", "co"].forEach(function (k) {
+    (p[k] || []).forEach(function (x) {
+      var i = idx[k + "\u0000" + (x.l || "")];
+      if (i === undefined) return;   // rubrique retirée des listes depuis le dépôt
+      gGuidee.valeurs[_guideeCle(i)] = { cdf: x.cdf || "", usd: x.usd || "", note: x.n || "" };
+    });
+  });
+
+  // Les « non applicable » sont enregistrées deux fois : en clés d'étape,
+  // qui se rechargent sans ambiguïté, et en libellés, que le contrôleur lit.
+  // Les brouillons antérieurs à cette version n'ont que les libellés.
+  if (b.passeesCles && b.passeesCles.length) {
+    b.passeesCles.forEach(function (c) { gGuidee.passees[c] = true; });
+  } else {
+    (b.passees || []).forEach(function (lbl) {
+      gGuidee.etapes.forEach(function (e, i) { if (e.lbl === lbl) gGuidee.passees[_guideeCle(i)] = true; });
+    });
+  }
+  gGuidee.idEnCours = b.id || null;
+}
 
 // ── Rendu ───────────────────────────────────────────────────────────
 function renderSaisieGuidee() {
@@ -31619,7 +31727,28 @@ function _guideeAccueil() {
   });
   h += "</div>";
 
-  h += "<button class='btn btn-g' style='width:100%;padding:12px' onclick='guideeDemarrer()'>Commencer une saisie</button>";
+  var enCours = _guideeLireLocal();
+  if (enCours) {
+    // Une saisie restée sur cet appareil : on la propose avant tout le
+    // reste, car « Commencer une saisie » l'effacerait.
+    var quand = enCours.a ? new Date(enCours.a) : null;
+    var nbRens = 0; for (var kv in (enCours.valeurs || {})) if (enCours.valeurs[kv]) nbRens++;
+    h += "<div style='background:#fdf6e7;border-left:3px solid #e67e22;border-radius:8px;"
+       + "padding:10px 13px;margin-bottom:12px'>"
+       + "<div style='font-size:.77rem;color:#8a5a00;font-weight:700;margin-bottom:3px'>"
+       + "Une saisie est restée en cours sur cet appareil</div>"
+       + "<div style='font-size:.72rem;color:#8a5a00;line-height:1.5'>"
+       + "Culte du <strong>" + escH(_jourFr((enCours.meta || {}).date || "") || "date non renseignée") + "</strong>"
+       + " · " + nbRens + " rubrique(s) renseignée(s)"
+       + (quand ? " · dernier geste à " + ("0" + quand.getHours()).slice(-2) + "h" + ("0" + quand.getMinutes()).slice(-2) : "")
+       + "</div>"
+       + "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:9px'>"
+       + "<button class='btn btn-g btn-sm' onclick='guideeReprendreLocal()'>Reprendre</button>"
+       + "<button class='btn btn-o btn-sm' onclick='guideeAbandonnerLocal()'>Abandonner</button>"
+       + "</div></div>";
+  }
+
+  h += "<button class='btn " + (enCours ? "btn-o" : "btn-g") + "' style='width:100%;padding:12px' onclick='guideeDemarrer()'>Commencer une saisie</button>";
   h += "</div></div>";
 
   h += _guideeMesBrouillons();
@@ -31629,17 +31758,32 @@ function _guideeAccueil() {
 function _guideeMesBrouillons() {
   var l = gGuidee.brouillons || [];
   if (!l.length) return "";
-  var h = "<div class='card'><div class='card-hdr'><h2>Mes saisies déposées</h2></div><div class='card-body'>";
-  h += "<table class='cotis-table bar-table' style='min-width:0'><thead><tr><th>Culte</th><th>État</th></tr></thead><tbody>";
+  var h = "<div class='card'><div class='card-hdr'><h2>Mes saisies</h2>"
+        + "<span class='badge'>" + l.length + "</span></div><div class='card-body'>";
+  h += "<div style='font-size:.72rem;color:var(--muted);margin-bottom:10px;line-height:1.5'>"
+     + "Un brouillon n'est pas soumis : il vous attend, sur n'importe quel appareil, "
+     + "et le contrôleur ne le voit pas. Une saisie renvoyée se reprend là où elle était.</div>";
+  h += "<table class='cotis-table bar-table' style='min-width:0'><thead><tr><th>Culte</th><th>État</th><th></th></tr></thead><tbody>";
   l.forEach(function (b) {
-    var et = { soumis:  ["#e67e22", "En attente de contrôle"],
-               valide:  ["#1e7d52", "Validée et enregistrée"],
-               rejete:  ["#c0392b", "Renvoyée pour correction"] }[b.statut] || ["#6b88a4", b.statut || "—"];
-    h += "<tr><td data-lbl='Culte'><strong>" + escH(_jourFr(b.date || "")) + "</strong>"
+    var et = { brouillon: ["#6b88a4", "Brouillon, non soumis"],
+               soumis:    ["#e67e22", "En attente de contrôle"],
+               valide:    ["#1e7d52", "Validée et enregistrée"],
+               rejete:    ["#c0392b", "Renvoyée pour correction"] }[b.statut] || ["#6b88a4", b.statut || "—"];
+    var sm = (b.piece && b.piece.sums) || {};
+    var reprenable = (b.statut === "brouillon" || b.statut === "rejete");
+    h += "<tr><td data-lbl='Culte'><strong>" + escH(_jourFr(b.date || "") || "sans date") + "</strong>"
+       + "<div style='font-size:.65rem;color:var(--muted)'>" + fmt(sm.rCDF || 0) + " FC de recettes · "
+       + fmt(sm.dCDF || 0) + " FC de dépenses</div>"
        + (b.motif ? "<div style='font-size:.66rem;color:#c0392b;margin-top:2px'>" + escH(b.motif) + "</div>" : "")
        + "</td>"
        + "<td data-lbl='État'><span style='background:" + et[0] + "1f;color:" + et[0] + ";border:1px solid " + et[0]
-       + "55;padding:2px 8px;border-radius:10px;font-size:.66rem;font-weight:700'>" + et[1] + "</span></td></tr>";
+       + "55;padding:2px 8px;border-radius:10px;font-size:.66rem;font-weight:700'>" + et[1] + "</span></td>"
+       + "<td data-lbl='' style='text-align:right;white-space:nowrap'>"
+       + (reprenable ? "<button class='btn btn-g btn-sm' style='padding:3px 9px' onclick=\"guideeReprendreBrouillon('"
+            + escHtml(b.id) + "')\">Reprendre</button>" : "")
+       + (b.statut === "brouillon" ? " <button class='btn btn-d btn-sm' style='padding:3px 9px' onclick=\"guideeSupprimerBrouillon('"
+            + escHtml(b.id) + "')\">Jeter</button>" : "")
+       + "</td></tr>";
   });
   h += "</tbody></table></div></div>";
   return h;
@@ -31652,6 +31796,7 @@ function guideeDemarrer() {
   gGuidee.passees = {};
   gGuidee.meta = {};
   gGuidee.idEnCours = null;
+  _guideeOublierLocal();   // repartir de zero efface le filet precedent
   renderSaisieGuidee();
 }
 
@@ -31690,6 +31835,7 @@ function guideeValiderEntete() {
   };
   gGuidee.phase = "rubriques";
   gGuidee.pos = 0;
+  _guideeSauverLocal();
   _guideeTransition(renderSaisieGuidee);
 }
 
@@ -31754,6 +31900,11 @@ function _guideeRubriques() {
   h += "<button class='btn btn-g' style='flex:1;min-width:130px' onclick='guideeSuivant()'>"
      + (fin >= tot ? "Terminer" : "Suivant →") + "</button>";
   h += "</div>";
+  // Quitter en gardant tout : le geste manquait, et sans lui l'écran ne se
+  // quittait qu'en abandonnant les rubriques déjà comptées.
+  h += "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:8px'>"
+     + "<button class='btn btn-o btn-sm' style='flex:1' onclick='guideeEnregistrerBrouillon(true)'>"
+     + "Enregistrer et quitter</button></div>";
   h += "<div style='text-align:center;margin-top:10px'>"
      + "<a onclick='guideeAllerRecap()' style='cursor:pointer;font-size:.72rem;color:var(--muted);text-decoration:underline'>"
      + "Passer tout le reste et vérifier</a></div>";
@@ -31783,6 +31934,7 @@ function _guideeLire() {
       delete gGuidee.valeurs[_guideeCle(i)];
     }
   }
+  _guideeSauverLocal();
 }
 
 function guideeSuivant() {
@@ -31808,6 +31960,7 @@ function guideePasser() {
     delete gGuidee.valeurs[_guideeCle(i)];
     gGuidee.passees[_guideeCle(i)] = true;
   }
+  _guideeSauverLocal();
   if (fin >= gGuidee.etapes.length) { guideeAllerRecap(); return; }
   gGuidee.pos = fin;
   _guideeTransition(renderSaisieGuidee);
@@ -31879,11 +32032,14 @@ function _guideeRecap() {
 
   h += "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:14px'>"
      + "<button class='btn btn-o' onclick='guideeReprendre()'>← Reprendre les rubriques</button>"
+     + "<button class='btn btn-o' onclick='guideeEnregistrerBrouillon(true)'>Enregistrer le brouillon</button>"
      + (nb ? "<button class='btn btn-g' style='flex:1;min-width:150px' onclick='guideeDeposer()'>Déposer pour validation</button>" : "")
      + "</div>";
   h += "<div style='font-size:.68rem;color:var(--muted);margin-top:9px;line-height:1.5'>"
-     + "Le dépôt n'enregistre rien en comptabilité. Un administrateur ou le directeur financier "
-     + "contrôlera cette saisie avant qu'elle ne devienne une pièce.</div>";
+     + "<strong>Enregistrer le brouillon</strong> garde la saisie sans la soumettre : vous la "
+     + "reprendrez d'ici ou d'un autre appareil, et le contrôleur ne la voit pas. "
+     + "<strong>Déposer</strong> l'envoie au contrôle — et n'enregistre rien en comptabilité : "
+     + "un administrateur ou le directeur financier la contrôlera avant qu'elle ne devienne une pièce.</div>";
   h += "</div></div>";
   return h;
 }
@@ -31902,50 +32058,183 @@ function guideeReprendre() {
   _guideeTransition(renderSaisieGuidee);
 }
 
-// ── Dépôt de la proposition ─────────────────────────────────────────
-function guideeDeposer() {
+// ── Ce que le parcours produit ──────────────────────────────────────
+// Un seul constructeur pour le brouillon et pour le dépôt : la différence
+// entre les deux tient au statut, à rien d'autre. Deux constructeurs
+// auraient divergé, et un brouillon n'aurait plus été le dépôt qu'il
+// annonçait.
+//
+// La proposition porte EXACTEMENT la forme d'une pièce : meta, lignes,
+// totaux. La validation pourra la recharger dans l'écran classique sans
+// conversion, donc sans occasion de divergence.
+function _guideeProposition(statut) {
   var l = _guideeLignes();
   var taux = (typeof getTaux === "function") ? getTaux() : 2800;
   var rCDF = 0, rUSD = 0, dCDF = 0, dUSD = 0;
   ["cf", "cl"].forEach(function (k) { l[k].forEach(function (x) { rCDF += parseFloat(x.cdf) || 0; rUSD += parseFloat(x.usd) || 0; }); });
   ["cm", "fr", "co"].forEach(function (k) { l[k].forEach(function (x) { dCDF += parseFloat(x.cdf) || 0; dUSD += parseFloat(x.usd) || 0; }); });
 
-  // La proposition porte EXACTEMENT la forme d'une pièce : meta, lignes,
-  // totaux. La validation pourra la recharger dans l'écran classique sans
-  // conversion, donc sans occasion de divergence.
-  var passees = [];
-  gGuidee.etapes.forEach(function (e, i) { if (gGuidee.passees[_guideeCle(i)]) passees.push(e.lbl); });
+  var passees = [], passeesCles = [];
+  gGuidee.etapes.forEach(function (e, i) {
+    if (gGuidee.passees[_guideeCle(i)]) { passees.push(e.lbl); passeesCles.push(_guideeCle(i)); }
+  });
 
+  var maintenant = new Date().toISOString();
   var prop = {
-    statut: "soumis",
+    statut: statut,
     parEmail: (gCurrentUser && gCurrentUser.email) || "",
     parNom:   (gCurrentUser && gCurrentUser.nom) || "",
-    deposeLe: new Date().toISOString(),
+    creeLe:   gGuidee.creeLe || maintenant,
+    majLe:    maintenant,
     date: gGuidee.meta.date || "",
     passees: passees,
+    passeesCles: passeesCles,
     piece: {
       meta: { date: gGuidee.meta.date || "", effCF: gGuidee.meta.cf || "", effCL: gGuidee.meta.cl || "",
               effEco: gGuidee.meta.eco || "", resp: gGuidee.meta.resp || "", taux: String(taux),
               repCDF: "", repUSD: "", cntCDF: "", cntUSD: "", justifEcart: "" },
-      savedAt: new Date().toISOString(),
+      savedAt: maintenant,
       sums: { rCDF: rCDF, rUSD: rUSD, dCDF: dCDF, dUSD: dUSD, nCDF: rCDF - dCDF, nUSD: rUSD - dUSD },
       cf: l.cf, cl: l.cl, cm: l.cm, fr: l.fr, co: l.co, ot: []
     }
   };
+  // Le dépôt seul porte une date de dépôt : c'est elle qui ordonne la file
+  // du contrôleur, et un brouillon n'y figure pas.
+  if (statut === "soumis") {
+    prop.deposeLe = maintenant;
+    // Une saisie renvoyée que l'on redépose répond à son motif. Le motif
+    // cesse donc d'être affiché à l'auteur, mais il n'est pas effacé :
+    // perdre la trace d'un renvoi, c'est perdre la raison d'une correction.
+    if (gGuidee.motifPrec) { prop.motifPrecedent = gGuidee.motifPrec; prop.motif = ""; }
+  }
+  return prop;
+}
 
+function _guideeIdNeuf() {
+  return "sg_" + (gGuidee.meta.date || "").replace(/-/g, "") + "_" + Date.now();
+}
+
+// ── Enregistrer sans soumettre ──────────────────────────────────────
+// Le brouillon va sur le serveur, donc il suit celui qui saisit d'un
+// appareil à l'autre. Il n'entre PAS dans la file du contrôleur : celle-ci
+// ne lit que les saisies au statut « soumis ».
+function guideeEnregistrerBrouillon(puisQuitter) {
+  if (gGuidee.phase === "rubriques") _guideeLire();
+  if (!gGuidee.meta || !gGuidee.meta.date) {
+    showToast("Indiquez d'abord la date du culte.", "err");
+    return;
+  }
+  _guideeSauverLocal();
+  if (!IS_CONFIGURED || !gDb) {
+    // Hors serveur, le filet local est tout ce qu'il y a — et il suffit à
+    // ne rien perdre sur cet appareil. Le dire plutôt que de laisser croire
+    // à un enregistrement qui n'a pas eu lieu.
+    showToast("Serveur indisponible. La saisie est gardée sur cet appareil.", "warn");
+    if (puisQuitter) { gGuidee.phase = "accueil"; renderSaisieGuidee(); }
+    return;
+  }
+  var prop = _guideeProposition("brouillon");
+  var id = gGuidee.idEnCours || _guideeIdNeuf();
+  gDb.collection("saisies_guidees").doc(id).set(prop, { merge: true }).then(function () {
+    gGuidee.idEnCours = id;
+    gGuidee.creeLe = prop.creeLe;
+    showToast("Brouillon enregistré. Rien n'est encore soumis.", "ok");
+    if (puisQuitter) {
+      gGuidee.phase = "accueil";
+      guideeChargerBrouillons(renderSaisieGuidee);
+    } else {
+      guideeChargerBrouillons();
+    }
+  }).catch(function (e) {
+    showToast("Enregistrement refusé : " + (e && e.message ? e.message : "erreur inconnue"), "err");
+  });
+}
+
+// ── Dépôt pour validation ───────────────────────────────────────────
+function guideeDeposer() {
+  var prop = _guideeProposition("soumis");
+  var s = prop.piece.sums;
+  if (!s.rCDF && !s.rUSD && !s.dCDF && !s.dUSD) {
+    showToast("Aucune rubrique renseignée : il n'y a rien à déposer.", "err");
+    return;
+  }
   if (!IS_CONFIGURED || !gDb) {
     showToast("Connexion au serveur requise pour déposer une saisie.", "err");
     return;
   }
-  var id = "sg_" + (gGuidee.meta.date || "").replace(/-/g, "") + "_" + Date.now();
-  gDb.collection("saisies_guidees").doc(id).set(prop).then(function () {
+  // Un brouillon déjà enregistré se transforme sur place : même document,
+  // statut qui change. Créer un second document aurait laissé le brouillon
+  // derrière lui, et deux traces pour une seule saisie.
+  var id = gGuidee.idEnCours || _guideeIdNeuf();
+  gDb.collection("saisies_guidees").doc(id).set(prop, { merge: true }).then(function () {
     showToast("Saisie déposée. Elle attend le contrôle.", "ok");
     gGuidee.phase = "accueil";
+    gGuidee.idEnCours = null;
+    gGuidee.creeLe = null;
+    gGuidee.motifPrec = null;
+    _guideeOublierLocal();   // la saisie est partie : le filet n'a plus d'objet
     guideeChargerBrouillons(renderSaisieGuidee);
   }).catch(function (e) {
     // Une écriture refusée doit se voir : un dépôt muet ferait croire au
     // dépôt alors que rien n'est parti.
     showToast("Dépôt refusé : " + (e && e.message ? e.message : "erreur inconnue"), "err");
+  });
+}
+
+// ── Reprendre ───────────────────────────────────────────────────────
+// Un brouillon, ou une saisie renvoyée pour correction. Dans les deux cas
+// on rouvre le parcours là où il s'était arrêté, au lieu de refaire les
+// vingt-sept rubriques.
+function guideeReprendreBrouillon(id) {
+  var b = null, l = gGuidee.brouillons || [];
+  for (var i = 0; i < l.length; i++) if (l[i].id === id) b = l[i];
+  if (!b) { showToast("Saisie introuvable.", "err"); return; }
+  if (b.statut === "valide") { showToast("Cette saisie est déjà enregistrée en comptabilité.", "err"); return; }
+  _guideeChargerPiece(b);
+  gGuidee.creeLe = b.creeLe || b.deposeLe || null;
+  gGuidee.motifPrec = (b.statut === "rejete") ? (b.motif || "") : null;
+  gGuidee.phase = "entete";
+  gGuidee.pos = 0;
+  _guideeSauverLocal();
+  _guideeTransition(renderSaisieGuidee);
+}
+
+// Reprendre ce que le filet local avait retenu : ni serveur, ni dépôt,
+// seulement le parcours tel qu'il était au dernier geste.
+function guideeReprendreLocal() {
+  var d = _guideeLireLocal();
+  if (!d) { showToast("Rien à reprendre.", "err"); return; }
+  gGuidee.etapes    = _guideeEtapes();
+  gGuidee.meta      = d.meta || {};
+  gGuidee.valeurs   = d.valeurs || {};
+  gGuidee.passees   = d.passees || {};
+  gGuidee.idEnCours = d.idEnCours || null;
+  gGuidee.pos       = Math.min(d.pos || 0, Math.max(0, gGuidee.etapes.length - 1));
+  gGuidee.phase     = (d.phase === "accueil") ? "entete" : (d.phase || "entete");
+  _guideeTransition(renderSaisieGuidee);
+}
+
+function guideeAbandonnerLocal() {
+  if (!confirm("Abandonner la saisie en cours sur cet appareil ?")) return;
+  _guideeOublierLocal();
+  showToast("Saisie en cours abandonnée.", "ok");
+  renderSaisieGuidee();
+}
+
+// Jeter un brouillon : seulement un brouillon. Une saisie renvoyée garde
+// la trace de son renvoi, et une saisie validée est une pièce.
+function guideeSupprimerBrouillon(id) {
+  var b = null, l = gGuidee.brouillons || [];
+  for (var i = 0; i < l.length; i++) if (l[i].id === id) b = l[i];
+  if (!b || b.statut !== "brouillon") return;
+  if (!confirm("Supprimer définitivement ce brouillon du " + _jourFr(b.date || "") + " ?")) return;
+  if (!IS_CONFIGURED || !gDb) { showToast("Connexion au serveur requise.", "err"); return; }
+  gDb.collection("saisies_guidees").doc(id).delete().then(function () {
+    if (gGuidee.idEnCours === id) { gGuidee.idEnCours = null; gGuidee.creeLe = null; }
+    showToast("Brouillon supprimé.", "ok");
+    guideeChargerBrouillons(renderSaisieGuidee);
+  }).catch(function (e) {
+    showToast("Suppression refusée : " + (e && e.message ? e.message : "erreur"), "err");
   });
 }
 
@@ -31955,7 +32244,8 @@ function guideeChargerBrouillons(apres) {
     .then(function (snap) {
       var l = [];
       snap.forEach(function (d) { var o = d.data() || {}; o.id = d.id; l.push(o); });
-      l.sort(function (a, b) { return String(b.deposeLe || "").localeCompare(String(a.deposeLe || "")); });
+      function _quand(o) { return String(o.majLe || o.deposeLe || o.creeLe || ""); }
+      l.sort(function (a, b) { return _quand(b).localeCompare(_quand(a)); });
       gGuidee.brouillons = l.slice(0, 12);
       if (apres) apres();
     })
