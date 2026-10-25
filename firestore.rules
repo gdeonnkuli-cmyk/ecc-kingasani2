@@ -219,28 +219,60 @@ service cloud.firestore {
     // doit tenir cette séparation, sans quoi elle ne vivrait que dans la
     // page — et la page appartient au visiteur.
     //
+    // Trois états tiennent tout : « brouillon » n'est pas soumis et le
+    // contrôleur ne le voit pas ; « soumis » est dans sa file ; « valide »
+    // ou « rejete » porte sa décision.
+    //
     // Créer : tout compte ayant le module Finances, pour lui-même seulement.
-    //   Le document doit porter son propre courriel et l'état « soumis » :
-    //   nul ne dépose au nom d'un autre, nul ne s'auto-valide.
+    //   Le document doit porter son propre courriel, et l'état « brouillon »
+    //   ou « soumis » : nul ne dépose au nom d'un autre, nul ne s'auto-valide.
     // Lire : son auteur, et les validateurs.
-    // Changer l'état (valider, renvoyer) : les validateurs seuls.
+    // Modifier, pour l'auteur : son brouillon, et une saisie qu'on lui a
+    //   renvoyée — pour la corriger et la redéposer. Jamais au-delà :
+    //   une saisie « soumis » est peut-être sous les yeux du contrôleur à
+    //   cet instant, et une saisie « valide » est devenue une pièce. Les
+    //   états qu'il peut écrire se limitent à « brouillon » et « soumis »,
+    //   donc il ne peut pas se valider lui-même, et son courriel ne peut
+    //   pas changer, donc il ne peut pas attribuer sa saisie à un autre.
+    // Valider, renvoyer : les validateurs seuls.
+    // Supprimer : le propriétaire, et l'auteur d'un brouillon — un brouillon
+    //   n'engage rien. Pas une saisie renvoyée : effacer le renvoi ferait
+    //   disparaître la raison d'une correction.
     match /saisies_guidees/{doc} {
       function estSien() {
         return request.auth != null
                && resource.data.get('parEmail', '') == request.auth.token.email;
       }
+      // get() sur un document ABSENT ne renvoie pas vide : il fait echouer
+      // l'evaluation, et la regle refuse. Un valideur dont le document de
+      // compte n'existe pas encore se serait donc vu refuser la lecture de la
+      // file — et la lecture passe par ici des que le document n'est pas le
+      // sien. exists() garde la porte, comme ailleurs dans ce fichier.
       function estValideur() {
         return estProprietaire()
                || (estActif() && request.auth != null
+                   && exists(/databases/$(database)/documents/accounts/$(request.auth.token.email))
                    && get(/databases/$(database)/documents/accounts/$(request.auth.token.email))
                         .data.get('role', '') in ['admin', 'finances']);
+      }
+      // L'auteur reprend son travail : l'etat ACTUEL du document doit etre
+      // un brouillon ou un renvoi, et l'etat qu'il ecrit ne peut etre que
+      // brouillon ou soumis.
+      function auteurPeutReprendre() {
+        return aModule('finances')
+               && estSien()
+               && resource.data.get('statut', '') in ['brouillon', 'rejete']
+               && request.resource.data.get('statut', '') in ['brouillon', 'soumis']
+               && request.resource.data.get('parEmail', '') == resource.data.get('parEmail', '');
       }
       allow read:   if aModule('finances') && (estSien() || estValideur());
       allow create: if aModule('finances')
                     && request.resource.data.get('parEmail', '') == request.auth.token.email
-                    && request.resource.data.get('statut', '') == 'soumis';
-      allow update: if estValideur();
-      allow delete: if estProprietaire();
+                    && request.resource.data.get('statut', '') in ['brouillon', 'soumis'];
+      allow update: if estValideur() || auteurPeutReprendre();
+      allow delete: if estProprietaire()
+                    || (aModule('finances') && estSien()
+                        && resource.data.get('statut', '') == 'brouillon');
     }
 
     match /presence/{doc}            { allow read, write: if estActif(); }
