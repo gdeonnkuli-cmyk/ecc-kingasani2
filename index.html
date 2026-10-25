@@ -5645,8 +5645,22 @@ function showSyncError(e, contexte) {
   var hh = now.getHours(), mm = now.getMinutes();
   gLastSyncError = {code:code, message:msg, contexte:contexte||"", heure:hh+":"+(mm<10?"0"+mm:mm)};
 
+  // Un refus de LECTURE annonce depuis toujours un refus d'ecriture : pendant
+  // un incident reel, cela envoie chercher au mauvais endroit. On dit donc
+  // l'operation telle qu'elle est, et l'on nomme les causes propres a cette
+  // application plutot qu'un mode test que ce projet n'utilise pas.
+  var estLecture = /lecture|chargement|relecture/i.test(contexte || "");
+  var _mailJeton = "";
+  try { _mailJeton = (gAuth && gAuth.currentUser && gAuth.currentUser.email) || ""; } catch (eM) {}
+
   var explications = {
-    "permission-denied":   "Les règles de sécurité Firestore refusent l'écriture. Cause la plus fréquente : des règles en mode test, qui expirent au bout de 30 jours.",
+    "permission-denied":   "Les règles de sécurité Firestore refusent "
+      + (estLecture ? "cette LECTURE" : "cette ÉCRITURE")
+      + ". Trois causes, par ordre de fréquence : les règles publiées dans la console sont plus "
+      + "anciennes que l'application et ne couvrent pas cette collection — une collection sans "
+      + "règle est refusée par défaut ; votre compte n'a pas le module qui ouvre cette collection ; "
+      + "ou l'adresse que Firebase transmet aux règles n'est pas celle attendue"
+      + (_mailJeton ? " — ici : « " + _mailJeton + " », à comparer caractère pour caractère." : "."),
     "unavailable":         "Le service est injoignable depuis cet appareil. Un VPN, un pare-feu d'entreprise ou une connexion instable coupent le flux permanent qu'utilise Firestore. Essayez « Mode réseau restreint » ci-dessous, ou coupez le VPN.",
     "resource-exhausted":  "Quota Firebase atteint (plan gratuit : 20 000 écritures par jour).",
     "failed-precondition": "Requête impossible en l'état — souvent un index Firestore manquant.",
@@ -12209,8 +12223,8 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.14";
-var APP_VERSION_NOTES = "Saisie guidée : la Distribution se calcule sur vos recettes, et les dépenses que vous confirmez partent avec votre saisie.";
+var APP_VERSION = "2026.10.15";
+var APP_VERSION_NOTES = "Un refus Firestore dit maintenant s’il porte sur une lecture ou une écriture, et l’adresse transmise aux règles.";
 
 function checkAppUpdate() {
   try {
