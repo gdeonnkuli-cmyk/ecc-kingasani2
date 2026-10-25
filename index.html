@@ -31705,8 +31705,33 @@ function renderSaisieGuidee() {
   _guideeFocus();
 }
 
+// Les saisies renvoyees ouvrent l'ecran, avant tout le reste. L'alerte en
+// temps reel ne part qu'aux comptes CONNECTES au moment du renvoi : la
+// souscription ignore le premier chargement pour ne pas rejouer tout
+// l'historique a chaque connexion. Celui qui etait hors ligne ce jour-la
+// n'aurait donc jamais rien vu. Ce bandeau, lui, se lit a chaque ouverture.
+function _guideeRenvoyees() {
+  var l = (gGuidee.brouillons || []).filter(function (b) { return b.statut === "rejete"; });
+  if (!l.length) return "";
+  var h = "<div style='background:#fdecea;border-left:4px solid #c0392b;border-radius:8px;"
+        + "padding:11px 13px;margin-bottom:12px'>"
+        + "<div style='font-size:.8rem;color:#8b1f17;font-weight:700;margin-bottom:5px'>"
+        + "\u21a9\ufe0f " + l.length + " saisie(s) renvoyée(s) pour correction</div>";
+  l.forEach(function (b) {
+    h += "<div style='font-size:.73rem;color:#8b1f17;line-height:1.5;margin-top:7px;"
+       + "padding-top:7px;border-top:1px solid #f0bdb7'>"
+       + "Culte du <strong>" + escH(_jourFr(b.date || "") || "sans date") + "</strong>"
+       + (b.motif ? "<div style='margin-top:2px;font-style:italic'>« " + escH(b.motif) + " »</div>" : "")
+       + "<div style='margin-top:7px'><button class='btn btn-g btn-sm' onclick=\"guideeReprendreBrouillon('"
+       + escHtml(b.id) + "')\">Corriger cette saisie</button></div></div>";
+  });
+  h += "</div>";
+  return h;
+}
+
 function _guideeAccueil() {
-  var h = "<div class='card'><div class='card-hdr'><h2>Saisie guidée</h2>"
+  var h = _guideeRenvoyees();
+  h += "<div class='card'><div class='card-hdr'><h2>Saisie guidée</h2>"
         + "<span class='badge'>" + gGuidee.etapes.length + " rubriques</span></div><div class='card-body'>";
   h += "<div style='font-size:.78rem;color:var(--muted);line-height:1.55;margin-bottom:10px'>"
      + "Les rubriques se présentent une à une. Pour chacune : inscrivez le montant, "
@@ -32255,6 +32280,10 @@ function guideeChargerBrouillons(apres) {
 // ── Côté contrôleur : la file des saisies à valider ─────────────────
 var gGuideeFile = [];
 var gGuideeEnControle = null;
+// Qui a deposé la saisie en cours de controle : il faut pouvoir le prevenir
+// une fois la piece enregistree, et gGuideeEnControle est vide a ce moment-la.
+var gGuideeAuteurEnControle = "";
+var gGuideeDateEnControle   = "";
 
 function chargerFileSaisiesGuidees(apres) {
   if (!IS_CONFIGURED || !gDb || !peutValiderSaisieGuidee()) { if (apres) apres(); return; }
@@ -32305,6 +32334,8 @@ function guideeOuvrirControle(id) {
   if (!b || !b.piece) { showToast("Saisie introuvable.", "err"); return; }
   restoreState(b.piece);
   gGuideeEnControle = id;
+  gGuideeAuteurEnControle = b.parEmail || "";
+  gGuideeDateEnControle   = b.date || "";
   gEditingHistId = null;
   if (typeof _afficherRubriquesFin === "function") _afficherRubriquesFin();
   showTab("recettes");
@@ -32330,11 +32361,23 @@ function _guideeMarquerValidee() {
   if (!gGuideeEnControle || !IS_CONFIGURED || !gDb) return;
   var id = gGuideeEnControle;
   gGuideeEnControle = null;
+  var auteur = gGuideeAuteurEnControle, dateCulte = gGuideeDateEnControle;
+  gGuideeAuteurEnControle = "";
+  gGuideeDateEnControle   = "";
   gDb.collection("saisies_guidees").doc(id).update({
     statut: "valide",
     validePar: (gCurrentUser && gCurrentUser.email) || "",
     valideLe: new Date().toISOString()
-  }).then(function () { chargerFileSaisiesGuidees(); })
+  }).then(function () {
+    // Celui qui a compté doit savoir que son travail est devenu une piece.
+    // Sans cela, il ne distingue pas « validée » de « oubliée ».
+    if (auteur && typeof notifyUser === "function") {
+      notifyUser(auteur, "\u2705", "Saisie validée",
+                 "Votre saisie du culte du " + _jourFr(dateCulte || "")
+                 + " a été contrôlée et enregistrée en comptabilité.", "finances");
+    }
+    chargerFileSaisiesGuidees();
+  })
     .catch(function (e) { showToast("Pièce enregistrée, mais la saisie n'a pas pu être marquée validée : "
       + (e && e.message ? e.message : "erreur"), "err"); });
   var bar = document.getElementById("guidee-bandeau");
@@ -32354,7 +32397,18 @@ function guideeRenvoyer(id) {
     statut: "rejete", motif: motif,
     validePar: (gCurrentUser && gCurrentUser.email) || "",
     valideLe: new Date().toISOString()
-  }).then(function () { showToast("Saisie renvoyée.", "ok"); chargerFileSaisiesGuidees(); })
+  }).then(function () {
+    // Un renvoi muet n'est pas un renvoi : l'auteur ne l'apprenait qu'en
+    // rouvrant l'ecran, et pouvait attendre des jours une validation qui
+    // ne viendrait jamais. Le motif voyage avec l'alerte, sans quoi il
+    // faudrait ouvrir l'application pour savoir quoi corriger.
+    if (b.parEmail && typeof notifyUser === "function") {
+      notifyUser(b.parEmail, "\u21a9\ufe0f", "Saisie renvoyée pour correction",
+                 "Culte du " + _jourFr(b.date || "") + " — " + motif, "finances");
+    }
+    showToast("Saisie renvoyée. " + (b.parNom || b.parEmail || "L'auteur") + " a été prévenu(e).", "ok");
+    chargerFileSaisiesGuidees();
+  })
     .catch(function (e) { showToast("Renvoi refusé : " + (e && e.message ? e.message : "erreur"), "err"); });
 }
 </script>
