@@ -7487,37 +7487,57 @@ function normStr(s){
 }
 function matchAny(lbl,list){var n=normStr(lbl);for(var i=0;i<list.length;i++)if(n.indexOf(list[i])>=0)return true;return false;}
 
-function getBases(){
+// Les bases se calculent sur des LIGNES, d'ou qu'elles viennent : le
+// formulaire classique les fournit par le DOM, la saisie guidee par son
+// propre etat. Une seule classification, donc un seul endroit ou une
+// rubrique peut changer de base — deux copies auraient diverge des la
+// premiere rubrique ajoutee, et l'ecart ne se serait vu qu'a la
+// distribution du mois.
+function _basesDepuisLignes(lignes){
   var b1=0,b2=0,b4=0,b5=0,b6=0,b7=0,benv=0;
   var t = getTaux(); // taux USD -> CDF
-  var cids=["cf-rows","cl-rows"];
+  for(var i=0;i<(lignes||[]).length;i++){
+    var L = lignes[i] || {};
+    var lbl = L.lbl || "", note = L.note || "";
+    var cdf = parseFloat(L.cdf) || 0, usd = parseFloat(L.usd) || 0;
+    // Unifier en CDF : (CDF + USD*taux) puis arrondi sur le TOTAL
+    var rawTotal = cdf + (usd * t);
+    var total = rawTotal > 0 ? arrondi(rawTotal) : 0;
+    // La mention de la journee vit le plus souvent dans la note, sur une
+    // ligne « Collecte Enveloppe ». Ce test passe donc avant celui de
+    // l'enveloppe, sans quoi la collecte n'alimenterait jamais la base 4 et
+    // la repartition 20/20/20/40 ne se declencherait pas.
+    if(matchAny(lbl,BASE4_L)||matchAny(note,BASE4_L))b4+=total;
+    else if(matchAny(lbl,BASE_ENV_L))benv+=total;
+    else if(matchAny(lbl,BASE7_L))b7+=total;
+    else if(matchAny(lbl,BASE1_L))b1+=total;
+    else if(matchAny(lbl,BASE2_L))b2+=total;
+    else if(matchAny(lbl,BASE5_L))b5+=total;
+    else if(matchAny(lbl,BASE6_L))b6+=total;
+  }
+  return{b1:b1,b2:b2,b4:b4,b5:b5,b6:b6,b7:b7,benv:benv};
+}
+
+// Les lignes de recettes telles que le formulaire classique les porte.
+function _lignesDuFormulaire(){
+  var out=[],cids=["cf-rows","cl-rows"];
   for(var ci=0;ci<cids.length;ci++){
     var c=document.getElementById(cids[ci]);if(!c)continue;
     var rows=c.querySelectorAll(".er");
     for(var ri=0;ri<rows.length;ri++){
       var inputs=rows[ri].querySelectorAll("input"),amts=rows[ri].querySelectorAll("input.amt");
-      var lbl=inputs[0]?inputs[0].value:"";
-      var note=inputs[inputs.length-1]?inputs[inputs.length-1].value:"";
-      var cdf=amts[0]?(parseFloat(amts[0].value)||0):0;
-      var usd=amts[1]?(parseFloat(amts[1].value)||0):0;
-      // Unifier en CDF : (CDF + USD*taux) puis arrondi sur le TOTAL
-      var rawTotal = cdf + (usd * t);
-      var total = rawTotal > 0 ? arrondi(rawTotal) : 0;
-      // La mention de la journee vit le plus souvent dans la note, sur une
-      // ligne « Collecte Enveloppe ». Ce test passe donc avant celui de
-      // l'enveloppe, sans quoi la collecte n'alimenterait jamais la base 4 et
-      // la repartition 20/20/20/40 ne se declencherait pas.
-      if(matchAny(lbl,BASE4_L)||matchAny(note,BASE4_L))b4+=total;
-      else if(matchAny(lbl,BASE_ENV_L))benv+=total;
-      else if(matchAny(lbl,BASE7_L))b7+=total;
-      else if(matchAny(lbl,BASE1_L))b1+=total;
-      else if(matchAny(lbl,BASE2_L))b2+=total;
-      else if(matchAny(lbl,BASE5_L))b5+=total;
-      else if(matchAny(lbl,BASE6_L))b6+=total;
+      out.push({
+        lbl:  inputs[0] ? inputs[0].value : "",
+        note: inputs[inputs.length-1] ? inputs[inputs.length-1].value : "",
+        cdf:  amts[0] ? amts[0].value : "",
+        usd:  amts[1] ? amts[1].value : ""
+      });
     }
   }
-  return{b1:b1,b2:b2,b4:b4,b5:b5,b6:b6,b7:b7,benv:benv};
+  return out;
 }
+
+function getBases(){ return _basesDepuisLignes(_lignesDuFormulaire()); }
 // Dîmes d'un culte déjà archivé, lues comme le module États les lit : même
 // repérage de ligne, même arrondi. Les deux écrans doivent dire le même chiffre.
 function _dimesCulteArchive(h) {
@@ -7561,6 +7581,24 @@ function _estCulteDeLiberation(dateStr) {
 }
 
 function getBaseVal(item,b){if(item.base===1)return b.b1;if(item.base===2)return b.b2;if(item.base===4)return b.b4;if(item.base===5)return b.b5;if(item.base===6)return b.b6;if(item.base===7)return b.b7||0;return 0;}
+
+// Les lignes de la distribution pour un jeu de bases donne. Les lignes
+// « reste en caisse » en sont exclues : elles ne se distribuent pas, elles
+// se constatent. Cette fonction ne lit AUCUN champ de l'ecran : elle sert
+// aussi bien le parcours de confirmation que l'apercu de la saisie guidee.
+function _distribLignes(b){
+  var out=[];
+  for(var i=0;i<DISTRIB_ITEMS.length;i++){
+    var it=DISTRIB_ITEMS[i];
+    if(it.info) continue;
+    var base=(it.base===0)?0:getBaseVal(it,b);
+    var brut=(it.base===0)?0:base*it.cle;
+    out.push({label:it.label,cle:it.cle,base:it.base,sec:it.sec,
+              montantBase:base,brut:brut,arrondi:arrondi(brut),
+              manuelle:(it.base===0)});
+  }
+  return out;
+}
 
 function calcDistrib(){
   var bases=getBases();
@@ -11129,7 +11167,15 @@ function hasFinanceTab(tab) {
   // Le mode guide REMPLACE la saisie classique pour ce compte : lui laisser
   // les deux chemins reviendrait a lui rouvrir le mur de rubriques que le
   // parcours est precisement la pour eviter.
-  if(estSaisieGuidee() && (tab==="recettes" || tab==="depenses")) return false;
+  //
+  // La Distribution tombe pour une autre raison. Ses bases se lisent sur le
+  // formulaire classique, que ce compte ne remplit jamais : l'ecran lui
+  // affichait un tableau de zeros. Et tout ce qu'il porte — confirmer une
+  // ligne, tout valider, injecter dans les depenses — est l'acte de controle,
+  // qui ne revient pas a celui qui compte. Le CALCUL, lui, ne lui est pas
+  // cache : il le voit en lecture seule au recapitulatif de son parcours,
+  // avant de deposer.
+  if(estSaisieGuidee() && (tab==="recettes" || tab==="depenses" || tab==="distrib")) return false;
   var perms = getPerms(gCurrentUser);
   for(var i=0;i<perms.financeTabs.length;i++) if(perms.financeTabs[i]===tab) return true;
   return false;
@@ -12153,8 +12199,8 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.12";
-var APP_VERSION_NOTES = "Saisie guidée : enregistrer un brouillon avant de soumettre, et reprendre une saisie là où elle s’est arrêtée.";
+var APP_VERSION = "2026.10.13";
+var APP_VERSION_NOTES = "Saisie guidée : vous voyez ce que la Distribution calculera sur vos recettes avant de déposer.";
 
 function checkAppUpdate() {
   try {
@@ -31594,6 +31640,7 @@ var gGuidee = {
   meta: {},
   brouillons: [],     // brouillons et saisies déjà déposées par ce compte
   idEnCours: null,    // document serveur de la saisie en cours, s'il existe
+  apercuOuvert: false, // le détail du calcul de la Distribution est-il déplié
   creeLe: null,       // date de première écriture, qui ne doit pas bouger
   motifPrec: null     // motif du renvoi auquel cette reprise répond
 };
@@ -31995,6 +32042,125 @@ function guideeAllerRecap() {
   _guideeLire();
   gGuidee.phase = "recap";
   _guideeTransition(renderSaisieGuidee);
+  // Au culte qui ferme le cycle, la base des dîmes porte TOUT le cycle, donc
+  // les cultes déjà archivés. Un compte en saisie guidée n'a pas forcément
+  // ouvert l'Historique : sans cette lecture, l'aperçu annoncerait la seule
+  // collecte du jour et sous-estimerait la répartition d'un facteur quatre.
+  var d = (gGuidee.meta && gGuidee.meta.date) || "";
+  if (d && typeof _estCulteDeLiberation === "function" && _estCulteDeLiberation(d)
+      && typeof _histoire === "function") {
+    _histoire(function () { if (gGuidee.phase === "recap") renderSaisieGuidee(); });
+  }
+}
+
+// ── Ce que la Distribution fera de ces recettes ─────────────────────
+// Le parcours ne demande pas les 27 dépenses à clé : elles se calculent.
+// Mais ne rien montrer revenait à faire déposer une saisie sans que son
+// auteur sache ce qu'elle produit — et à lui laisser croire, en voyant le
+// seul solde des rubriques saisies, qu'il reste en caisse bien plus qu'il
+// n'en restera. Il voit donc le calcul. Il ne le confirme pas : « conforme
+// ou laissé en caisse » reste au contrôleur, ligne par ligne.
+function _guideeLignesRecettes() {
+  var out = [];
+  (gGuidee.etapes || []).forEach(function (e, i) {
+    if (e.genre !== "rec") return;
+    var v = gGuidee.valeurs[_guideeCle(i)];
+    if (!v) return;
+    out.push({ lbl: e.lbl, note: v.note || "", cdf: v.cdf || "", usd: v.usd || "" });
+  });
+  return out;
+}
+
+// Les mêmes bases que l'écran Distribution, à partir du parcours au lieu du
+// formulaire. La règle des dîmes est reprise telle quelle : elles ne se
+// libèrent qu'au culte qui ferme le cycle, et ce jour-là la base porte tout
+// le cycle, pas la seule collecte du jour.
+function _guideeBases() {
+  var b = _basesDepuisLignes(_guideeLignesRecettes());
+  var d = (gGuidee.meta && gGuidee.meta.date) || "";
+  b.liberation = (typeof _estCulteDeLiberation === "function") && _estCulteDeLiberation(d);
+  if (b.liberation && typeof _dimesDuCycle === "function") b.b5 = _dimesDuCycle(d, b.b5);
+  return b;
+}
+
+function _guideeDistribHTML() {
+  if (typeof _distribLignes !== "function" || typeof DISTRIB_ITEMS === "undefined") return "";
+  var b = _guideeBases();
+  var lignes = _distribLignes(b);
+  var total = 0;
+  lignes.forEach(function (l) { if (!l.manuelle) total += l.arrondi; });
+
+  var h = "<div style='border:1px solid var(--border);border-radius:9px;padding:11px 12px;"
+        + "margin-top:14px;background:var(--light)'>"
+        + "<div style='font-size:.82rem;font-weight:700;color:var(--text);margin-bottom:7px'>"
+        + "Ce que la Distribution calculera</div>";
+  h += "<div style='font-size:.73rem;color:var(--muted);line-height:1.55;margin-bottom:10px'>"
+     + "Ces montants ne sont pas des rubriques à saisir : ils se déduisent de vos recettes, "
+     + "par les clés de répartition. Ils ne font pas partie de ce que vous déposez — "
+     + "c'est le contrôleur qui les confirme une à une avant qu'ils ne deviennent des dépenses.</div>";
+
+  var d = (gGuidee.meta && gGuidee.meta.date) || "";
+  var cy = (typeof cycleDimesDe === "function") ? cycleDimesDe(d) : null;
+  if (cy) {
+    function jm(x) { var p = String(x).split("-"); return p.length === 3 ? p[2] + "/" + p[1] : x; }
+    h += b.liberation
+      ? "<div style='background:#eef7f1;border-left:3px solid #1e7d52;border-radius:7px;padding:8px 11px;"
+        + "font-size:.72rem;color:#14532d;line-height:1.5;margin-bottom:10px'>"
+        + "\u21bb <strong>Libération du cycle</strong> — la base des dîmes porte le cycle du "
+        + escH(jm(cy.annonce)) + " au " + escH(jm(cy.liberation)) + ", et non la seule collecte du jour. "
+        + "C'est aujourd'hui que l'argent sort.</div>"
+      : "<div style='background:#fdf6e7;border-left:3px solid #e67e22;border-radius:7px;padding:8px 11px;"
+        + "font-size:.72rem;color:#8a5a00;line-height:1.5;margin-bottom:10px'>"
+        + "\u23f8 <strong>Dîmes en caisse jusqu'au " + escH(jm(cy.liberation)) + "</strong> — celles de ce "
+        + "dimanche entrent dans le cycle et ne se répartissent pas aujourd'hui. Les montants ci-dessous "
+        + "qui en dépendent ne sortiront qu'au culte de libération.</div>";
+  }
+
+  var bl = [["Base 1", b.b1], ["Base 2", b.b2], ["Dîmes", b.b5], ["Base 4", b.b4],
+            ["Base 6", b.b6], ["Loyer Pasteur", b.b7 || 0]].filter(function (x) { return x[1] > 0; });
+  if (bl.length) {
+    h += "<div style='display:flex;flex-wrap:wrap;gap:6px;margin-bottom:11px'>";
+    bl.forEach(function (x) {
+      h += "<span style='background:var(--pale);border:1px solid var(--border);border-radius:9px;"
+         + "padding:4px 9px;font-size:.69rem;color:var(--text)'>" + escH(x[0]) + " · <strong>"
+         + fmt(x[1]) + " FC</strong></span>";
+    });
+    h += "</div>";
+  }
+
+  var avec = lignes.filter(function (l) { return !l.manuelle && l.arrondi > 0; });
+  if (!avec.length) {
+    h += "<div style='font-size:.75rem;color:var(--muted)'>Aucune recette ne déclenche de "
+       + "répartition pour l'instant.</div></div>";
+    return h;
+  }
+  // Le total d'abord, le détail à la demande. Déplié, ce sont vingt-sept
+  // lignes qui repoussent le bouton de dépôt hors de l'écran sur un
+  // téléphone : on finit par déposer sans avoir rien lu, ou par renoncer.
+  h += "<div style='display:flex;justify-content:space-between;align-items:center;gap:9px;"
+     + "padding:8px 10px;background:var(--pale);border-radius:8px;margin-bottom:8px'>"
+     + "<span style='font-size:.75rem;color:var(--text)'>Total des dépenses calculées</span>"
+     + "<strong style='font-size:.92rem;color:#c0392b;white-space:nowrap'>" + fmt(total) + " FC</strong></div>";
+  h += "<button class='btn btn-o btn-sm' style='width:100%' onclick='guideeBasculerApercu()'>"
+     + (gGuidee.apercuOuvert ? "Masquer le détail" : "Voir le détail des " + avec.length + " rubriques")
+     + "</button>";
+
+  h += "<div style='display:" + (gGuidee.apercuOuvert ? "block" : "none") + ";margin-top:9px'>";
+  h += "<table class='cotis-table bar-table' style='min-width:0'><thead><tr><th>Rubrique</th>"
+     + "<th style='text-align:right'>Clé</th><th style='text-align:right'>Montant</th></tr></thead><tbody>";
+  avec.forEach(function (l) {
+    h += "<tr><td data-lbl='Rubrique'><div style='font-weight:600;font-size:.76rem'>" + escH(l.label) + "</div>"
+       + "<div style='font-size:.64rem;color:var(--muted)'>" + escH(l.sec) + " · base " + fmt(l.montantBase) + " FC</div></td>"
+       + "<td data-lbl='Clé' style='text-align:right;font-size:.72rem'>" + (l.cle * 100).toFixed(2) + " %</td>"
+       + "<td data-lbl='Montant' style='text-align:right;font-weight:600'>" + fmt(l.arrondi) + "</td></tr>";
+  });
+  h += "</tbody></table></div></div>";
+  return h;
+}
+
+function guideeBasculerApercu() {
+  gGuidee.apercuOuvert = !gGuidee.apercuOuvert;
+  renderSaisieGuidee();
 }
 
 // ── Récapitulatif avant dépôt ───────────────────────────────────────
@@ -32054,6 +32220,8 @@ function _guideeRecap() {
     h += "<div style='background:#fdf6e7;border-left:3px solid #e67e22;border-radius:7px;padding:9px 12px;font-size:.75rem;color:#8a5a00'>"
        + "Aucune rubrique renseignée : il n'y a rien à déposer.</div>";
   }
+
+  h += _guideeDistribHTML();
 
   h += "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:14px'>"
      + "<button class='btn btn-o' onclick='guideeReprendre()'>← Reprendre les rubriques</button>"
@@ -32443,18 +32611,10 @@ var gConf = { ouvert: false, pos: 0, lignes: [] };
 // caisse » en sont exclues : elles ne se valident pas, elles se constatent.
 // Leur demander un geste serait demander un geste pour rien.
 function _confLignes() {
-  var b = _confBases();
-  var out = [];
-  for (var i = 0; i < DISTRIB_ITEMS.length; i++) {
-    var it = DISTRIB_ITEMS[i];
-    if (it.info) continue;
-    var base = (it.base === 0) ? 0 : getBaseVal(it, b);
-    var brut = (it.base === 0) ? 0 : base * it.cle;
-    out.push({ label: it.label, cle: it.cle, base: it.base, sec: it.sec,
-               montantBase: base, brut: brut, arrondi: arrondi(brut),
-               manuelle: (it.base === 0) });
-  }
-  return out;
+  // Le calcul vit dans _distribLignes, partage avec l'apercu de la saisie
+  // guidee : le parcours de confirmation et ce que l'utilisateur a vu avant
+  // de deposer doivent annoncer le meme chiffre, toujours.
+  return _distribLignes(_confBases());
 }
 
 function _confBases() {
