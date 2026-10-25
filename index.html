@@ -7213,7 +7213,17 @@ function showTab(name) {
   if(name==="recettes" && typeof chargerFileSaisiesGuidees === "function") chargerFileSaisiesGuidees();
   if(name==="historique")renderHistory();
   if(name==="dashboard")buildDashboard();
-  if(name==="distrib")calcDistrib();
+  if(name==="distrib"){
+    // Un compte en saisie guidee n'a pas rempli le formulaire classique :
+    // sans ce report, les bases valent zero et l'ecran ment.
+    var _reecrit = false;
+    if(estSaisieGuidee() && typeof _guideeVersFormulaire === "function"){
+      _reecrit = _guideeVersFormulaire(false);
+    }
+    calcDistrib();
+    if(_reecrit && typeof showToast === "function")
+      showToast("Montants recalcules sur votre saisie. Confirmez puis injectez.", "ok");
+  }
   if(name==="admin")renderAdmin();
   if(name==="exercices") renderExercices();
   if(name==="etats") renderEtats();
@@ -11168,14 +11178,14 @@ function hasFinanceTab(tab) {
   // les deux chemins reviendrait a lui rouvrir le mur de rubriques que le
   // parcours est precisement la pour eviter.
   //
-  // La Distribution tombe pour une autre raison. Ses bases se lisent sur le
-  // formulaire classique, que ce compte ne remplit jamais : l'ecran lui
-  // affichait un tableau de zeros. Et tout ce qu'il porte — confirmer une
-  // ligne, tout valider, injecter dans les depenses — est l'acte de controle,
-  // qui ne revient pas a celui qui compte. Le CALCUL, lui, ne lui est pas
-  // cache : il le voit en lecture seule au recapitulatif de son parcours,
-  // avant de deposer.
-  if(estSaisieGuidee() && (tab==="recettes" || tab==="depenses" || tab==="distrib")) return false;
+  // La Distribution, elle, lui RESTE ouverte : il y lit les montants calcules
+  // sur ses propres recettes et confirme les lignes une a une. Ce qu'il
+  // confirme n'est pas enregistre pour autant — cela part avec sa saisie,
+  // comme une proposition, et le controleur valide l'ensemble avant que la
+  // piece existe. Le formulaire classique qui porte les bases est alimente
+  // depuis le parcours par _guideeVersFormulaire : sans cela, l'ecran lisait
+  // un formulaire vide et affichait des zeros.
+  if(estSaisieGuidee() && (tab==="recettes" || tab==="depenses")) return false;
   var perms = getPerms(gCurrentUser);
   for(var i=0;i<perms.financeTabs.length;i++) if(perms.financeTabs[i]===tab) return true;
   return false;
@@ -12199,8 +12209,8 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.13";
-var APP_VERSION_NOTES = "Saisie guidée : vous voyez ce que la Distribution calculera sur vos recettes avant de déposer.";
+var APP_VERSION = "2026.10.14";
+var APP_VERSION_NOTES = "Saisie guidée : la Distribution se calcule sur vos recettes, et les dépenses que vous confirmez partent avec votre saisie.";
 
 function checkAppUpdate() {
   try {
@@ -31641,6 +31651,7 @@ var gGuidee = {
   brouillons: [],     // brouillons et saisies déjà déposées par ce compte
   idEnCours: null,    // document serveur de la saisie en cours, s'il existe
   apercuOuvert: false, // le détail du calcul de la Distribution est-il déplié
+  formSignature: null, // état du parcours lors du dernier report au formulaire
   creeLe: null,       // date de première écriture, qui ne doit pas bouger
   motifPrec: null     // motif du renvoi auquel cette reprise répond
 };
@@ -32094,10 +32105,28 @@ function _guideeDistribHTML() {
         + "margin-top:14px;background:var(--light)'>"
         + "<div style='font-size:.82rem;font-weight:700;color:var(--text);margin-bottom:7px'>"
         + "Ce que la Distribution calculera</div>";
+  var dejaInjectees = 0;
+  (function () {
+    var dc = _guideeDepensesCalculees();
+    ["cm", "fr", "co"].forEach(function (k) { dejaInjectees += dc[k].length; });
+  })();
+
   h += "<div style='font-size:.73rem;color:var(--muted);line-height:1.55;margin-bottom:10px'>"
      + "Ces montants ne sont pas des rubriques à saisir : ils se déduisent de vos recettes, "
-     + "par les clés de répartition. Ils ne font pas partie de ce que vous déposez — "
-     + "c'est le contrôleur qui les confirme une à une avant qu'ils ne deviennent des dépenses.</div>";
+     + "par les clés de répartition. Pour qu'ils entrent dans votre saisie, ouvrez "
+     + "<strong>Distribution</strong>, confirmez les lignes une à une, puis injectez-les. "
+     + "Rien n'est enregistré en comptabilité pour autant : le contrôleur valide l'ensemble "
+     + "avant que la pièce existe.</div>";
+
+  h += dejaInjectees
+    ? "<div style='background:#eef7f1;border-left:3px solid #1e7d52;border-radius:7px;padding:8px 11px;"
+      + "font-size:.73rem;color:#14532d;line-height:1.5;margin-bottom:10px'>"
+      + "\u2713 <strong>" + dejaInjectees + " dépense(s) confirmée(s)</strong> sont déjà dans votre saisie "
+      + "et partiront avec elle.</div>"
+    : "<div style='background:#fdf6e7;border-left:3px solid #e67e22;border-radius:7px;padding:8px 11px;"
+      + "font-size:.73rem;color:#8a5a00;line-height:1.5;margin-bottom:10px'>"
+      + "Aucune de ces dépenses n'est encore dans votre saisie. Tant que vous ne les aurez pas "
+      + "confirmées dans <strong>Distribution</strong>, vous déposerez vos seules recettes.</div>";
 
   var d = (gGuidee.meta && gGuidee.meta.date) || "";
   var cy = (typeof cycleDimesDe === "function") ? cycleDimesDe(d) : null;
@@ -32182,7 +32211,9 @@ function _guideeLignes() {
 }
 
 function _guideeRecap() {
-  var l = _guideeLignes();
+  // Lignes COMPLETES : les depenses injectees depuis la Distribution font
+  // partie de ce qui part au controle, donc du solde qu'on annonce ici.
+  var l = _guideeLignesCompletes();
   var taux = (typeof getTaux === "function") ? getTaux() : 2800;
   var rCDF = 0, rUSD = 0, dCDF = 0, dUSD = 0;
   ["cf", "cl"].forEach(function (k) { l[k].forEach(function (x) { rCDF += parseFloat(x.cdf) || 0; rUSD += parseFloat(x.usd) || 0; }); });
@@ -32260,13 +32291,101 @@ function guideeReprendre() {
 // La proposition porte EXACTEMENT la forme d'une pièce : meta, lignes,
 // totaux. La validation pourra la recharger dans l'écran classique sans
 // conversion, donc sans occasion de divergence.
-function _guideeProposition(statut) {
+// Les depenses CALCULEES que la Distribution a injectees dans le formulaire.
+// Elles n'appartiennent pas au parcours — celui-ci ne demande que les huit
+// depenses sans cle — mais elles appartiennent bien a la saisie une fois que
+// leur auteur les a confirmees ligne par ligne.
+//
+// On ne retient que les rubriques connues de DEP_MAP, c'est-a-dire celles que
+// la Distribution produit. Une depense tapee a la main dans le formulaire par
+// un autre chemin n'a rien a faire ici.
+function _guideeDepensesCalculees() {
+  var out = { cm: [], fr: [], co: [] };
+  if (typeof DEP_MAP === "undefined") return out;
+  [["dep-cm", "cm"], ["dep-fr", "fr"], ["dep-co", "co"]].forEach(function (t) {
+    var c = document.getElementById(t[0]);
+    if (!c) return;
+    var rows = c.querySelectorAll(".er");
+    for (var i = 0; i < rows.length; i++) {
+      var inputs = rows[i].querySelectorAll("input"), amts = rows[i].querySelectorAll("input.amt");
+      var lbl = inputs[0] ? inputs[0].value : "";
+      if (!lbl) continue;
+      var connue = false;
+      for (var k in DEP_MAP) {
+        if (!DEP_MAP.hasOwnProperty(k)) continue;
+        if (typeof depLabelMatch === "function" ? depLabelMatch(lbl, k) : (lbl === k)) { connue = true; break; }
+      }
+      if (!connue) continue;
+      var cdf = amts[0] ? amts[0].value : "", usd = amts[1] ? amts[1].value : "";
+      if (!(parseFloat(cdf) > 0) && !(parseFloat(usd) > 0)) continue;
+      out[t[1]].push({ l: lbl, c: inputs[1] ? inputs[1].value : "", cdf: cdf, usd: usd,
+                       n: inputs[inputs.length - 1] ? inputs[inputs.length - 1].value : "" });
+    }
+  });
+  return out;
+}
+
+// Ce que le parcours porte, PLUS ce que la Distribution a injecte. C'est la
+// forme qui part au controle : la saisie de son auteur, dans son entier.
+function _guideeLignesCompletes() {
   var l = _guideeLignes();
+  var dc = _guideeDepensesCalculees();
+  ["cm", "fr", "co"].forEach(function (k) {
+    dc[k].forEach(function (x) {
+      // Une rubrique deja presente dans le parcours n'est pas doublee : le
+      // montant injecte fait foi, c'est le dernier calcule.
+      for (var i = 0; i < l[k].length; i++) {
+        if (typeof depLabelMatch === "function" && depLabelMatch(l[k][i].l, x.l)) { l[k][i] = x; return; }
+      }
+      l[k].push(x);
+    });
+  });
+  return l;
+}
+
+// La forme d'une piece a partir d'un jeu de lignes. Deux appelants : la
+// proposition qui part au controle, lignes completes ; et l'alimentation du
+// formulaire classique, lignes du parcours seul — sans quoi la synchronisation
+// reecrirait dans le formulaire les depenses qu'elle vient d'en lire.
+function _guideePiece(l) {
   var taux = (typeof getTaux === "function") ? getTaux() : 2800;
   var rCDF = 0, rUSD = 0, dCDF = 0, dUSD = 0;
   ["cf", "cl"].forEach(function (k) { l[k].forEach(function (x) { rCDF += parseFloat(x.cdf) || 0; rUSD += parseFloat(x.usd) || 0; }); });
   ["cm", "fr", "co"].forEach(function (k) { l[k].forEach(function (x) { dCDF += parseFloat(x.cdf) || 0; dUSD += parseFloat(x.usd) || 0; }); });
+  return {
+    meta: { date: gGuidee.meta.date || "", effCF: gGuidee.meta.cf || "", effCL: gGuidee.meta.cl || "",
+            effEco: gGuidee.meta.eco || "", resp: gGuidee.meta.resp || "", taux: String(taux),
+            repCDF: "", repUSD: "", cntCDF: "", cntUSD: "", justifEcart: "" },
+    savedAt: new Date().toISOString(),
+    sums: { rCDF: rCDF, rUSD: rUSD, dCDF: dCDF, dUSD: dUSD, nCDF: rCDF - dCDF, nUSD: rUSD - dUSD },
+    cf: l.cf, cl: l.cl, cm: l.cm, fr: l.fr, co: l.co, ot: []
+  };
+}
 
+// La Distribution calcule ses bases sur le formulaire classique. Un compte en
+// saisie guidee ne le remplit jamais : on l'alimente donc depuis le parcours,
+// par le MEME chemin que le controleur emprunte pour ouvrir une saisie
+// (restoreState). Un second chemin de chargement aurait diverge du premier.
+//
+// La signature evite de reecrire le formulaire a chaque passage : sans elle,
+// revenir sur la Distribution effacerait les depenses deja injectees. Quand le
+// parcours a bouge, en revanche, il FAUT reecrire — les montants calcules sur
+// les anciennes recettes ne valent plus rien, et il faut reinjecter.
+function _guideeSignature() {
+  return JSON.stringify([gGuidee.meta, gGuidee.valeurs, gGuidee.passees]);
+}
+
+function _guideeVersFormulaire(forcer) {
+  if (typeof restoreState !== "function") return false;
+  var sig = _guideeSignature();
+  if (!forcer && gGuidee.formSignature === sig) return false;
+  restoreState(_guideePiece(_guideeLignes()));
+  gGuidee.formSignature = sig;
+  return true;   // le formulaire a ete reecrit : toute injection anterieure est perdue
+}
+
+function _guideeProposition(statut) {
+  var l = _guideeLignesCompletes();
   var passees = [], passeesCles = [];
   gGuidee.etapes.forEach(function (e, i) {
     if (gGuidee.passees[_guideeCle(i)]) { passees.push(e.lbl); passeesCles.push(_guideeCle(i)); }
@@ -32282,14 +32401,7 @@ function _guideeProposition(statut) {
     date: gGuidee.meta.date || "",
     passees: passees,
     passeesCles: passeesCles,
-    piece: {
-      meta: { date: gGuidee.meta.date || "", effCF: gGuidee.meta.cf || "", effCL: gGuidee.meta.cl || "",
-              effEco: gGuidee.meta.eco || "", resp: gGuidee.meta.resp || "", taux: String(taux),
-              repCDF: "", repUSD: "", cntCDF: "", cntUSD: "", justifEcart: "" },
-      savedAt: maintenant,
-      sums: { rCDF: rCDF, rUSD: rUSD, dCDF: dCDF, dUSD: dUSD, nCDF: rCDF - dCDF, nUSD: rUSD - dUSD },
-      cf: l.cf, cl: l.cl, cm: l.cm, fr: l.fr, co: l.co, ot: []
-    }
+    piece: _guideePiece(l)
   };
   // Le dépôt seul porte une date de dépôt : c'est elle qui ordonne la file
   // du contrôleur, et un brouillon n'y figure pas.
