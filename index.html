@@ -5632,6 +5632,41 @@ function saveToFirestore() {
     });
 }
 
+// Un enregistrement refuse par la base ne doit pas finir dans la console.
+// L'ecran continue d'afficher les donnees venues de localStorage, si bien que
+// l'on croit avoir enregistre : une saisie de seminaire a ainsi vecu des jours
+// sur un seul telephone, invisible de tous les autres, sans que personne
+// puisse le savoir. Le module Loyer prevenait deja ; les autres se taisaient.
+// Ne jamais remplacer un contenu local par un contenu serveur PLUS PAUVRE.
+// Un compte dont l'ecriture etait refusee garde ses saisies dans le
+// navigateur, et rien ne les ecrase tant que sa LECTURE est refusee elle
+// aussi. Le jour ou on lui ouvre le droit, la premiere souscription reussie
+// remplacerait son travail par le document vide du serveur — au moment meme
+// ou l'on croit reparer. On garde donc le local, et on le dit : c'est a un
+// humain de trancher, pas a une comparaison de longueurs.
+//
+// Le prix de ce garde-fou est connu : une suppression faite sur un autre
+// appareil ne se propage pas tant que le local est plus fourni. Perdre une
+// suppression se rattrape ; perdre une saisie, non.
+function _serveurAppauvrit(nom, serveur, local) {
+  serveur = serveur || []; local = local || [];
+  if (local.length <= serveur.length) return false;
+  if (typeof showToast === "function")
+    showToast(nom + " : la base contient MOINS d'entrees que cet appareil ("
+      + serveur.length + " contre " + local.length + "). Vos saisies locales sont gardees. "
+      + "Enregistrez pour les envoyer.", "warn");
+  if (window.console) console.warn(nom + " : souscription ignoree, serveur plus pauvre que le local");
+  return true;
+}
+
+function _echecEcriture(nom, e) {
+  var m = (e && e.message) || "erreur inconnue";
+  if (window.console) console.warn(nom + " : ecriture refusee —", m);
+  if (typeof showToast === "function")
+    showToast(nom + " : enregistre sur CET APPAREIL seulement. La base a refuse l'ecriture.", "err");
+  if (typeof showSyncError === "function") showSyncError(e, "enregistrement — " + nom);
+}
+
 // Dernière erreur de synchronisation, conservée pour diagnostic.
 var gLastSyncError = null;
 
@@ -12223,8 +12258,8 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.15";
-var APP_VERSION_NOTES = "Un refus Firestore dit maintenant s’il porte sur une lecture ou une écriture, et l’adresse transmise aux règles.";
+var APP_VERSION = "2026.11.1";
+var APP_VERSION_NOTES = "Un enregistrement refusé par la base ne passe plus en silence, et une saisie locale ne peut plus être effacée par un serveur plus pauvre.";
 
 function checkAppUpdate() {
   try {
@@ -13124,7 +13159,7 @@ function saveDB(db) {
     // ramènerait l'écrasement concurrent que la bascule vient de supprimer.
     if (!gMbrParDoc) { charge.membres = db.membres; charge.cotisations = db.cotisations; }
     gDb.collection("membres_db").doc("main").set(charge, { merge: true })
-      .catch(function(e){ console.warn("Membres Firebase sync error:", e.message); });
+      .catch(function(e){ _echecEcriture("Membres", e); });
   }
 }
 
@@ -15966,7 +16001,7 @@ function saveSocDB(db) {
     // L'ancien tableau reste figé à son état d'avant bascule, comme archive.
     if (!gSocParDoc) charge.assistances = db.assistances || [];
     gDb.collection("social_db").doc("main").set(charge, { merge: true })
-      .catch(function(e){ console.warn("Social Firebase sync error:", e.message); });
+      .catch(function(e){ _echecEcriture("Social", e); });
   }
 }
 
@@ -16700,7 +16735,7 @@ function saveSemDB(db) {
       sessions: db.sessions || [],
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedBy: gCurrentUser ? gCurrentUser.email : ""
-    }).catch(function(e){ console.warn("Seminaire Firebase sync:", e.message); });
+    }).catch(function(e){ _echecEcriture("Séminaire", e); });
   }
 }
 // Souscription temps réel : tout changement est reflété instantanément sur tous les appareils
@@ -16716,6 +16751,7 @@ function subscribeSem() {
         var incoming = JSON.stringify(data.sessions || []);
         var current  = JSON.stringify(SEMDB.sessions || []);
         if (incoming === current) return;
+        if (_serveurAppauvrit("S\u00e9minaire", data.sessions || [], SEMDB.sessions || [])) return;
         SEMDB = { sessions: data.sessions || [] };
         try { localStorage.setItem("ecc_sem_db", JSON.stringify(SEMDB)); } catch(e){}
         if (typeof renderHistSem === "function")  renderHistSem();
@@ -17204,7 +17240,7 @@ function saveEcoDB(db) {
       sessions: db.sessions || [],
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedBy: gCurrentUser ? gCurrentUser.email : ""
-    }).catch(function(e){ console.warn("ECODIM Firebase sync:", e.message); });
+    }).catch(function(e){ _echecEcriture("ECODIM", e); });
   }
 }
 // Souscription temps réel : tout changement est reflété instantanément sur tous les appareils
@@ -17220,6 +17256,7 @@ function subscribeEco() {
         var incoming = JSON.stringify(data.sessions || []);
         var current  = JSON.stringify(ECODB.sessions || []);
         if (incoming === current) return;
+        if (_serveurAppauvrit("ECODIM", data.sessions || [], ECODB.sessions || [])) return;
         ECODB = { sessions: data.sessions || [] };
         try { localStorage.setItem("ecc_eco_db", JSON.stringify(ECODB)); } catch(e){}
         if (typeof renderHistEco === "function")  renderHistEco();
@@ -21295,7 +21332,7 @@ function saveEffDB(db) {
       programmes: db.programmes||[],
       updatedAt:  firebase.firestore.FieldValue.serverTimestamp(),
       updatedBy:  gCurrentUser.email||""
-    }).catch(function(e){ console.warn("saveEffDB:",e.message); });
+    }).catch(function(e){ _echecEcriture("Effectif", e); });
   }
 }
 
