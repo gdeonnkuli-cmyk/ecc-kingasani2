@@ -129,6 +129,27 @@ service cloud.firestore {
                : ['finances','eb','annonces','projets'];
     }
 
+    // Les modules explicitement accordes a ce compte, dans l'une ou l'autre
+    // des deux formes que les documents portent.
+    //
+    // L'ecran Administration ecrit « modules » AU PREMIER NIVEAU du document
+    // (accounts.doc(email).set({email, nom, role, modules, financeTabs, ...})),
+    // et loadUserPermsFromFirestore relit ce meme champ. Cette regle, elle, ne
+    // lisait que « perms.modules », une forme que l'application n'ecrit nulle
+    // part. Les deux ne se rencontraient jamais : tout compte non
+    // administrateur retombait sur les modules par defaut de son role, et
+    // cocher une case dans Administration ne changeait rien cote serveur. Un
+    // compte « saisie » a qui l'on accordait le Seminaire voyait l'ecran,
+    // saisissait, et se faisait refuser chaque ecriture.
+    //
+    // On lit donc d'abord la forme que l'application ecrit, puis l'autre, pour
+    // les documents qui la porteraient encore.
+    function modulesAccordes() {
+      return compte().get('modules', []).size() > 0
+               ? compte().get('modules', [])
+               : compte().get('perms', {}).get('modules', []);
+    }
+
     // Un compte sans document accounts/ garde les modules par defaut du role
     // de saisie, comme la page. Refuser ici fermerait l'eglise le jour de la
     // publication a tous ceux qu'on n'a pas encore decrits.
@@ -137,8 +158,8 @@ service cloud.firestore {
                ? modulesParDefaut('')
            : compte().get('role', '') == 'admin'
                ? ['finances','membres','social','seminaire','ecodim','effectif','eb','annonces','projets','loyer','budget']
-           : (compte().get('perms', {}).get('modules', []).size() > 0)
-               ? compte().get('perms', {}).get('modules', [])
+           : (modulesAccordes().size() > 0)
+               ? modulesAccordes()
                : modulesParDefaut(compte().get('role', ''));
     }
 

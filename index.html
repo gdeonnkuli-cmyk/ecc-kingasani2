@@ -11273,6 +11273,34 @@ function loadAccounts() {
     }
     if(!found) all.push(custom[i]);
   }
+
+  // Les comptes vivent AUSSI dans Firestore, et c'est la qu'ils font foi :
+  // les regles n'ont jamais lu ce localStorage. Un compte cree depuis un
+  // autre appareil n'apparaissait donc nulle part ici — on ne pouvait ni
+  // voir ses autorisations, ni les corriger, ni meme savoir qu'il existait,
+  // alors qu'il se connectait et saisissait tous les jours.
+  //
+  // gComptesServeur etait deja charge, mais ne servait qu'a decorer les
+  // lignes de la liste locale. Il la complete desormais.
+  var srv = (typeof gComptesServeur === "object" && gComptesServeur) || {};
+  for (var k in srv) {
+    if (!srv.hasOwnProperty(k)) continue;
+    var deja = false;
+    for (var z = 0; z < all.length; z++) {
+      if (String(all[z].email || "").toLowerCase() === String(k).toLowerCase()) { deja = true; break; }
+    }
+    if (deja) continue;
+    var v = srv[k] || {};
+    all.push({
+      email: v.email || k,
+      nom:   v.nom || String(v.email || k).split("@")[0],
+      role:  v.role || "saisie",
+      perms: (v.modules && v.modules.length)
+               ? { modules: v.modules, financeTabs: v.financeTabs || [] }
+               : (v.perms || null),
+      distant: true          // present sur le serveur, absent de cet appareil
+    });
+  }
   return all;
 }
 
@@ -12258,8 +12286,8 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.11.3";
-var APP_VERSION_NOTES = "Un enregistrement n’est annoncé qu’une fois réellement accepté par la base, et la notification ne part plus sans lui.";
+var APP_VERSION = "2026.11.4";
+var APP_VERSION_NOTES = "Les comptes créés depuis un autre appareil apparaissent enfin dans Administration, et les modules accordés sont réellement lus par les règles.";
 
 function checkAppUpdate() {
   try {
