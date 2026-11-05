@@ -12258,8 +12258,8 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.11.1";
-var APP_VERSION_NOTES = "Un enregistrement refusé par la base ne passe plus en silence, et une saisie locale ne peut plus être effacée par un serveur plus pauvre.";
+var APP_VERSION = "2026.11.2";
+var APP_VERSION_NOTES = "Une saisie locale ne peut plus être effacée par un serveur plus pauvre, ni à l’ouverture du module ni en temps réel.";
 
 function checkAppUpdate() {
   try {
@@ -16716,8 +16716,14 @@ function loadSemDBFromFirebase(callback) {
     .then(function(doc){
       if (doc.exists) {
         var data = doc.data();
-        SEMDB = { sessions: data.sessions || [] };
-        try { localStorage.setItem("ecc_sem_db", JSON.stringify(SEMDB)); } catch(e){}
+        // Le chargement ponctuel precede la souscription : switchModule
+        // l'appelle avant tout. Sans le meme garde-fou, ouvrir simplement le
+        // module effacerait des saisies locales qu'aucune ecriture n'a pu
+        // envoyer. Proteger la souscription seule ne protegeait rien.
+        if (!_serveurAppauvrit("S\u00e9minaire", data.sessions || [], SEMDB.sessions || [])) {
+          SEMDB = { sessions: data.sessions || [] };
+          try { localStorage.setItem("ecc_sem_db", JSON.stringify(SEMDB)); } catch(e){}
+        }
       }
       if(callback) callback();
     })
@@ -17221,8 +17227,10 @@ function loadEcoDBFromFirebase(callback) {
     .then(function(doc){
       if (doc.exists) {
         var data = doc.data();
-        ECODB = { sessions: data.sessions || [] };
-        try { localStorage.setItem("ecc_eco_db", JSON.stringify(ECODB)); } catch(e){}
+        if (!_serveurAppauvrit("ECODIM", data.sessions || [], ECODB.sessions || [])) {
+          ECODB = { sessions: data.sessions || [] };
+          try { localStorage.setItem("ecc_eco_db", JSON.stringify(ECODB)); } catch(e){}
+        }
       }
       if(callback) callback();
     })
