@@ -12258,8 +12258,8 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.11.2";
-var APP_VERSION_NOTES = "Une saisie locale ne peut plus être effacée par un serveur plus pauvre, ni à l’ouverture du module ni en temps réel.";
+var APP_VERSION = "2026.11.3";
+var APP_VERSION_NOTES = "Un enregistrement n’est annoncé qu’une fois réellement accepté par la base, et la notification ne part plus sans lui.";
 
 function checkAppUpdate() {
   try {
@@ -16736,13 +16736,17 @@ function saveSemDB(db) {
   // 1. Local (fallback hors-ligne)
   try { localStorage.setItem("ecc_sem_db", JSON.stringify(db)); } catch(e) {}
   // 2. Firebase (synchro simultanée sur tous les appareils)
-  if (IS_CONFIGURED && gDb) {
-    gDb.collection("seminaire_db").doc("main").set({
-      sessions: db.sessions || [],
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      updatedBy: gCurrentUser ? gCurrentUser.email : ""
-    }).catch(function(e){ _echecEcriture("Séminaire", e); });
-  }
+  // Rend compte de ce qui s'est reellement passe : "serveur", "local" ou
+  // "refus". L'appelant ne doit pas annoncer un enregistrement avant de le
+  // savoir — c'est en annoncant d'avance que l'application a laisse croire
+  // pendant des jours que des saisies etaient partagees.
+  if (!(IS_CONFIGURED && gDb)) return Promise.resolve("local");
+  return gDb.collection("seminaire_db").doc("main").set({
+    sessions: db.sessions || [],
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedBy: gCurrentUser ? gCurrentUser.email : ""
+  }).then(function(){ return "serveur"; })
+    .catch(function(e){ _echecEcriture("Séminaire", e); return "refus"; });
 }
 // Souscription temps réel : tout changement est reflété instantanément sur tous les appareils
 var gUnsubSem = null;
@@ -16984,12 +16988,20 @@ function saveSessionSem() {
   if(!found) SEMDB.sessions.unshift(session);
   _avertirPlafondSessions(SEMDB.sessions.length, "s\u00e9minaire");
   if(SEMDB.sessions.length>52) SEMDB.sessions=SEMDB.sessions.slice(0,52);
-  saveSemDB(SEMDB);
+  var _libSem = (session.titre || "Seminaire") + " du " + session.date;
+  saveSemDB(SEMDB).then(function (etat) {
+    // Un refus a deja parle par _echecEcriture : ni message vert, ni
+    // notification. Prevenir l'administrateur d'un enregistrement qui n'a
+    // pas eu lieu, c'est lui faire croire que les donnees sont arrivees.
+    if (etat === "refus") return;
+    showToast(etat === "serveur"
+      ? "Seminaire enregistre et partage avec les autres appareils."
+      : "Seminaire enregistre sur cet appareil (hors connexion).", "ok");
+    pushNotif("\ud83d\udcda", "Seminaire sauvegarde", _libSem, "seminaire");
+    if (etat === "serveur") notifyAdmin("\ud83d\udcda", "S\u00e9minaire enregistr\u00e9", _libSem, "seminaire");
+  });
   renderHistSem();
   renderBilanSem();
-  showToast("Seminaire sauvegarde dans l historique !","ok");
-  pushNotif("📚","Seminaire sauvegarde",(session.titre||"Seminaire")+" du "+session.date,"seminaire");
-  notifyAdmin("📚","Séminaire enregistré",(session.titre||"Seminaire")+" du "+session.date,"seminaire");
   // Vider le formulaire (les données restent dans l'historique)
   resetSemForm();
 }
@@ -17242,14 +17254,14 @@ function loadEcoDBFromFirebase(callback) {
 function saveEcoDB(db) {
   // 1. Local (fallback hors-ligne)
   try { localStorage.setItem("ecc_eco_db", JSON.stringify(db)); } catch(e) {}
-  // 2. Firebase (synchro simultanée sur tous les appareils)
-  if (IS_CONFIGURED && gDb) {
-    gDb.collection("ecodim_db").doc("main").set({
-      sessions: db.sessions || [],
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      updatedBy: gCurrentUser ? gCurrentUser.email : ""
-    }).catch(function(e){ _echecEcriture("ECODIM", e); });
-  }
+  // 2. Firebase — rend compte : "serveur", "local" ou "refus".
+  if (!(IS_CONFIGURED && gDb)) return Promise.resolve("local");
+  return gDb.collection("ecodim_db").doc("main").set({
+    sessions: db.sessions || [],
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedBy: gCurrentUser ? gCurrentUser.email : ""
+  }).then(function(){ return "serveur"; })
+    .catch(function(e){ _echecEcriture("ECODIM", e); return "refus"; });
 }
 // Souscription temps réel : tout changement est reflété instantanément sur tous les appareils
 var gUnsubEco = null;
@@ -17463,12 +17475,17 @@ function saveSessionEco() {
   if(!found) ECODB.sessions.unshift(session);
   _avertirPlafondSessions(ECODB.sessions.length, "ECODIM");
   if(ECODB.sessions.length>52) ECODB.sessions=ECODB.sessions.slice(0,52);
-  saveEcoDB(ECODB);
+  var _libEco = (session.titre || "ECODIM") + " du " + session.date;
+  saveEcoDB(ECODB).then(function (etat) {
+    if (etat === "refus") return;   // _echecEcriture a deja parle
+    showToast(etat === "serveur"
+      ? "ECODIM enregistre et partage avec les autres appareils."
+      : "ECODIM enregistre sur cet appareil (hors connexion).", "ok");
+    pushNotif("\ud83d\udcda", "ECODIM sauvegarde", _libEco, "ecodim");
+    if (etat === "serveur") notifyAdmin("\u26ea", "ECODIM enregistr\u00e9", _libEco, "ecodim");
+  });
   renderHistEco();
   renderBilanEco();
-  showToast("ECODIM sauvegarde dans l historique !","ok");
-  pushNotif("📚","ECODIM sauvegarde",(session.titre||"ECODIM")+" du "+session.date,"ecodim");
-  notifyAdmin("⛪","ECODIM enregistré",(session.titre||"ECODIM")+" du "+session.date,"ecodim");
   // Vider le formulaire (les données restent dans l'historique)
   resetEcoForm();
 }
