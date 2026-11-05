@@ -5632,6 +5632,41 @@ function saveToFirestore() {
     });
 }
 
+// Un enregistrement refuse par la base ne doit pas finir dans la console.
+// L'ecran continue d'afficher les donnees venues de localStorage, si bien que
+// l'on croit avoir enregistre : une saisie de seminaire a ainsi vecu des jours
+// sur un seul telephone, invisible de tous les autres, sans que personne
+// puisse le savoir. Le module Loyer prevenait deja ; les autres se taisaient.
+// Ne jamais remplacer un contenu local par un contenu serveur PLUS PAUVRE.
+// Un compte dont l'ecriture etait refusee garde ses saisies dans le
+// navigateur, et rien ne les ecrase tant que sa LECTURE est refusee elle
+// aussi. Le jour ou on lui ouvre le droit, la premiere souscription reussie
+// remplacerait son travail par le document vide du serveur — au moment meme
+// ou l'on croit reparer. On garde donc le local, et on le dit : c'est a un
+// humain de trancher, pas a une comparaison de longueurs.
+//
+// Le prix de ce garde-fou est connu : une suppression faite sur un autre
+// appareil ne se propage pas tant que le local est plus fourni. Perdre une
+// suppression se rattrape ; perdre une saisie, non.
+function _serveurAppauvrit(nom, serveur, local) {
+  serveur = serveur || []; local = local || [];
+  if (local.length <= serveur.length) return false;
+  if (typeof showToast === "function")
+    showToast(nom + " : la base contient MOINS d'entrees que cet appareil ("
+      + serveur.length + " contre " + local.length + "). Vos saisies locales sont gardees. "
+      + "Enregistrez pour les envoyer.", "warn");
+  if (window.console) console.warn(nom + " : souscription ignoree, serveur plus pauvre que le local");
+  return true;
+}
+
+function _echecEcriture(nom, e) {
+  var m = (e && e.message) || "erreur inconnue";
+  if (window.console) console.warn(nom + " : ecriture refusee —", m);
+  if (typeof showToast === "function")
+    showToast(nom + " : enregistre sur CET APPAREIL seulement. La base a refuse l'ecriture.", "err");
+  if (typeof showSyncError === "function") showSyncError(e, "enregistrement — " + nom);
+}
+
 // Dernière erreur de synchronisation, conservée pour diagnostic.
 var gLastSyncError = null;
 
@@ -5645,8 +5680,22 @@ function showSyncError(e, contexte) {
   var hh = now.getHours(), mm = now.getMinutes();
   gLastSyncError = {code:code, message:msg, contexte:contexte||"", heure:hh+":"+(mm<10?"0"+mm:mm)};
 
+  // Un refus de LECTURE annonce depuis toujours un refus d'ecriture : pendant
+  // un incident reel, cela envoie chercher au mauvais endroit. On dit donc
+  // l'operation telle qu'elle est, et l'on nomme les causes propres a cette
+  // application plutot qu'un mode test que ce projet n'utilise pas.
+  var estLecture = /lecture|chargement|relecture/i.test(contexte || "");
+  var _mailJeton = "";
+  try { _mailJeton = (gAuth && gAuth.currentUser && gAuth.currentUser.email) || ""; } catch (eM) {}
+
   var explications = {
-    "permission-denied":   "Les règles de sécurité Firestore refusent l'écriture. Cause la plus fréquente : des règles en mode test, qui expirent au bout de 30 jours.",
+    "permission-denied":   "Les règles de sécurité Firestore refusent "
+      + (estLecture ? "cette LECTURE" : "cette ÉCRITURE")
+      + ". Trois causes, par ordre de fréquence : les règles publiées dans la console sont plus "
+      + "anciennes que l'application et ne couvrent pas cette collection — une collection sans "
+      + "règle est refusée par défaut ; votre compte n'a pas le module qui ouvre cette collection ; "
+      + "ou l'adresse que Firebase transmet aux règles n'est pas celle attendue"
+      + (_mailJeton ? " — ici : « " + _mailJeton + " », à comparer caractère pour caractère." : "."),
     "unavailable":         "Le service est injoignable depuis cet appareil. Un VPN, un pare-feu d'entreprise ou une connexion instable coupent le flux permanent qu'utilise Firestore. Essayez « Mode réseau restreint » ci-dessous, ou coupez le VPN.",
     "resource-exhausted":  "Quota Firebase atteint (plan gratuit : 20 000 écritures par jour).",
     "failed-precondition": "Requête impossible en l'état — souvent un index Firestore manquant.",
@@ -11224,6 +11273,34 @@ function loadAccounts() {
     }
     if(!found) all.push(custom[i]);
   }
+
+  // Les comptes vivent AUSSI dans Firestore, et c'est la qu'ils font foi :
+  // les regles n'ont jamais lu ce localStorage. Un compte cree depuis un
+  // autre appareil n'apparaissait donc nulle part ici — on ne pouvait ni
+  // voir ses autorisations, ni les corriger, ni meme savoir qu'il existait,
+  // alors qu'il se connectait et saisissait tous les jours.
+  //
+  // gComptesServeur etait deja charge, mais ne servait qu'a decorer les
+  // lignes de la liste locale. Il la complete desormais.
+  var srv = (typeof gComptesServeur === "object" && gComptesServeur) || {};
+  for (var k in srv) {
+    if (!srv.hasOwnProperty(k)) continue;
+    var deja = false;
+    for (var z = 0; z < all.length; z++) {
+      if (String(all[z].email || "").toLowerCase() === String(k).toLowerCase()) { deja = true; break; }
+    }
+    if (deja) continue;
+    var v = srv[k] || {};
+    all.push({
+      email: v.email || k,
+      nom:   v.nom || String(v.email || k).split("@")[0],
+      role:  v.role || "saisie",
+      perms: (v.modules && v.modules.length)
+               ? { modules: v.modules, financeTabs: v.financeTabs || [] }
+               : (v.perms || null),
+      distant: true          // present sur le serveur, absent de cet appareil
+    });
+  }
   return all;
 }
 
@@ -12209,8 +12286,8 @@ function saveNotifs(arr) {
 
 // ===== VERSION DE L'APPLICATION =====
 // Incrémentez ce numéro à chaque mise à jour pour notifier les utilisateurs
-var APP_VERSION = "2026.10.14";
-var APP_VERSION_NOTES = "Saisie guidée : la Distribution se calcule sur vos recettes, et les dépenses que vous confirmez partent avec votre saisie.";
+var APP_VERSION = "2026.11.4";
+var APP_VERSION_NOTES = "Les comptes créés depuis un autre appareil apparaissent enfin dans Administration, et les modules accordés sont réellement lus par les règles.";
 
 function checkAppUpdate() {
   try {
@@ -13110,7 +13187,7 @@ function saveDB(db) {
     // ramènerait l'écrasement concurrent que la bascule vient de supprimer.
     if (!gMbrParDoc) { charge.membres = db.membres; charge.cotisations = db.cotisations; }
     gDb.collection("membres_db").doc("main").set(charge, { merge: true })
-      .catch(function(e){ console.warn("Membres Firebase sync error:", e.message); });
+      .catch(function(e){ _echecEcriture("Membres", e); });
   }
 }
 
@@ -15952,7 +16029,7 @@ function saveSocDB(db) {
     // L'ancien tableau reste figé à son état d'avant bascule, comme archive.
     if (!gSocParDoc) charge.assistances = db.assistances || [];
     gDb.collection("social_db").doc("main").set(charge, { merge: true })
-      .catch(function(e){ console.warn("Social Firebase sync error:", e.message); });
+      .catch(function(e){ _echecEcriture("Social", e); });
   }
 }
 
@@ -16667,8 +16744,14 @@ function loadSemDBFromFirebase(callback) {
     .then(function(doc){
       if (doc.exists) {
         var data = doc.data();
-        SEMDB = { sessions: data.sessions || [] };
-        try { localStorage.setItem("ecc_sem_db", JSON.stringify(SEMDB)); } catch(e){}
+        // Le chargement ponctuel precede la souscription : switchModule
+        // l'appelle avant tout. Sans le meme garde-fou, ouvrir simplement le
+        // module effacerait des saisies locales qu'aucune ecriture n'a pu
+        // envoyer. Proteger la souscription seule ne protegeait rien.
+        if (!_serveurAppauvrit("S\u00e9minaire", data.sessions || [], SEMDB.sessions || [])) {
+          SEMDB = { sessions: data.sessions || [] };
+          try { localStorage.setItem("ecc_sem_db", JSON.stringify(SEMDB)); } catch(e){}
+        }
       }
       if(callback) callback();
     })
@@ -16681,13 +16764,17 @@ function saveSemDB(db) {
   // 1. Local (fallback hors-ligne)
   try { localStorage.setItem("ecc_sem_db", JSON.stringify(db)); } catch(e) {}
   // 2. Firebase (synchro simultanée sur tous les appareils)
-  if (IS_CONFIGURED && gDb) {
-    gDb.collection("seminaire_db").doc("main").set({
-      sessions: db.sessions || [],
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      updatedBy: gCurrentUser ? gCurrentUser.email : ""
-    }).catch(function(e){ console.warn("Seminaire Firebase sync:", e.message); });
-  }
+  // Rend compte de ce qui s'est reellement passe : "serveur", "local" ou
+  // "refus". L'appelant ne doit pas annoncer un enregistrement avant de le
+  // savoir — c'est en annoncant d'avance que l'application a laisse croire
+  // pendant des jours que des saisies etaient partagees.
+  if (!(IS_CONFIGURED && gDb)) return Promise.resolve("local");
+  return gDb.collection("seminaire_db").doc("main").set({
+    sessions: db.sessions || [],
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedBy: gCurrentUser ? gCurrentUser.email : ""
+  }).then(function(){ return "serveur"; })
+    .catch(function(e){ _echecEcriture("Séminaire", e); return "refus"; });
 }
 // Souscription temps réel : tout changement est reflété instantanément sur tous les appareils
 var gUnsubSem = null;
@@ -16702,6 +16789,7 @@ function subscribeSem() {
         var incoming = JSON.stringify(data.sessions || []);
         var current  = JSON.stringify(SEMDB.sessions || []);
         if (incoming === current) return;
+        if (_serveurAppauvrit("S\u00e9minaire", data.sessions || [], SEMDB.sessions || [])) return;
         SEMDB = { sessions: data.sessions || [] };
         try { localStorage.setItem("ecc_sem_db", JSON.stringify(SEMDB)); } catch(e){}
         if (typeof renderHistSem === "function")  renderHistSem();
@@ -16928,12 +17016,20 @@ function saveSessionSem() {
   if(!found) SEMDB.sessions.unshift(session);
   _avertirPlafondSessions(SEMDB.sessions.length, "s\u00e9minaire");
   if(SEMDB.sessions.length>52) SEMDB.sessions=SEMDB.sessions.slice(0,52);
-  saveSemDB(SEMDB);
+  var _libSem = (session.titre || "Seminaire") + " du " + session.date;
+  saveSemDB(SEMDB).then(function (etat) {
+    // Un refus a deja parle par _echecEcriture : ni message vert, ni
+    // notification. Prevenir l'administrateur d'un enregistrement qui n'a
+    // pas eu lieu, c'est lui faire croire que les donnees sont arrivees.
+    if (etat === "refus") return;
+    showToast(etat === "serveur"
+      ? "Seminaire enregistre et partage avec les autres appareils."
+      : "Seminaire enregistre sur cet appareil (hors connexion).", "ok");
+    pushNotif("\ud83d\udcda", "Seminaire sauvegarde", _libSem, "seminaire");
+    if (etat === "serveur") notifyAdmin("\ud83d\udcda", "S\u00e9minaire enregistr\u00e9", _libSem, "seminaire");
+  });
   renderHistSem();
   renderBilanSem();
-  showToast("Seminaire sauvegarde dans l historique !","ok");
-  pushNotif("📚","Seminaire sauvegarde",(session.titre||"Seminaire")+" du "+session.date,"seminaire");
-  notifyAdmin("📚","Séminaire enregistré",(session.titre||"Seminaire")+" du "+session.date,"seminaire");
   // Vider le formulaire (les données restent dans l'historique)
   resetSemForm();
 }
@@ -17171,8 +17267,10 @@ function loadEcoDBFromFirebase(callback) {
     .then(function(doc){
       if (doc.exists) {
         var data = doc.data();
-        ECODB = { sessions: data.sessions || [] };
-        try { localStorage.setItem("ecc_eco_db", JSON.stringify(ECODB)); } catch(e){}
+        if (!_serveurAppauvrit("ECODIM", data.sessions || [], ECODB.sessions || [])) {
+          ECODB = { sessions: data.sessions || [] };
+          try { localStorage.setItem("ecc_eco_db", JSON.stringify(ECODB)); } catch(e){}
+        }
       }
       if(callback) callback();
     })
@@ -17184,14 +17282,14 @@ function loadEcoDBFromFirebase(callback) {
 function saveEcoDB(db) {
   // 1. Local (fallback hors-ligne)
   try { localStorage.setItem("ecc_eco_db", JSON.stringify(db)); } catch(e) {}
-  // 2. Firebase (synchro simultanée sur tous les appareils)
-  if (IS_CONFIGURED && gDb) {
-    gDb.collection("ecodim_db").doc("main").set({
-      sessions: db.sessions || [],
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      updatedBy: gCurrentUser ? gCurrentUser.email : ""
-    }).catch(function(e){ console.warn("ECODIM Firebase sync:", e.message); });
-  }
+  // 2. Firebase — rend compte : "serveur", "local" ou "refus".
+  if (!(IS_CONFIGURED && gDb)) return Promise.resolve("local");
+  return gDb.collection("ecodim_db").doc("main").set({
+    sessions: db.sessions || [],
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedBy: gCurrentUser ? gCurrentUser.email : ""
+  }).then(function(){ return "serveur"; })
+    .catch(function(e){ _echecEcriture("ECODIM", e); return "refus"; });
 }
 // Souscription temps réel : tout changement est reflété instantanément sur tous les appareils
 var gUnsubEco = null;
@@ -17206,6 +17304,7 @@ function subscribeEco() {
         var incoming = JSON.stringify(data.sessions || []);
         var current  = JSON.stringify(ECODB.sessions || []);
         if (incoming === current) return;
+        if (_serveurAppauvrit("ECODIM", data.sessions || [], ECODB.sessions || [])) return;
         ECODB = { sessions: data.sessions || [] };
         try { localStorage.setItem("ecc_eco_db", JSON.stringify(ECODB)); } catch(e){}
         if (typeof renderHistEco === "function")  renderHistEco();
@@ -17404,12 +17503,17 @@ function saveSessionEco() {
   if(!found) ECODB.sessions.unshift(session);
   _avertirPlafondSessions(ECODB.sessions.length, "ECODIM");
   if(ECODB.sessions.length>52) ECODB.sessions=ECODB.sessions.slice(0,52);
-  saveEcoDB(ECODB);
+  var _libEco = (session.titre || "ECODIM") + " du " + session.date;
+  saveEcoDB(ECODB).then(function (etat) {
+    if (etat === "refus") return;   // _echecEcriture a deja parle
+    showToast(etat === "serveur"
+      ? "ECODIM enregistre et partage avec les autres appareils."
+      : "ECODIM enregistre sur cet appareil (hors connexion).", "ok");
+    pushNotif("\ud83d\udcda", "ECODIM sauvegarde", _libEco, "ecodim");
+    if (etat === "serveur") notifyAdmin("\u26ea", "ECODIM enregistr\u00e9", _libEco, "ecodim");
+  });
   renderHistEco();
   renderBilanEco();
-  showToast("ECODIM sauvegarde dans l historique !","ok");
-  pushNotif("📚","ECODIM sauvegarde",(session.titre||"ECODIM")+" du "+session.date,"ecodim");
-  notifyAdmin("⛪","ECODIM enregistré",(session.titre||"ECODIM")+" du "+session.date,"ecodim");
   // Vider le formulaire (les données restent dans l'historique)
   resetEcoForm();
 }
@@ -21281,7 +21385,7 @@ function saveEffDB(db) {
       programmes: db.programmes||[],
       updatedAt:  firebase.firestore.FieldValue.serverTimestamp(),
       updatedBy:  gCurrentUser.email||""
-    }).catch(function(e){ console.warn("saveEffDB:",e.message); });
+    }).catch(function(e){ _echecEcriture("Effectif", e); });
   }
 }
 
